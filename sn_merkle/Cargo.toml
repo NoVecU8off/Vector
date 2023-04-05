@@ -1,0 +1,14 @@
+[package]
+name = "sn_merkle"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+sn_proto = { path = "../sn_proto", version = "0.1.0"}
+
+sha3 = "0.10.6"
+protobuf = "3.2.0"
+prost = "0.11.8"
+prost-derive = "0.11.8"
