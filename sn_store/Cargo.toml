@@ -1,0 +1,14 @@
+[package]
+name = "sn_store"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+sn_proto = { path = "../sn_proto", version = "0.1.0"}
+sn_block = { path = "../sn_block", version = "0.1.0"}
+sn_transaction = { path = "../sn_transaction", version = "0.1.0"}
+sn_cryptography = { path = "../sn_cryptography", version = "0.1.0"}
+
+hex = "0.4.3"

@@ -1,0 +1,13 @@
+[workspace]
+
+members = [
+    "sn_cryptography",
+    "sn_node",
+    "sn_chain",
+    "sn_store",
+    "sn_proto",
+    "sn_block",
+    "sn_transaction",
+    "sn_utilites",
+    "sn_merkle"
+]

@@ -1,0 +1,1 @@
+C:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\libsn_utilites.rlib: C:\Users\Mi\Desktop\Programming\saturn_project_rust\sn_utilites\src\lib.rs C:\Users\Mi\Desktop\Programming\saturn_project_rust\sn_utilites\src\random.rs

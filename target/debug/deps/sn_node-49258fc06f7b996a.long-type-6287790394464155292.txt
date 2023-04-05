@@ -1,0 +1,1 @@
+Result<std::sync::RwLockReadGuard<'_, HashMap<NodeClient<T>, sn_proto::messages::Version>>, PoisonError<std::sync::RwLockReadGuard<'_, HashMap<NodeClient<T>, sn_proto::messages::Version>>>>
