@@ -3,7 +3,7 @@ use std::sync::RwLock;
 use hex::encode;
 use sn_proto::messages::{Block, Transaction};
 use sn_transaction::{transaction::hash_transaction};
-use sn_block::{block::hash_block};
+use sn_block::{block::hash_header_by_block};
 use std::sync::Arc;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -133,7 +133,7 @@ impl BlockStorer for MemoryBlockStore {
     fn put(&self, block: &Block) -> Result<(), String> {
 
         let mut blocks = self.blocks.write().map_err(|e| e.to_string())?;
-        let hash = hash_block(block).map_err(|e| e.to_string())?;
+        let hash = hash_header_by_block(block).map_err(|e| e.to_string())?;
         let hash_str = hex::encode(&hash); 
 
         blocks.insert(hash_str, block.clone());

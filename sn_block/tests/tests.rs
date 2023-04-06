@@ -2,7 +2,7 @@
 mod tests {
     use sn_block::block::*;
     use sn_proto::messages::{Block, Header, Transaction};
-    use sn_cryptography::cryptography::{Keypair, Signature};
+    use sn_cryptography::cryptography::{Keypair};
     use std::time::{SystemTime, UNIX_EPOCH};
     use sn_merkle::merkle::*;
 
@@ -47,9 +47,8 @@ mod tests {
         let block = create_sample_block();
         let keypair = Keypair::generate_keypair();
         let signature = sign_block(&block, &keypair).unwrap();
-        let signature_struct = Signature::signature_from_vec(&signature);
 
-        let result = verify_block(&block, &signature_struct, &keypair).unwrap();
+        let result = verify_block(&block, &signature, &keypair).unwrap();
         assert!(result);
     }
 
@@ -62,7 +61,7 @@ mod tests {
     #[test]
     fn test_hash_block() {
         let block = create_sample_block();
-        let hash = hash_block(&block).unwrap();
+        let hash = hash_header_by_block(&block).unwrap();
         assert_eq!(hash.len(), 64);
     }
 

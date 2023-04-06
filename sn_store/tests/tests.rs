@@ -80,7 +80,7 @@ fn test_memory_tx_store() {
 fn test_memory_block_store() {
     let block_store = MemoryBlockStore::new();
     let block = create_sample_block();
-    let block_hash = hex::encode(hash_block(&block).unwrap());
+    let block_hash = hex::encode(hash_header_by_block(&block).unwrap());
 
     // Test put
     assert!(block_store.put(&block).is_ok());
@@ -136,7 +136,7 @@ fn memory_block_store_put_get() {
 
     block_store.put(&block).unwrap();
 
-    let block_hash = hex::encode(hash_block(&block).unwrap());
+    let block_hash = hex::encode(hash_header_by_block(&block).unwrap());
     let retrieved_block = block_store.get(&block_hash).unwrap();
 
     assert_eq!(Some(block), retrieved_block);
