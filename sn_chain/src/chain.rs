@@ -3,6 +3,7 @@ use sn_cryptography::cryptography::{Keypair, Signature};
 use sn_transaction::transaction::*;
 use sn_proto::messages::{Header, Block, Transaction, TransactionOutput};
 use sn_block::block::*;
+use sn_merkle::merkle::MerkleTree;
 use hex::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{PublicKey, SecretKey, ExpandedSecretKey};
@@ -82,6 +83,7 @@ impl Chain {
     
         for tx in &block.msg_transactions {
             let cloned_tx = tx.clone();
+            println!("Storing transaction: {:?}", cloned_tx);
             self.tx_store.put(cloned_tx)?;
             let hash = encode(hash_transaction(&tx));
     
@@ -98,7 +100,7 @@ impl Chain {
         }
     
         self.block_store.put(&block)?;
-    
+
         Ok(())
 
     }
@@ -146,21 +148,20 @@ impl Chain {
         let dummy_expanded_secret_key = ExpandedSecretKey::from(&dummy_secret_key);
         
         let keypair = Keypair {
-            private: dummy_secret_key, // This will not be used
-            optional_private: None, // This will not be used
-            expanded_private_key: dummy_expanded_secret_key, // This will not be used
+            private: dummy_secret_key,
+            optional_private: None,
+            expanded_private_key: dummy_expanded_secret_key,
             public: public_key,
         };
     
         // Validate the signature of the block
         if !verify_block(block, &signature, &keypair)? {
-            // println!("{}, {}", signature, keypair);
             return Err("invalid block signature".into());
         }
     
         // Validate if the prev_hash is the actually hash of the current block
         let current_block = self.get_block_by_height(self.height())?;
-        let hash = hash_block(&current_block).unwrap().to_vec();
+        let hash = hash_header_by_block(&current_block).unwrap().to_vec();
     
         if let Some(header) = block.msg_header.as_ref() {
             if hash != header.msg_previous_hash {
@@ -173,7 +174,7 @@ impl Chain {
         for tx in &block.msg_transactions {
             self.validate_transaction(tx, &[keypair.clone()])?;
         }
-    
+
         Ok(())
     }
     
@@ -217,17 +218,8 @@ impl Chain {
 }
 
 pub fn create_genesis_block() -> Block {
-
     let genesis_keypair = Keypair::generate_keypair();
     let address = Keypair::derive_address(&genesis_keypair);
-
-    let header = Header {
-        msg_version: 1,
-        msg_height: 0,
-        msg_previous_hash: vec![],
-        msg_root_hash: vec![],
-        msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
-    };
 
     let output = TransactionOutput {
         msg_amount: 1000,
@@ -240,6 +232,17 @@ pub fn create_genesis_block() -> Block {
         msg_outputs: vec![output],
     };
 
+    let merkle_tree = MerkleTree::new(&[transaction.clone()]);
+    let merkle_root = merkle_tree.root.to_vec();
+
+    let header = Header {
+        msg_version: 1,
+        msg_height: 0,
+        msg_previous_hash: vec![],
+        msg_root_hash: merkle_root,
+        msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+    };
+
     let mut block = Block {
         msg_header: Some(header),
         msg_transactions: vec![transaction],
@@ -248,7 +251,7 @@ pub fn create_genesis_block() -> Block {
     };
 
     let signature = sign_block(&block, &genesis_keypair).unwrap();
-    block.msg_signature = signature;
+    block.msg_signature = signature.to_vec();
 
     block
 }
