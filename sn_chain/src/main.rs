@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let are_hashes_equal = block_hash == header_hash;
 
     // 7. Print the results.
-    println!("Is signature valid: {}", is_signature_valid);
+    println!("Is signature valid: {}, Signature: {}", is_signature_valid, signature);
     println!("Is root hash valid: {}", is_root_hash_valid);
     println!("Are block and header hashes equal: {}", are_hashes_equal);
 
