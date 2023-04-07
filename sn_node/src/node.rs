@@ -56,7 +56,6 @@ impl Mempool {
         if self.has(tx).await {
             return false;
         }
-
         let mut _guard = self.lock.write().await;
         let hash = hex_encode(hash_transaction(tx));
         self.txx.insert(hash, tx.clone());
@@ -74,7 +73,6 @@ pub struct ServerConfig {
 pub struct OperationalNode {
     pub config: ServerConfig,
     pub logger: Span,
-
     pub peer_lock: RwLock<()>,
     pub peers: RwLock<HashMap<NodeClientWrapper, Version>>,
     pub mempool: Mutex<Mempool>,
@@ -89,7 +87,6 @@ pub enum BroadcastMsg {
 impl OperationalNode {
     pub fn new(config: ServerConfig) -> Self {
         let logger = tracing::info_span!("OperationalNode", listen_addr = %config.listen_addr);
-
         OperationalNode {
             config,
             logger,
@@ -104,17 +101,13 @@ impl OperationalNode {
         let addr = config.listen_addr.parse().unwrap();
         let node_server = NodeServer::new(OperationalNodeArc(node.clone())); // Clone the node here
         let _logger_guard = node.logger.enter();
-    
         info!("Node started on {}", config.listen_addr);
-
         if !bootstrap_nodes.is_empty() {
             tokio::spawn(node.clone().bootstrap_network(bootstrap_nodes));
         }
-    
         if node.config.keypair.optional_private.is_some() {
             tokio::spawn(node.clone().validator_loop());
         }
-    
         Server::builder().add_service(node_server).serve(addr).await?;
         Ok(())
     }
@@ -122,13 +115,11 @@ impl OperationalNode {
     pub async fn validator_loop(self: Arc<Self>) {
         let _logger_guard = self.logger.enter();
         let mut interval = interval(Duration::from_secs(5));
-
         info!(
             "Starting validator loop, pubkey: {:?}, blockTime: {:?}",
             self.config.keypair.public,
             Duration::from_secs(5)
         );
-    
         loop {
             interval.tick().await;
             let mut mempool_guard = self.mempool.lock().await;
@@ -144,7 +135,6 @@ impl OperationalNode {
             .cloned()
             .map(|wrapper| wrapper.client.clone())
             .collect();
-        
         for peer in peer_keys {
             match msg {
                 BroadcastMsg::Transaction(ref tx) => {
@@ -159,16 +149,13 @@ impl OperationalNode {
     pub async fn add_peer(self: Arc<Self>, c: NodeClient<Channel>, v: Version) {
         let _logger_guard = self.logger.enter();
         let mut peers = self.peers.write().await;
-    
         peers.insert(
             NodeClientWrapper {
                 client: Arc::new(Mutex::new(c)),
             },
             v.clone(),
         );
-    
         let peer_list = v.msg_peer_list.clone();
-    
         let node_clone = self.clone();
         if let Err(e) = node_clone.bootstrap_network(peer_list).await {
             eprintln!("Error while bootstrapping network: {}", e);
@@ -177,7 +164,6 @@ impl OperationalNode {
 
     pub async fn delete_peer(&self, c: &NodeClient<Channel>) {
         let mut peers = self.peers.write().await;
-        
         peers.remove(&NodeClientWrapper { client: Arc::new(Mutex::new(c.clone())) });
     }
 
@@ -201,10 +187,8 @@ impl OperationalNode {
     async fn dial_remote_node(&self, addr: &SocketAddr) -> Result<(NodeClient<Channel>, Version), Box<dyn std::error::Error + Send + Sync>> {
         let addr_string = addr.to_string();
         let mut c = make_node_client(addr_string).await?;
-    
         let version = self.get_version().await;
         let v = c.handshake(version).await?.into_inner();
-    
         Ok((c, v))
     }
 
@@ -221,14 +205,12 @@ impl OperationalNode {
         if self.config.listen_addr == addr {
             return false;
         }
-    
         let connected_peers = self.get_peer_list().await; // Add .await here
         for connected_addr in connected_peers {
             if addr == connected_addr {
                 return false;
             }
         }
-    
         true
     }
 
@@ -248,10 +230,8 @@ impl Node for OperationalNodeArc {
     async fn handshake(&self, request: Request<Version>) -> Result<Response<Version>, Status> {
         let v = request.into_inner();
         let c = make_node_client(v.msg_listen_address.clone()).await.unwrap();
-
         let add_peer_task = self.0.clone().add_peer(c, v.clone());
         tokio::spawn(add_peer_task);
-
         Ok(Response::new(self.0.get_version().await))
     }
 
@@ -259,10 +239,8 @@ impl Node for OperationalNodeArc {
         let peer = request.remote_addr().unwrap();
         let tx = request.into_inner();
         let hash = hex::encode(hash_transaction(&tx));
-
         if self.0.mempool.lock().await.add(&tx).await {
             println!("Received tx from {} with hash {} (we are {})", peer, hash, self.0.config.listen_addr);
-
             let node_clone = Arc::clone(&self.0);
             tokio::spawn(async move {
                 if let Err(e) = node_clone.broadcast(BroadcastMsg::Transaction(tx)).await {
@@ -270,7 +248,6 @@ impl Node for OperationalNodeArc {
                 }
             });
         }
-
         Ok(Response::new(Confirmed::default()))
     }
 }
