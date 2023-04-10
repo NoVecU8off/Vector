@@ -6,28 +6,21 @@ use sha3::{Digest, Sha3_512};
 use prost::Message;
 
 pub fn sign_block(block: &Block, keypair: &Keypair) -> Result<Signature, Box<dyn Error>> {
-    let merkle_tree = MerkleTree::new(&block.msg_transactions);
-    let merkle_root: Vec<u8> = merkle_tree.root.to_vec();
     let hash = hash_header_by_block(block)?;
     let signature = keypair.sign(&hash);
-    println!("Merkle root: {:?}", merkle_root);
     Ok(signature)
 }
 
 pub fn verify_block(block: &Block, signature: &Signature, keypair: &Keypair) -> Result<bool, Box<dyn Error>> {
     let mut block_bytes = Vec::new();
     block.encode(&mut block_bytes)?;
-    let merkle_tree = MerkleTree::new(&block.msg_transactions);
-    let merkle_root: Vec<u8> = merkle_tree.root.to_vec();
     let hash = hash_header_by_block(block)?;
-    println!("Merkle root: {:?}", merkle_root);
     Ok(keypair.verify(&hash, &signature))
 }
 
 pub fn verify_root_hash(block: &Block) -> bool {
     let merkle_tree = MerkleTree::new(&block.msg_transactions);
     let merkle_root: Vec<u8> = merkle_tree.root.to_vec();
-    println!("Merkle root: {:?}", merkle_root);
     if let Some(header) = block.msg_header.as_ref() {
         header.msg_root_hash == merkle_root
     } else {

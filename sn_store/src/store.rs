@@ -46,7 +46,6 @@ impl UTXOStorer for MemoryUTXOStore {
         data.insert(key, utxo);
         Ok(())
     }
-
     fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, String> {
         let key = format!("{}_{}", hash, out_index);
         println!("Debug: get key: {}", key); // Add debug print
@@ -79,7 +78,6 @@ impl TXStorer for MemoryTXStore {
         data.insert(hash, tx);
         Ok(())
     }
-
     fn get(&self, hash: &str) -> Result<Option<Transaction>, String> {
         let data = self.lock.read().unwrap();
         Ok(data.get(hash).cloned())
@@ -111,7 +109,6 @@ impl BlockStorer for MemoryBlockStore {
         blocks.insert(hash_str, block.clone());
         Ok(())
     }
-
     fn get(&self, hash: &str) -> Result<Option<Block>, String> {
         let blocks = self.blocks.read().map_err(|e| e.to_string())?;
         Ok(blocks.get(hash).cloned())  

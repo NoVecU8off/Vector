@@ -96,16 +96,6 @@ impl Clone for Keypair {
     }
 }
 
-impl fmt::Debug for Keypair {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Keypair")
-            .field("private", &self.private)
-            .field("optional_private", &self.optional_private)
-            .field("public", &self.public)
-            .finish()
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Address {
     pub address: [u8; 20],
@@ -131,29 +121,10 @@ impl Address {
     }
 }
 
-impl std::fmt::Display for Keypair {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
-impl std::fmt::Display for Address {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
-    }
-}
-
-impl std::convert::From<[u8; 20]> for Address {
-    fn from(bytes: [u8; 20]) -> Self {
-        Self::from_bytes(bytes)    
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct Signature {
     pub signature: Ed25519Signature,
 }
-
 
 impl Signature {
     pub fn to_vec(&self) -> Vec<u8> {
@@ -202,4 +173,32 @@ pub fn vec_to_bytes(vec: &Vec<u8>) -> [u8; 64] {
     let num_bytes = std::cmp::min(vec.len(), 64);
     bytes[..num_bytes].copy_from_slice(&vec[..num_bytes]);
     bytes
+}
+
+impl std::fmt::Display for Keypair {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl std::fmt::Display for Address {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
+impl std::convert::From<[u8; 20]> for Address {
+    fn from(bytes: [u8; 20]) -> Self {
+        Self::from_bytes(bytes)    
+    }
+}
+
+impl fmt::Debug for Keypair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Keypair")
+            .field("private", &self.private)
+            .field("optional_private", &self.optional_private)
+            .field("public", &self.public)
+            .finish()
+    }
 }

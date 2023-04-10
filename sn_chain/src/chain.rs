@@ -16,19 +16,23 @@ impl HeaderList {
     pub fn new() -> Self {
         HeaderList { headers: Vec::new() }
     }
-    pub fn add(&mut self, h: Header) {
+    pub fn add_header(&mut self, h: Header) {
         self.headers.push(h);
     }
-    pub fn get(&self, index: usize) -> &Header {
-        if index > self.height() {
+    pub fn get_header_by_index(&self, index: usize) -> &Header {
+        if index > self.headers_list_height() {
             panic!("index too high!");
         }
         &self.headers[index]
     }
-    pub fn height(&self) -> usize {
-        self.len() - 1
+    pub fn headers_list_height(&self) -> usize {
+        if self.headers_list_len() == 0 {
+            0
+        } else {
+            self.headers_list_len() - 1
+        }
     }
-    pub fn len(&self) -> usize {
+    pub fn headers_list_len(&self) -> usize {
         self.headers.len()
     }
 }
@@ -39,26 +43,28 @@ pub struct Chain {
     pub headers: HeaderList,
 }
 impl Chain {
-    pub fn new(block_store: Box<dyn BlockStorer>, tx_store: Box<dyn TXStorer>) -> Self {
+    pub fn new_chain(block_store: Box<dyn BlockStorer>, tx_store: Box<dyn TXStorer>) -> Result<Chain, Box<dyn std::error::Error>> {
         let mut chain = Chain {
             block_store,
             tx_store,
             utxo_store: Box::new(MemoryUTXOStore::new()),
             headers: HeaderList::new(),
         };
-        chain.add_block(create_genesis_block()).unwrap();
-        chain
+        chain.add_block(create_genesis_block())?;
+        println!("Genesis block added successfully");
+        println!("Chain length: {}", chain.chain_len());
+        Ok(chain)
     }
-    pub fn height(&self) -> usize {
-        self.headers.height()
+    pub fn chain_height(&self) -> usize {
+        self.headers.headers_list_height()
     }
-    pub fn headers_len(&self) -> usize {
-        self.headers.len()
+    pub fn chain_len(&self) -> usize {
+        self.headers.headers_list_len()
     }
     pub fn add_block(&mut self, block: Block) -> Result<(), Box<dyn std::error::Error>> {
         self.validate_block(&block)?;
         let header = block.msg_header.as_ref().ok_or("missing block header")?.clone();
-        self.headers.add(header);  
+        self.headers.add_header(header);  
         for tx in &block.msg_transactions {
             let cloned_tx = tx.clone();
             println!("Storing transaction: {:?}", cloned_tx);
@@ -68,16 +74,14 @@ impl Chain {
                 let utxo = UTXO {
                     hash: hash.clone(),
                     amount: output.msg_amount,
-                    out_index: i as u32, // Use the index from the loop
+                    out_index: i as u32,
                     spent: false,
                 };
-    
                 self.utxo_store.put(utxo)?;
             }
         }
         self.block_store.put(&block)?;
         Ok(())
-
     }
 
     pub fn get_block_by_hash(&self, hash: &[u8]) -> Result<Block, Box<dyn std::error::Error>> {
@@ -90,15 +94,18 @@ impl Chain {
     }
     
     pub fn get_block_by_height(&self, height: usize) -> Result<Block, Box<dyn std::error::Error>> {
-        if self.height() < height {
+        if self.chain_len() == 0 {
+            return Err("chain is empty".into());
+        }
+        if self.chain_height() < height {
             return Err(format!(
                 "given height ({}) too high - height ({})",
                 height,
-                self.height()
+                self.chain_height()
             )
             .into());
         }
-        let header = self.headers.get(height);
+        let header = self.headers.get_header_by_index(height);
         let hash = hash_header(header)?;
         self.get_block_by_hash(&hash)
     }
@@ -119,15 +126,18 @@ impl Chain {
         if !verify_block(block, &signature, &keypair)? {
             return Err("invalid block signature".into());
         } 
-        let current_block = self.get_block_by_height(self.height())?;
-        let hash = hash_header_by_block(&current_block).unwrap().to_vec();
-        if let Some(header) = block.msg_header.as_ref() {
-            if hash != header.msg_previous_hash {
-                return Err("invalid previous block hash".into());
+        if self.chain_len() > 0 {
+            let current_block = self.get_block_by_height(self.chain_height())?;
+            let hash = hash_header_by_block(&current_block).unwrap().to_vec();
+            if let Some(header) = block.msg_header.as_ref() {
+                if hash != header.msg_previous_hash {
+                    return Err("invalid previous block hash".into());
+                }
+            } else {
+                return Err("Block header is missing".into());
             }
-        } else {
-            return Err("Block header is missing".into());
         }
+    
         for tx in &block.msg_transactions {
             self.validate_transaction(tx, &[keypair.clone()])?;
         }
@@ -135,7 +145,7 @@ impl Chain {
     }
     
     pub fn validate_transaction(&self, tx: &Transaction, keypair: &[Keypair]) -> Result<(), Box<dyn std::error::Error>> {
-        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public.clone()).collect();    
+        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public.clone()).collect(); 
         if !verify_transaction(tx, &public_keys) {
             return Err("invalid tx signature".into());
         }    
@@ -165,7 +175,7 @@ pub fn create_genesis_block() -> Block {
     let genesis_keypair = Keypair::generate_keypair();
     let address = Keypair::derive_address(&genesis_keypair);
     let output = TransactionOutput {
-        msg_amount: 1000,
+        msg_amount: 0,
         msg_address: address.to_bytes().to_vec(),
     };
     let transaction = Transaction {
@@ -192,4 +202,3 @@ pub fn create_genesis_block() -> Block {
     block.msg_signature = signature.to_vec();
     block
 }
-
