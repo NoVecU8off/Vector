@@ -19,11 +19,8 @@ pub struct TransactionWrapper {
 impl MerkleTree {
     pub fn new(transactions: &[Transaction]) -> MerkleTree {
         let leaves: Vec<TransactionWrapper> = compute_hashes(transactions);
-    
-        let mut nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();
-    
-        let (root, depth) = MerkleTree::build(&mut nodes);
-    
+        let mut nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
+        let (root, depth) = MerkleTree::build(&mut nodes);  
         MerkleTree {
             root,
             depth,
@@ -35,17 +32,14 @@ impl MerkleTree {
     pub fn build(nodes: &[Vec<u8>]) -> (Vec<u8>, u64) {
         if nodes.is_empty() {
             return (Vec::new(), 0);
-        }
-    
+        }   
         let mut level = nodes.to_vec();
         let mut next_level = Vec::new();
-        let mut depth = 0;
-    
+        let mut depth = 0;    
         while level.len() > 1 {
             if level.len() % 2 != 0 {
                 level.push(level.last().unwrap().clone());
-            }
-    
+            }   
             for i in (0..level.len()).step_by(2) {
                 let mut hasher = Sha3_512::new();
     
@@ -54,12 +48,10 @@ impl MerkleTree {
     
                 let hash = hasher.finalize().to_vec();
                 next_level.push(hash);
-            }
-    
+            }   
             level = next_level.drain(..).collect();
             depth += 1;
         }
-    
         (level[0].clone(), depth)
     }
     
@@ -69,18 +61,13 @@ impl MerkleTree {
         leaf.encode(&mut bytes).unwrap();
         hasher.update(&bytes);
         let mut current_hash = hasher.finalize().to_vec();
-        let mut current_index = index;
-    
-        // Check if the proof is empty, and if so, compare the leaf hash with the root directly
+        let mut current_index = index; 
         if proof.is_empty() {
             return current_hash == self.root;
         }
-    
         println!("Initial hash: {:?}", current_hash);
-    
         for sibling in proof {
             let mut new_hasher = Sha3_512::new();
-    
             if current_index % 2 == 0 {
                 new_hasher.update(&current_hash);
                 new_hasher.update(sibling);
@@ -88,42 +75,31 @@ impl MerkleTree {
                 new_hasher.update(sibling);
                 new_hasher.update(&current_hash);
             }
-    
             current_hash = new_hasher.finalize().to_vec();
             current_index /= 2;
-    
             println!("Updated hash: {:?}", current_hash);
         }
-    
         current_hash == self.root
     }
 
     pub fn get_proof(&self, transaction: &Transaction) -> Option<(usize, Vec<Vec<u8>>)> {
         let leaf_index = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction)?;
-    
         let mut proof = Vec::new();
         let mut index = leaf_index;
-    
         let max_depth = self.depth as isize;
         for _i in (0..max_depth).rev() {
             let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
-    
             if sibling_index >= self.leaves.len() {
                 break;
             }
-    
             proof.push(self.leaves[sibling_index].hash.clone());
-    
-            // Print the current index, sibling index, current node hash, sibling node hash, and current proof
             println!("Current index: {}", index);
             println!("Sibling index: {}", sibling_index);
             println!("Current node hash: {:?}", self.leaves[index].hash);
             println!("Sibling node hash: {:?}", self.leaves[sibling_index].hash);
             println!("Current proof: {:?}", proof);
-    
             index /= 2;
         }
-    
         Some((leaf_index, proof))
     }
 
@@ -134,22 +110,17 @@ impl MerkleTree {
             self.depth = 1; // Update the depth after reconstructing the tree
             return;
         }
-
         let wrapper = compute_hashes(&[transaction.clone()]).into_iter().next().unwrap();
         self.leaves.push(wrapper.clone());
         self.nodes.push(wrapper.hash.clone());
-    
         let mut index = self.leaves.len() - 1;
         let mut current_hash = wrapper.hash;
-    
         while index > 0 {
             let sibling_index = if index % 2 == 0 { index - 1 } else { index + 1 };
             let parent_index = (index - 1) / 2;
-    
             if sibling_index >= self.nodes.len() {
                 break;
             }
-    
             let mut hasher = Sha3_512::new();
             if index % 2 == 0 {
                 hasher.update(&self.nodes[sibling_index]);
@@ -158,12 +129,10 @@ impl MerkleTree {
                 hasher.update(&current_hash);
                 hasher.update(&self.nodes[sibling_index]);
             }
-    
             current_hash = hasher.finalize().to_vec();
             self.nodes[parent_index] = current_hash.clone();
             index = parent_index;
         }
-    
         self.root = current_hash;
     }
 
@@ -171,14 +140,11 @@ impl MerkleTree {
         if let Some(index) = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction) {
             self.leaves.remove(index);
             self.nodes.remove(index);
-
             let mut current_hash = vec![0u8; 64]; // Placeholder hash for the removed leaf
             let mut parent_index = index;
-
             while parent_index > 0 {
                 let sibling_index = if parent_index % 2 == 0 { parent_index - 1 } else { parent_index + 1 };
                 parent_index = (parent_index - 1) / 2;
-
                 let mut hasher = Sha3_512::new();
                 if parent_index % 2 == 0 {
                     hasher.update(&self.nodes[sibling_index]);
@@ -187,11 +153,9 @@ impl MerkleTree {
                     hasher.update(&current_hash);
                     hasher.update(&self.nodes[sibling_index]);
                 }
-
                 current_hash = hasher.finalize().to_vec();
                 self.nodes[parent_index] = current_hash.clone();
             }
-
             self.root = current_hash;
             true
         } else {
