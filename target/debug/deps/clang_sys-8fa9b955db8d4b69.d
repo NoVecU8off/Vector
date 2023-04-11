@@ -1,0 +1,14 @@
+c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\deps\clang_sys-8fa9b955db8d4b69.rmeta: C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\lib.rs C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\support.rs C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\link.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/macros.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/common.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/dynamic.rs
+
+c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\deps\libclang_sys-8fa9b955db8d4b69.rlib: C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\lib.rs C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\support.rs C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\link.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/macros.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/common.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/dynamic.rs
+
+c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\deps\clang_sys-8fa9b955db8d4b69.d: C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\lib.rs C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\support.rs C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\link.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/macros.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/common.rs c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/dynamic.rs
+
+C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\lib.rs:
+C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\support.rs:
+C:\Users\Mi\.cargo\registry\src\github.com-1ecc6299db9ec823\clang-sys-1.6.1\src\link.rs:
+c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/macros.rs:
+c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/common.rs:
+c:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\build\clang-sys-8716e23a2d381c08\out/dynamic.rs:
+
+# env-dep:OUT_DIR=c:\\Users\\Mi\\Desktop\\Programming\\saturn_project_rust\\target\\debug\\build\\clang-sys-8716e23a2d381c08\\out
