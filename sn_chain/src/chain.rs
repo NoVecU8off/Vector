@@ -42,6 +42,7 @@ pub struct Chain {
     pub utxo_store: Box<dyn UTXOStorer>,
     pub headers: HeaderList,
 }
+
 impl Chain {
     pub fn new_chain(block_store: Box<dyn BlockStorer>, tx_store: Box<dyn TXStorer>) -> Result<Chain, Box<dyn std::error::Error>> {
         let mut chain = Chain {
@@ -51,8 +52,8 @@ impl Chain {
             headers: HeaderList::new(),
         };
         chain.add_block(create_genesis_block())?;
-        println!("Genesis block added successfully");
-        println!("Chain length: {}", chain.chain_len());
+        // println!("Genesis block added successfully");
+        // println!("Chain length: {}", chain.chain_len());
         Ok(chain)
     }
     pub fn chain_height(&self) -> usize {
@@ -67,7 +68,7 @@ impl Chain {
         self.headers.add_header(header);  
         for tx in &block.msg_transactions {
             let cloned_tx = tx.clone();
-            println!("Storing transaction: {:?}", cloned_tx);
+            // println!("Storing transaction: {:?}", cloned_tx);
             self.tx_store.put(cloned_tx)?;
             let hash = encode(hash_transaction(&tx)); 
             for (i, output) in tx.msg_outputs.iter().enumerate() {
@@ -110,51 +111,48 @@ impl Chain {
         self.get_block_by_hash(&hash)
     }
 
-    pub fn validate_block(&self, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
-        let signature_vec = block.msg_signature.clone();
+    pub fn validate_block(&self, incoming_block: &Block) -> Result<(), Box<dyn std::error::Error>> {
+        let signature_vec = incoming_block.msg_signature.clone();
         let signature = Signature::signature_from_vec(&signature_vec);   
-        let public_key = PublicKey::from_bytes(&block.msg_public_key)
+        let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
             .map_err(|_| "Invalid public key in block")?;
-        let dummy_secret_key = SecretKey::from_bytes(&[0u8; 32]).unwrap();
-        let dummy_expanded_secret_key = ExpandedSecretKey::from(&dummy_secret_key);      
         let keypair = Keypair {
-            private: dummy_secret_key,
+            private: SecretKey::from_bytes(&[0u8; 32]).unwrap(),
             optional_private: None,
-            expanded_private_key: dummy_expanded_secret_key,
+            expanded_private_key: ExpandedSecretKey::from(&SecretKey::from_bytes(&[0u8; 32]).unwrap()),
             public: public_key,
-        }; 
-        if !verify_block(block, &signature, &keypair)? {
+        };
+        if !verify_block(incoming_block, &signature, &keypair)? {
             return Err("invalid block signature".into());
         } 
         if self.chain_len() > 0 {
-            let current_block = self.get_block_by_height(self.chain_height())?;
-            let hash = hash_header_by_block(&current_block).unwrap().to_vec();
-            if let Some(header) = block.msg_header.as_ref() {
-                if hash != header.msg_previous_hash {
-                    return Err("invalid previous block hash".into());
+            let last_block = self.get_block_by_height(self.chain_height())?;
+            let last_block_hash = hash_header_by_block(&last_block).unwrap().to_vec();
+            if let Some(header) = incoming_block.msg_header.as_ref() {
+                if last_block_hash != header.msg_previous_hash {
+                    return Err(format!("invalid previous block hash: expected ({}), got ({})", encode(last_block_hash), encode(header.msg_previous_hash.clone())).into());
                 }
             } else {
                 return Err("Block header is missing".into());
             }
         }
-    
-        for tx in &block.msg_transactions {
+        for tx in &incoming_block.msg_transactions {
             self.validate_transaction(tx, &[keypair.clone()])?;
         }
         Ok(())
     }
     
-    pub fn validate_transaction(&self, tx: &Transaction, keypair: &[Keypair]) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn validate_transaction(&self, transaction: &Transaction, keypair: &[Keypair]) -> Result<(), Box<dyn std::error::Error>> {
         let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public.clone()).collect(); 
-        if !verify_transaction(tx, &public_keys) {
-            return Err("invalid tx signature".into());
+        if !verify_transaction(transaction, &public_keys) {
+            return Err("invalid transaction signature".into());
         }    
-        let n_inputs = tx.msg_inputs.len();
-        let hash = hex::encode(hash_transaction(tx));
+        let n_inputs = transaction.msg_inputs.len();
+        let hash = hex::encode(hash_transaction(transaction));
         let mut sum_inputs = 0;   
         for i in 0..n_inputs {   
-            let prev_hash = hex::encode(&tx.msg_inputs[i].msg_previous_tx_hash);
-            if let Some(utxo) = self.utxo_store.get(&prev_hash, tx.msg_inputs[i].msg_previous_out_index)? {
+            let prev_hash = hex::encode(&transaction.msg_inputs[i].msg_previous_tx_hash);
+            if let Some(utxo) = self.utxo_store.get(&prev_hash, transaction.msg_inputs[i].msg_previous_out_index)? {
                 sum_inputs += utxo.amount as i32;   
                 if utxo.spent {
                     return Err(format!("input {} of tx {} is already spent", i, hash).into());
@@ -163,7 +161,7 @@ impl Chain {
                 return Err(format!("UTXO not found for input {} of tx {}", i, hash).into());
             }   
         }    
-        let sum_outputs: i32 = tx.msg_outputs.iter().map(|o| o.msg_amount as i32).sum();   
+        let sum_outputs: i32 = transaction.msg_outputs.iter().map(|o| o.msg_amount as i32).sum();   
         if sum_inputs < sum_outputs {
             return Err(format!("insufficient balance got ({}) spending ({})", sum_inputs, sum_outputs).into());
         }   

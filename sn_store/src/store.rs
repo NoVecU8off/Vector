@@ -48,7 +48,7 @@ impl UTXOStorer for MemoryUTXOStore {
     }
     fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, String> {
         let key = format!("{}_{}", hash, out_index);
-        println!("Debug: get key: {}", key); // Add debug print
+        // println!("Debug: get key: {}", key); // Add debug print
         let data = self.data.read().unwrap();
         Ok(data.get(&key).cloned()) // Cloning the UTXO
     }
