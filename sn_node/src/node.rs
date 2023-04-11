@@ -88,7 +88,6 @@ pub async fn get_available_port() -> String {
     let socket = SocketAddr::new(loopback.into(), 0);
     let listener = TcpListener::bind(socket).await.expect("Failed to bind to address");
     let available_port = listener.local_addr().expect("Failed to get local address").port();
-
     format!("[::1]:{}", available_port)
 }
 
@@ -103,10 +102,10 @@ impl OperationalNode {
             mempool: Mutex::new(Mempool::new()),
         }
     }
+
     pub async fn start(mut config: ServerConfig, bootstrap_nodes: Vec<String>) -> Result<(), Error> {
         let listen_addr = get_available_port().await;
         config.listen_addr = listen_addr;
-        
         let node = Arc::new(Self::new(config.clone()));
         let addr = config.listen_addr.parse().unwrap();
         let node_server = NodeServer::new(OperationalNodeArc(node.clone()));
