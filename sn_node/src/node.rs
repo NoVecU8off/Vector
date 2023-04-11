@@ -1,21 +1,20 @@
 use std::collections::HashMap;
 use std::sync::{Arc};
-use tokio::sync::RwLock;
-use hex::encode as hex_encode;
+use hex::encode;
 use sn_proto::messages::{Transaction, Version, Confirmed};
 use std::time::Duration;
 use sn_transaction::transaction::*;
 use sn_cryptography::cryptography::Keypair;
 use tonic::transport::Channel;
 use sn_proto::messages::{node_server::{Node, NodeServer}, node_client::NodeClient};
-use tonic::transport::Endpoint;
-use tonic::transport::Server;
+use tonic::transport::{Endpoint, Server};
 use tonic::{Request, Response, Status};
+use tokio::net::{TcpListener};
 use tracing::{info, Span};
 use tokio::time::interval;
-use tokio::sync::Mutex;
+use tokio::sync::{RwLock, Mutex};
 use std::hash::{Hash, Hasher};
-use std::net::SocketAddr;
+use std::net::{SocketAddr, Ipv6Addr};
 use hyper::Uri;
 use anyhow::Error;
 use async_recursion::async_recursion;
@@ -48,7 +47,7 @@ impl Mempool {
 
     pub async fn has(&self, tx: &Transaction) -> bool {
         let _guard = self.lock.read().await;
-        let hash = hex_encode(hash_transaction(tx));
+        let hash = encode(hash_transaction(tx));
         self.txx.contains_key(&hash)
     }
 
@@ -57,13 +56,13 @@ impl Mempool {
             return false;
         }
         let mut _guard = self.lock.write().await;
-        let hash = hex_encode(hash_transaction(tx));
+        let hash = encode(hash_transaction(tx));
         self.txx.insert(hash, tx.clone());
         true
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub version: String,
     pub listen_addr: String,
@@ -84,6 +83,15 @@ pub enum BroadcastMsg {
     Transaction(Transaction),
 }
 
+pub async fn get_available_port() -> String {
+    let loopback = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1);
+    let socket = SocketAddr::new(loopback.into(), 0);
+    let listener = TcpListener::bind(socket).await.expect("Failed to bind to address");
+    let available_port = listener.local_addr().expect("Failed to get local address").port();
+
+    format!("[::1]:{}", available_port)
+}
+
 impl OperationalNode {
     pub fn new(config: ServerConfig) -> Self {
         let logger = tracing::info_span!("OperationalNode", listen_addr = %config.listen_addr);
@@ -95,11 +103,13 @@ impl OperationalNode {
             mempool: Mutex::new(Mempool::new()),
         }
     }
-
-    pub async fn start(config: ServerConfig, bootstrap_nodes: Vec<String>) -> Result<(), Error> {
+    pub async fn start(mut config: ServerConfig, bootstrap_nodes: Vec<String>) -> Result<(), Error> {
+        let listen_addr = get_available_port().await;
+        config.listen_addr = listen_addr;
+        
         let node = Arc::new(Self::new(config.clone()));
         let addr = config.listen_addr.parse().unwrap();
-        let node_server = NodeServer::new(OperationalNodeArc(node.clone())); // Clone the node here
+        let node_server = NodeServer::new(OperationalNodeArc(node.clone()));
         let _logger_guard = node.logger.enter();
         info!("Node started on {}", config.listen_addr);
         if !bootstrap_nodes.is_empty() {
@@ -184,7 +194,7 @@ impl OperationalNode {
         Ok(())
     }
 
-    async fn dial_remote_node(&self, addr: &SocketAddr) -> Result<(NodeClient<Channel>, Version), Box<dyn std::error::Error + Send + Sync>> {
+    pub async fn dial_remote_node(&self, addr: &SocketAddr) -> Result<(NodeClient<Channel>, Version), Box<dyn std::error::Error + Send + Sync>> {
         let addr_string = addr.to_string();
         let mut c = make_node_client(addr_string).await?;
         let version = self.get_version().await;
@@ -194,7 +204,7 @@ impl OperationalNode {
 
     pub async fn get_version(&self) -> Version {
         Version {
-            msg_version: "blocker-0.1".to_string(),
+            msg_version: "saturn-0.0.0.1".to_string(),
             msg_height: 0,
             msg_listen_address: self.config.listen_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
@@ -238,7 +248,7 @@ impl Node for OperationalNodeArc {
     async fn handle_transaction(&self, request: Request<Transaction>) -> Result<Response<Confirmed>, Status> {
         let peer = request.remote_addr().unwrap();
         let tx = request.into_inner();
-        let hash = hex::encode(hash_transaction(&tx));
+        let hash = encode(hash_transaction(&tx));
         if self.0.mempool.lock().await.add(&tx).await {
             println!("Received tx from {} with hash {} (we are {})", peer, hash, self.0.config.listen_addr);
             let node_clone = Arc::clone(&self.0);
@@ -255,7 +265,7 @@ impl Node for OperationalNodeArc {
 
 pub async fn make_node_client(listen_addr: String) -> Result<NodeClient<Channel>, Box<dyn std::error::Error + Send + Sync>> {
     let uri = listen_addr.parse::<Uri>()?;
-    let channel = Endpoint::new(uri)?.connect().await?;
+    let channel: Channel = Endpoint::new(uri)?.connect().await?;
     Ok(NodeClient::new(channel))
 }
 

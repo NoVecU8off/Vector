@@ -1,0 +1,1 @@
+{"rustc":12947611535691235116,"features":"","target":0,"profile":0,"path":0,"deps":[[13170752740950642083,"build_script_build",false,17047776561294945957]],"local":[{"RerunIfChanged":{"output":"debug\\build\\sn_proto-87c2f4b2019ad314\\output","paths":["src/proto/messages.proto","src/proto/","src/proto/messages.proto"]}}],"rustflags":[],"metadata":0,"config":0,"compile_kind":0}
