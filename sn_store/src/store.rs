@@ -39,6 +39,12 @@ impl Clone for MemoryUTXOStore {
     }
 }
 
+impl Default for MemoryUTXOStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl UTXOStorer for MemoryUTXOStore {
     fn put(&mut self, utxo: UTXO) -> Result<(), String> {
         let key = format!("{}_{}", utxo.hash, utxo.out_index);
@@ -84,6 +90,12 @@ impl TXStorer for MemoryTXStore {
     }
 }
 
+impl Default for MemoryTXStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub trait BlockStorer {
     fn put(&self, block: &Block) -> Result<(), String>;
     fn get(&self, hash: &str) -> Result<Option<Block>, String>;
@@ -105,12 +117,18 @@ impl BlockStorer for MemoryBlockStore {
     fn put(&self, block: &Block) -> Result<(), String> {
         let mut blocks = self.blocks.write().map_err(|e| e.to_string())?;
         let hash = hash_header_by_block(block).map_err(|e| e.to_string())?;
-        let hash_str = hex::encode(&hash); 
+        let hash_str = encode(hash); 
         blocks.insert(hash_str, block.clone());
         Ok(())
     }
     fn get(&self, hash: &str) -> Result<Option<Block>, String> {
         let blocks = self.blocks.read().map_err(|e| e.to_string())?;
         Ok(blocks.get(hash).cloned())  
+    }
+}
+
+impl Default for MemoryBlockStore {
+    fn default() -> Self {
+        Self::new()
     }
 }

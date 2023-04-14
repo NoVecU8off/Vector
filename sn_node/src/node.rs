@@ -54,6 +54,12 @@ impl Mempool {
     }
 }
 
+impl Default for Mempool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -82,7 +88,7 @@ impl NodeService {
 
         NodeService {
             server_config: cfg,
-            logger: logger,
+            logger,
             peer_lock: Arc::new(RwLock::new(HashMap::new())),
             mempool: Arc::new(Mempool::new()),
         }
@@ -243,4 +249,3 @@ impl Node for NodeService {
         }
     }
 }
-

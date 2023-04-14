@@ -15,7 +15,7 @@ pub fn verify_block(block: &Block, signature: &Signature, keypair: &Keypair) -> 
     let mut block_bytes = Vec::new();
     block.encode(&mut block_bytes)?;
     let hash = hash_header_by_block(block)?;
-    Ok(keypair.verify(&hash, &signature))
+    Ok(keypair.verify(&hash, signature))
 }
 
 pub fn verify_root_hash(block: &Block) -> bool {
@@ -31,11 +31,11 @@ pub fn verify_root_hash(block: &Block) -> bool {
 pub fn hash_header_by_block(block: &Block) -> Result<[u8; 64], Box<dyn Error>> {
     let mut hasher = Sha3_512::new();
     if let Some(header) = block.msg_header.as_ref() {
-        hasher.update(&header.msg_version.to_be_bytes());
-        hasher.update(&header.msg_height.to_be_bytes());
+        hasher.update(header.msg_version.to_be_bytes());
+        hasher.update(header.msg_height.to_be_bytes());
         hasher.update(&header.msg_previous_hash);
         hasher.update(&header.msg_root_hash);
-        hasher.update(&header.msg_timestamp.to_be_bytes());
+        hasher.update(header.msg_timestamp.to_be_bytes());
     } else {
         return Err("Block header is missing".into());
     }
@@ -46,11 +46,11 @@ pub fn hash_header_by_block(block: &Block) -> Result<[u8; 64], Box<dyn Error>> {
 
 pub fn hash_header(header: &Header) -> Result<[u8; 64], Box<dyn Error>> {
     let mut hasher = Sha3_512::new();
-    hasher.update(&header.msg_version.to_be_bytes());
-    hasher.update(&header.msg_height.to_be_bytes());
+    hasher.update(header.msg_version.to_be_bytes());
+    hasher.update(header.msg_height.to_be_bytes());
     hasher.update(&header.msg_previous_hash);
     hasher.update(&header.msg_root_hash);
-    hasher.update(&header.msg_timestamp.to_be_bytes());
+    hasher.update(header.msg_timestamp.to_be_bytes());
     let hash = hasher.finalize();
     let hash_bytes: [u8; 64] = hash.into();
     Ok(hash_bytes)
