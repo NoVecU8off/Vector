@@ -7,7 +7,7 @@ fn main() {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
-        .out_dir(out_dir.clone())
+        .out_dir(out_dir)
         .compile(&["src/proto/messages.proto"], &["src/proto/"])
         .unwrap();
 

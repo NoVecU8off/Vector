@@ -5,7 +5,7 @@ use sha3::{Digest, Sha3_512};
 use prost::Message;
 
 pub fn sign_transaction(keypair: &Keypair, tx: &Transaction) -> Signature {
-    let hash = hash_transaction(&tx);
+    let hash = hash_transaction(tx);
     keypair.sign(&hash)
 }
 
@@ -37,7 +37,7 @@ pub fn verify_transaction(transaction: &Transaction, public_keys: &[PublicKey]) 
         let dalek_signature = ed25519_dalek::Signature::from_bytes(&signature_bytes)
             .expect("Failed to convert signature to ed25519_dalek::Signature");
         let transaction_hash = hash_transaction_without_signature(transaction);
-        if !public_key.verify_strict(&transaction_hash, &dalek_signature).is_ok() {
+        if public_key.verify_strict(&transaction_hash, &dalek_signature).is_err() {
             return false;
         }
     }

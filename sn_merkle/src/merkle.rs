@@ -19,8 +19,8 @@ pub struct TransactionWrapper {
 impl MerkleTree {
     pub fn new(transactions: &[Transaction]) -> MerkleTree {
         let leaves: Vec<TransactionWrapper> = compute_hashes(transactions);
-        let mut nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
-        let (root, depth) = MerkleTree::build(&mut nodes);  
+        let nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
+        let (root, depth) = MerkleTree::build(&nodes);  
         MerkleTree {
             root,
             depth,
@@ -110,7 +110,7 @@ impl MerkleTree {
             self.depth = 1; // Update the depth after reconstructing the tree
             return;
         }
-        let wrapper = compute_hashes(&[transaction.clone()]).into_iter().next().unwrap();
+        let wrapper = compute_hashes(&[transaction]).into_iter().next().unwrap();
         self.leaves.push(wrapper.clone());
         self.nodes.push(wrapper.hash.clone());
         let mut index = self.leaves.len() - 1;

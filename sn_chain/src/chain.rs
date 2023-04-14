@@ -36,6 +36,12 @@ impl HeaderList {
         self.headers.len()
     }
 }
+
+impl Default for HeaderList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 pub struct Chain {
     pub block_store: Box<dyn BlockStorer>,
     pub tx_store: Box<dyn TXStorer>,
@@ -68,9 +74,8 @@ impl Chain {
         self.headers.add_header(header);  
         for tx in &block.msg_transactions {
             let cloned_tx = tx.clone();
-            // println!("Storing transaction: {:?}", cloned_tx);
             self.tx_store.put(cloned_tx)?;
-            let hash = encode(hash_transaction(&tx)); 
+            let hash = encode(hash_transaction(tx)); 
             for (i, output) in tx.msg_outputs.iter().enumerate() {
                 let utxo = UTXO {
                     hash: hash.clone(),
@@ -143,7 +148,7 @@ impl Chain {
     }
     
     pub fn validate_transaction(&self, transaction: &Transaction, keypair: &[Keypair]) -> Result<(), Box<dyn std::error::Error>> {
-        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public.clone()).collect(); 
+        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public).collect(); 
         if !verify_transaction(transaction, &public_keys) {
             return Err("invalid transaction signature".into());
         }    

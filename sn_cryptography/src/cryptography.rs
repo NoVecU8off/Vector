@@ -60,7 +60,7 @@ impl Keypair {
     }
 
     pub fn verify(&self, message: &[u8], sig: &Signature) -> bool { 
-        self.public.verify(&message, &sig.signature).is_ok()
+        self.public.verify(message, &sig.signature).is_ok()
     }
 
     pub fn derive_address(&self) -> Address {
@@ -76,8 +76,8 @@ impl Keypair {
         vec_public
     }
 
-    pub fn public_key_from_vec(vec_public: &Vec<u8>) -> PublicKey {
-        PublicKey::from_bytes(&vec_public[..]).unwrap()
+    pub fn public_key_from_vec(vec_public: &[u8]) -> PublicKey {
+        PublicKey::from_bytes(vec_public).unwrap()
     }
 }
 
@@ -102,10 +102,6 @@ pub struct Address {
 }
 
 impl Address {
-    pub fn to_string(&self) -> String {
-        hex::encode(self.address)
-    }
-
     pub fn to_bytes(&self) -> [u8; 20] {
         self.address
     }
@@ -147,9 +143,9 @@ impl Signature {
         vec_to_bytes(&self.signature.as_ref().to_vec())
     }
 
-    pub fn signature_from_vec(vec_signature: &Vec<u8>) -> Signature {
+    pub fn signature_from_vec(vec_signature: &[u8]) -> Signature {
         let mut bytes = [0u8; 64];
-        bytes.copy_from_slice(&vec_signature[..]);
+        bytes.copy_from_slice(vec_signature);
         Signature {
             signature: Ed25519Signature::from_bytes(&bytes).unwrap(),
         }
@@ -158,7 +154,7 @@ impl Signature {
 
 impl std::fmt::Display for Signature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", hex::encode(self.to_bytes()))
+        write!(f, "{}", hex::encode(self.signature.to_bytes()))
     }
 }
 
@@ -177,13 +173,13 @@ pub fn vec_to_bytes(vec: &Vec<u8>) -> [u8; 64] {
 
 impl std::fmt::Display for Keypair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{:?}, {:?}, {:?}", self.private, self.optional_private, self.public)
     }
 }
 
 impl std::fmt::Display for Address {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{:?}", self.address)
     }
 }
 
