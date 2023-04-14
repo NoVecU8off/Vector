@@ -1,3 +1,0 @@
-cargo:rerun-if-changed=src/proto/messages.proto
-cargo:rerun-if-changed=src/proto/
-cargo:rerun-if-changed=src/proto/messages.proto

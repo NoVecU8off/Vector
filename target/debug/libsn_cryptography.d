@@ -1,1 +1,0 @@
-C:\Users\Mi\Desktop\Programming\saturn_project_rust\target\debug\libsn_cryptography.rlib: C:\Users\Mi\Desktop\Programming\saturn_project_rust\sn_cryptography\src\cryptography.rs C:\Users\Mi\Desktop\Programming\saturn_project_rust\sn_cryptography\src\lib.rs
