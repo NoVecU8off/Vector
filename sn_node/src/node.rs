@@ -5,17 +5,18 @@ use sn_proto::messages::{Transaction, Version, Confirmed};
 use std::time::Duration;
 use sn_transaction::transaction::*;
 use sn_cryptography::cryptography::Keypair;
-use tonic::transport::Channel;
 use sn_proto::messages::{node_server::{Node, NodeServer}, node_client::NodeClient};
-use tonic::transport::{Endpoint, Server};
+use tonic::transport::{Endpoint, Server, Channel};
+use rustls::{ClientConfig};
+use rustls_native_certs::load_native_certs;
 use tonic::{Request, Response, Status};
 use tokio::net::{TcpListener};
 use tracing::{info, Span};
 use tokio::time::interval;
 use tokio::sync::{RwLock, Mutex};
 use std::hash::{Hash, Hasher};
-use std::net::{SocketAddr, Ipv6Addr};
-use hyper::Uri;
+use std::net::{SocketAddr, Ipv4Addr};
+use http::Uri;
 use anyhow::Error;
 use async_recursion::async_recursion;
 
@@ -75,6 +76,7 @@ pub struct OperationalNode {
     pub peer_lock: RwLock<()>,
     pub peers: RwLock<HashMap<NodeClientWrapper, Version>>,
     pub mempool: Mutex<Mempool>,
+    pub server_status_sender: tokio::sync::mpsc::Sender<bool>,
 }
 
 pub struct OperationalNodeArc(Arc<OperationalNode>);
@@ -84,15 +86,15 @@ pub enum BroadcastMsg {
 }
 
 pub async fn get_available_port() -> String {
-    let loopback = Ipv6Addr::new(0, 0, 0, 0, 0, 0, 0, 1);
+    let loopback = Ipv4Addr::new(127, 0, 0, 1);
     let socket = SocketAddr::new(loopback.into(), 0);
     let listener = TcpListener::bind(socket).await.expect("Failed to bind to address");
     let available_port = listener.local_addr().expect("Failed to get local address").port();
-    format!("[::1]:{}", available_port)
+    format!("127.0.0.1:{}", available_port)
 }
 
 impl OperationalNode {
-    pub fn new(config: ServerConfig) -> Self {
+    pub fn new(config: ServerConfig, server_status_sender: tokio::sync::mpsc::Sender<bool>) -> Self {
         let logger = tracing::info_span!("OperationalNode", listen_addr = %config.listen_addr);
         OperationalNode {
             config,
@@ -100,13 +102,15 @@ impl OperationalNode {
             peer_lock: RwLock::new(()),
             peers: RwLock::new(HashMap::new()),
             mempool: Mutex::new(Mempool::new()),
+            server_status_sender,
         }
     }
 
     pub async fn start(mut config: ServerConfig, bootstrap_nodes: Vec<String>) -> Result<(), Error> {
         let listen_addr = get_available_port().await;
         config.listen_addr = listen_addr;
-        let node = Arc::new(Self::new(config.clone()));
+        let (server_status_sender, _server_status_receiver) = tokio::sync::mpsc::channel::<bool>(1);
+        let node = Arc::new(Self::new(config.clone(), server_status_sender));
         let addr = config.listen_addr.parse().unwrap();
         let node_server = NodeServer::new(OperationalNodeArc(node.clone()));
         let _logger_guard = node.logger.enter();
@@ -117,8 +121,26 @@ impl OperationalNode {
         if node.config.keypair.optional_private.is_some() {
             tokio::spawn(node.clone().validator_loop());
         }
-        Server::builder().add_service(node_server).serve(addr).await?;
-        Ok(())
+        let server_result = Server::builder().add_service(node_server).serve(addr).await;
+        match server_result {
+            Ok(_) => {
+                println!("Node successfully started on {}", config.listen_addr);
+                let _ = node.server_status_sender.send(true).await;
+                Ok(())
+            }
+            Err(e) => {
+                println!("Node failed to start on {}: {:?}", config.listen_addr, e);
+                let _ = node.server_status_sender.send(false).await;
+                Err(e.into())
+            }
+        }
+    }
+
+    pub async fn is_listening(&self, server_status_receiver: &mut tokio::sync::mpsc::Receiver<bool>) -> bool {
+        match server_status_receiver.recv().await {
+            Some(status) => status,
+            None => false,
+        }
     }
 
     pub async fn validator_loop(self: Arc<Self>) {
@@ -194,7 +216,7 @@ impl OperationalNode {
     }
 
     pub async fn dial_remote_node(&self, addr: &SocketAddr) -> Result<(NodeClient<Channel>, Version), Box<dyn std::error::Error + Send + Sync>> {
-        let addr_string = addr.to_string();
+        let addr_string = format!("http://{}", addr.to_string());
         let mut c = make_node_client(addr_string).await?;
         let version = self.get_version().await;
         let v = c.handshake(version).await?.into_inner();
@@ -262,11 +284,30 @@ impl Node for OperationalNodeArc {
 }
 
 
-pub async fn make_node_client(listen_addr: String) -> Result<NodeClient<Channel>, Box<dyn std::error::Error + Send + Sync>> {
-    let uri = listen_addr.parse::<Uri>()?;
-    let channel: Channel = Endpoint::new(uri)?.connect().await?;
+pub async fn make_node_client(scheme: &str, listen_addr: String) -> Result<NodeClient<Channel>, Box<dyn std::error::Error + Send + Sync>> {
+    let uri = format!("{}://{}", scheme, listen_addr).parse::<Uri>()?;
+    let mut endpoint_builder = Endpoint::from(uri);
+
+    if scheme == "https" {
+        let mut client_config = ClientConfig::builder()
+            .with_safe_default_cipher_suites()
+            .with_safe_default_kx_groups()
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_root_certificates(root_certs)
+            .with_single_cert(certs, private_key)
+            .expect("bad certificate/key");
+        let _ = client_config.set_single_client_hello_random();
+        client_config.root_store = load_native_certs()?; // Load the system's root certificates
+        let tls_connector = tokio_rustls::TlsConnector::from(Arc::new(client_config));
+        let tls_config = ClientTlsConfig::new().rustls_connector(tls_connector);
+        endpoint_builder = endpoint_builder.tls_config(tls_config)?;
+    }
+
+    let channel: Channel = endpoint_builder.connect().await?;
     Ok(NodeClient::new(channel))
 }
+
 
 #[derive(Clone)]
 pub struct NodeClientWrapper {
@@ -300,5 +341,32 @@ impl Hash for NodeClientWrapper {
 //         .expect("Setting initial tracing subscriber failed");
 
 //     // ...
+// }
+
+// service Node {
+//     // Other RPC methods ...
+
+//     rpc MempoolState (Empty) returns (MempoolStateResponse);
+// }
+
+// message MempoolStateResponse {
+//     repeated Transaction transactions = 1;
+// }
+
+// // In the `NodeServer` implementation
+// async fn mempool_state(
+//     &self,
+//     _request: Request<Empty>,
+// ) -> Result<Response<MempoolStateResponse>, Status> {
+//     let mempool = self.0.node.mempool.lock().await;
+//     let transactions = mempool
+//         .txx
+//         .values()
+//         .cloned()
+//         .collect::<Vec<Transaction>>();
+
+//     let response = MempoolStateResponse { transactions };
+
+//     Ok(Response::new(response))
 // }
 ////////////////////////////////////////////////////////////////
