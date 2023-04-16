@@ -61,7 +61,6 @@ impl Default for Mempool {
     }
 }
 
-
 #[derive(Clone)]
 pub struct ServerConfig {
     pub version: String,
@@ -74,7 +73,6 @@ pub struct NodeService {
     pub server_config: ServerConfig,
     pub logger: Logger,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
-
     pub mempool: Arc<Mempool>,
 }
 
@@ -97,7 +95,7 @@ impl NodeService {
 
     pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>) -> Result<()> {
         self.server_config.listen_addr = get_available_port(listen_addr)
-        .context(format!("Failed to get an available port for {}", listen_addr))?;
+            .context(format!("Failed to get an available port for {}", listen_addr))?;
         let node_service = NodeServer::new(self.clone());
         let addr = listen_addr.parse().unwrap();
         info!(self.logger, "node started..."; "port" => &self.server_config.listen_addr);
@@ -119,9 +117,10 @@ impl NodeService {
             .add_service(node_service)
             .serve(addr)
             .await?;
-    
+        
         Ok(())
     }
+    
     
     pub async fn validator_loop(&self) {
         if let Some(keypair) = self.server_config.keypair.as_ref() {
@@ -218,20 +217,7 @@ impl NodeService {
         peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
     }
     
-}
-
-pub async fn make_node_client(listen_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(format!("http://{}", listen_addr)).await?;
-    Ok(node_client)
-}
-
-
-#[tonic::async_trait]
-impl Node for NodeService {
-    async fn handshake(
-        &self,
-        request: Request<Version>,
-    ) -> Result<tonic::Response<Version>, Status> {
+    pub async fn process_handshake(&self, request: Request<Version>) -> Result<tonic::Response<Version>, Status> {
         let v = request.into_inner();
         let v_request = tonic::Request::new(v);
         match self.handshake(v_request).await {
@@ -240,10 +226,7 @@ impl Node for NodeService {
         }
     }
 
-    async fn handle_transaction(
-        &self,
-        request: Request<Transaction>,
-    ) -> Result<tonic::Response<Confirmed>, Status> {
+    pub async fn process_incoming_transaction(&self, request: Request<Transaction>) -> Result<tonic::Response<Confirmed>, Status> {
         let tx = request.into_inner();
         let tx_request = tonic::Request::new(tx);
         match self.handle_transaction(tx_request).await {
@@ -251,13 +234,43 @@ impl Node for NodeService {
             Err(err) => Err(Status::internal(err.to_string())),
         }
     }
+
+    pub fn get_actual_listen_addr(&self) -> String {
+        self.server_config.listen_addr.clone()
+    }
 }
 
-fn get_available_port<A: ToSocketAddrs>(addr: A) -> Result<String> {
+pub async fn make_node_client(listen_addr: &str) -> Result<NodeClient<Channel>> {
+    let node_client = NodeClient::connect(format!("http://{}", listen_addr)).await?;
+    Ok(node_client)
+}
+
+#[tonic::async_trait]
+impl Node for NodeService {
+    async fn handshake(
+        &self,
+        request: Request<Version>,
+    ) -> Result<tonic::Response<Version>, Status> {
+        self.process_handshake(request).await
+    }
+
+    async fn handle_transaction(
+        &self,
+        request: Request<Transaction>,
+    ) -> Result<tonic::Response<Confirmed>, Status> {
+        self.process_incoming_transaction(request).await
+    }
+}
+
+pub fn get_available_port<A: ToSocketAddrs>(addr: A) -> Result<String> {
     for address in addr.to_socket_addrs()? {
         if let Ok(listener) = TcpListener::bind(address) {
-            return Ok(format!("http://{}", listener.local_addr()?));
+            return Ok(format!("{}", listener.local_addr()?));
         }
     }
     Err(anyhow!("No available port found"))
 }
+
+// Make these changes:
+// The test case uses hard-coded addresses (127.0.0.1:0) for the nodes. It might be better to use dynamic addresses obtained from TcpListener::bind() as in the get_available_port() function in the main code.
+// The test case does not check whether the nodes actually connect to each other successfully. It might be useful to add some checks for this.
