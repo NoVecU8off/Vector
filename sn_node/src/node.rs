@@ -61,11 +61,10 @@ impl Default for Mempool {
     }
 }
 
-
 #[derive(Clone)]
 pub struct ServerConfig {
     pub version: String,
-    pub listen_addr: String,
+    pub server_listen_addr: String,
     pub keypair: Option<Arc<Keypair>>,
 }
 
@@ -74,7 +73,6 @@ pub struct NodeService {
     pub server_config: ServerConfig,
     pub logger: Logger,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
-
     pub mempool: Arc<Mempool>,
 }
 
@@ -96,11 +94,11 @@ impl NodeService {
     }
 
     pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>) -> Result<()> {
-        self.server_config.listen_addr = get_available_port(listen_addr)
-        .context(format!("Failed to get an available port for {}", listen_addr))?;
+        self.server_config.server_listen_addr = get_available_port(listen_addr)
+            .context(format!("Failed to get an available port for {}", listen_addr))?;
         let node_service = NodeServer::new(self.clone());
         let addr = listen_addr.parse().unwrap();
-        info!(self.logger, "node started..."; "port" => &self.server_config.listen_addr);
+        info!(self.logger, "Node was configurated"; "address:port  " => &self.server_config.server_listen_addr);
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
             tokio::spawn(async move {
@@ -112,27 +110,26 @@ impl NodeService {
         if self.server_config.keypair.is_some() {
             let node_clone = self.clone();
             tokio::spawn(async move {
-                node_clone.validator_loop().await;
+                loop {
+                    node_clone.validator_tick().await;
+                }
             });
         }
         Server::builder()
             .add_service(node_service)
             .serve(addr)
             .await?;
-    
+            
         Ok(())
     }
     
-    pub async fn validator_loop(&self) {
+    pub async fn validator_tick(&self) {
         if let Some(keypair) = self.server_config.keypair.as_ref() {
             let public_key_hex = hex::encode(keypair.public.as_bytes());
-            info!(self.logger, "starting validator loop"; "pubkey" => public_key_hex, "block_time" => BLOCK_TIME.as_secs());
-            let mut interval = tokio::time::interval(BLOCK_TIME);
-            loop {
-                interval.tick().await;
-                let txx = self.mempool.clear().await;
-                debug!(self.logger, "time to create a new block"; "len_tx" => txx.len());
-            }
+            info!(self.logger, "starting validator tick"; "pubkey" => public_key_hex, "block_time" => BLOCK_TIME.as_secs());
+            let txx = self.mempool.clear().await;
+            debug!(self.logger, "time to create a new block"; "len_tx" => txx.len());
+            tokio::time::sleep(BLOCK_TIME).await;
         } else {
             error!(self.logger, "No keypair provided, validator loop cannot start");
         }
@@ -154,7 +151,7 @@ impl NodeService {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
         peers.insert(remote_addr, (Arc::new(c.into()), v.clone()));
-        debug!(self.logger, "new peer successfully connected"; "listen_addr" => &self.server_config.listen_addr, "remote_node" => v.msg_listen_address, "height" => v.msg_height);
+        debug!(self.logger, "new peer successfully connected"; "listen_addr" => &self.server_config.server_listen_addr, "remote_node" => v.msg_listen_address, "height" => v.msg_height);
     }
     
     pub async fn delete_peer(&self, c: &Arc<Mutex<NodeClient<Channel>>>) {
@@ -180,7 +177,7 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("http://{}", addr))
+        let mut c = NodeClient::connect(format!("https://{}", addr))
             .await
             .context("Failed to connect to remote node")?;
         let v = c
@@ -195,13 +192,13 @@ impl NodeService {
         Version {
             msg_version: "blocker-0.1".to_string(),
             msg_height: 0,
-            msg_listen_address: self.server_config.listen_addr.clone(),
+            msg_listen_address: self.server_config.server_listen_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
         }
     }
 
     pub async fn can_connect_with(&self, addr: &str) -> bool {
-        if self.server_config.listen_addr == addr {
+        if self.server_config.server_listen_addr == addr {
             return false;
         }
         let connected_peers = self.get_peer_list().await;
@@ -218,20 +215,7 @@ impl NodeService {
         peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
     }
     
-}
-
-pub async fn make_node_client(listen_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(format!("http://{}", listen_addr)).await?;
-    Ok(node_client)
-}
-
-
-#[tonic::async_trait]
-impl Node for NodeService {
-    async fn handshake(
-        &self,
-        request: Request<Version>,
-    ) -> Result<tonic::Response<Version>, Status> {
+    pub async fn process_handshake(&self, request: Request<Version>) -> Result<tonic::Response<Version>, Status> {
         let v = request.into_inner();
         let v_request = tonic::Request::new(v);
         match self.handshake(v_request).await {
@@ -240,10 +224,7 @@ impl Node for NodeService {
         }
     }
 
-    async fn handle_transaction(
-        &self,
-        request: Request<Transaction>,
-    ) -> Result<tonic::Response<Confirmed>, Status> {
+    pub async fn process_incoming_transaction(&self, request: Request<Transaction>) -> Result<tonic::Response<Confirmed>, Status> {
         let tx = request.into_inner();
         let tx_request = tonic::Request::new(tx);
         match self.handle_transaction(tx_request).await {
@@ -253,11 +234,37 @@ impl Node for NodeService {
     }
 }
 
-fn get_available_port<A: ToSocketAddrs>(addr: A) -> Result<String> {
+pub async fn make_node_client(listen_addr: &str) -> Result<NodeClient<Channel>> {
+    let node_client = NodeClient::connect(format!("{}", listen_addr)).await?;
+    Ok(node_client)
+}
+
+pub fn get_available_port<A: ToSocketAddrs>(addr: A) -> Result<String> {
     for address in addr.to_socket_addrs()? {
         if let Ok(listener) = TcpListener::bind(address) {
-            return Ok(format!("http://{}", listener.local_addr()?));
+            return Ok(format!("{}", listener.local_addr()?));
         }
     }
     Err(anyhow!("No available port found"))
 }
+
+#[tonic::async_trait]
+impl Node for NodeService {
+    async fn handshake(
+        &self,
+        request: Request<Version>,
+    ) -> Result<tonic::Response<Version>, Status> {
+        self.process_handshake(request).await
+    }
+
+    async fn handle_transaction(
+        &self,
+        request: Request<Transaction>,
+    ) -> Result<tonic::Response<Confirmed>, Status> {
+        self.process_incoming_transaction(request).await
+    }
+}
+
+// Make these changes:
+// The test case uses hard-coded addresses (127.0.0.1:0) for the nodes. It might be better to use dynamic addresses obtained from TcpListener::bind() as in the get_available_port() function in the main code.
+// The test case does not check whether the nodes actually connect to each other successfully. It might be useful to add some checks for this.

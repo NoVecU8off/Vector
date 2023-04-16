@@ -1222,6 +1222,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
+ "log",
  "rand 0.8.5",
  "slog",
  "slog-async",
