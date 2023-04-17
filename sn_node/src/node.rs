@@ -140,32 +140,35 @@ impl NodeService {
         }
     }
 
-    pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>, cfg: ServerConfig) -> Result<()> {
-        let node_service = NodeService::new(cfg);
+    pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>) -> Result<()> {
+        self.server_config.server_listen_addr = listen_addr.to_string();
+        let node_service = self.clone();
         let addr = listen_addr.parse().unwrap();
-        info!(self.logger, "Node was configurated"; "address:port  " => &self.server_config.server_listen_addr);
+        Server::builder()
+            .add_service(NodeServer::new(node_service))
+            .serve(addr)
+            .await?;
+        info!(self.logger, "Node started"; "port" => &self.server_config.server_listen_addr);
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
                     error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
+                } else {
+                    info!(node_clone.logger, "Nodes are bootstraped successfully");
                 }
             });
         }
         if self.server_config.keypair.is_some() {
             let node_clone = self.clone();
             tokio::spawn(async move {
+                info!(node_clone.logger, "Validator tick started successfully");
                 loop {
                     node_clone.validator_tick().await;
                 }
             });
         }
-        Server::builder()
-            .add_service(NodeServer::new(node_service))
-            .serve(addr)
-            .await?;
-            
-            Ok(())
+        Ok(())
     }
     
     pub async fn validator_tick(&self) {
@@ -224,7 +227,7 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("http://{}", addr))
+        let mut c = NodeClient::connect(addr.to_string())
             .await
             .context("Failed to connect to remote node")?;
         let v = c
@@ -237,7 +240,7 @@ impl NodeService {
 
     pub async fn get_version(&self) -> Version {
         Version {
-            msg_version: "blocker-0.1".to_string(),
+            msg_version: "test-1".to_string(),
             msg_height: 0,
             msg_listen_address: self.server_config.server_listen_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
@@ -264,6 +267,10 @@ impl NodeService {
 }
 
 pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(remote_addr.to_string()).await?;
+    let node_client = NodeClient::connect(format!("http://{}", remote_addr)).await?;
     Ok(node_client)
+}
+
+pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
+    shutdown_tx.send(()).map_err(|_| "Failed to send shutdown signal")
 }
