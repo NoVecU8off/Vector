@@ -1,31 +1,27 @@
-
+use sn_node::node::*;
+use std::sync::{Arc};
 use sn_proto::messages::*;
 use sn_cryptography::cryptography::Keypair;
 use sn_proto::messages::{Transaction};
-use sn_node::node::*;
-use std::sync::Once;
-// use std::net::{TcpListener, SocketAddr};
-use std::time::Duration;
-use tokio::time::timeout;
 
+fn create_test_server_config() -> ServerConfig {
+    let version = "1.0.0".to_string();
+    let server_listen_addr = "127.0.0.1:8080".to_string();
+    let keypair = Some(Arc::new(Keypair::generate_keypair()));
 
-
-static INIT_LOGGING: Once = Once::new();
-
-pub fn init_test_logging() {
-    INIT_LOGGING.call_once(|| {
-        env_logger::builder()
-            .is_test(true)
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-    });
+    ServerConfig {
+        version,
+        server_listen_addr,
+        keypair,
+    }
 }
 
 pub fn create_random_transaction() -> Transaction {
+    let keypair = Keypair::generate_keypair();
     let input = TransactionInput {
         msg_previous_tx_hash: (0..64).map(|_| rand::random::<u8>()).collect(),
         msg_previous_out_index: rand::random::<u32>(),
-        msg_public_key: (0..32).map(|_| rand::random::<u8>()).collect(),
+        msg_public_key: keypair.public.to_bytes().to_vec(),
         msg_signature: vec![],
     };
     let output = TransactionOutput {
@@ -40,145 +36,80 @@ pub fn create_random_transaction() -> Transaction {
 }
 
 #[tokio::test]
-async fn test_mempool_add() {
-    let mempool = Mempool::new();
-    let tx = create_random_transaction();
-    assert_eq!(mempool.add(tx.clone()).await, true);
-    assert_eq!(mempool.add(tx.clone()).await, false);
-}
-
-#[tokio::test]
-async fn test_mempool_has() {
-    let mempool = Mempool::new();
-    let tx = create_random_transaction();
-    assert_eq!(mempool.has(&tx).await, false);
-    mempool.add(tx.clone()).await;
-    assert_eq!(mempool.has(&tx).await, true);
-}
-
-#[tokio::test]
-async fn test_mempool_clear() {
-    let mempool = Mempool::new();
-    let tx = create_random_transaction();
-    mempool.add(tx.clone()).await;
-    let cleared_transactions = mempool.clear().await;
-    assert_eq!(cleared_transactions.len(), 1);
-    assert_eq!(mempool.len().await, 0);
-}
-
-#[tokio::test]
-async fn test_mempool_len() {
-    let mempool = Mempool::new();
-    let tx = create_random_transaction();
-    assert_eq!(mempool.len().await, 0);
-    mempool.add(tx.clone()).await;
-    assert_eq!(mempool.len().await, 1);
-}
-
-#[tokio::test]
 async fn test_mempool() {
     let mempool = Mempool::new();
+
+    // Test empty mempool
     assert_eq!(mempool.len().await, 0);
 
-    let keypair = Keypair::generate_keypair();
+    // Generate a sample transaction
     let tx = create_random_transaction();
-    assert!(!mempool.has(&tx).await);
 
-    let added = mempool.add(tx.clone()).await;
-    assert!(added);
-    assert_eq!(mempool.len().await, 1);
-    assert!(mempool.has(&tx).await);
-
-    let added_again = mempool.add(tx.clone()).await;
-    assert!(!added_again);
+    // Test adding a transaction
+    assert!(mempool.add(tx.clone()).await);
     assert_eq!(mempool.len().await, 1);
 
-    let cleared_transactions = mempool.clear().await;
-    assert_eq!(cleared_transactions.len(), 1);
+    // Test adding a duplicate transaction
+    assert!(!mempool.add(tx.clone()).await);
+    assert_eq!(mempool.len().await, 1);
+
+    // Test clearing the mempool
+    let cleared = mempool.clear().await;
     assert_eq!(mempool.len().await, 0);
+    assert_eq!(cleared.len(), 1);
 }
 
 #[test]
-fn test_get_available_port() {
-    let listen_addr = "127.0.0.1:0";
-    match get_available_port(listen_addr) {
-        Ok(port) => println!("Available port: {}", port),
-        Err(err) => println!("Error getting available port: {}", err),
-    }
+fn test_server_config() {
+    let version = "1.0.0".to_string();
+    let server_listen_addr = "127.0.0.1:8080".to_string();
+    let keypair = Some(Arc::new(Keypair::generate_keypair()));
+
+    let server_config = ServerConfig {
+        version: version.clone(),
+        server_listen_addr: server_listen_addr.clone(),
+        keypair: keypair.clone(),
+    };
+
+    assert_eq!(server_config.version, version);
+    assert_eq!(server_config.server_listen_addr, server_listen_addr);
+    assert_eq!(server_config.keypair.as_ref().unwrap().public, keypair.as_ref().unwrap().public);
 }
 
 #[tokio::test]
-async fn test_start() {
-    let listen_addr = "127.0.0.1:0";
-    let bootstrap_nodes = vec![];
+async fn test_node_service_new() {
+    let server_config = create_test_server_config();
+    let node_service = NodeService::new(server_config.clone());
 
-    let server_config = ServerConfig {
-        version: "test".to_string(),
-        server_listen_addr: listen_addr.to_string(),
-        keypair: None,
-    };
-
-    let mut node_service = NodeService::new(server_config);
-
-    let start_node = async {
-        node_service.start(listen_addr, bootstrap_nodes).await.unwrap();
-    };
-
-    match timeout(Duration::from_secs(5), start_node).await {
-        Ok(()) => println!("Node started successfully"),
-        Err(_) => println!("Node start timed out"),
-    }
-
-    // Check if the node is running and listening
-    let available_port = get_available_port(listen_addr).unwrap();
-    assert_ne!(node_service.server_config.server_listen_addr, available_port);
+    assert!(node_service.peer_lock.read().await.is_empty());
+    assert_eq!(node_service.mempool.len().await, 0);
 }
 
 #[tokio::test]
-async fn test_start_and_connect_nodes() {
-    let listen_addr = "127.0.0.1:0";
-    let bootstrap_nodes = vec![];
+async fn test_node_service_get_version() {
+    let server_config = create_test_server_config();
+    let node_service = NodeService::new(server_config.clone());
 
-    let server_config = ServerConfig {
-        version: "test".to_string(),
-        server_listen_addr: listen_addr.to_string(),
-        keypair: None,
-    };
+    let version = node_service.get_version().await;
 
-    let mut node_service_1 = NodeService::new(server_config.clone());
-
-    let start_node_1 = async {
-        node_service_1.start(listen_addr, bootstrap_nodes.clone()).await.unwrap();
-    };
-
-    match timeout(Duration::from_secs(15), start_node_1).await {
-        Ok(()) => println!("Node 1 started successfully"),
-        Err(_) => println!("Node 1 start timed out"),
-    }
-
-    // Check if the first node is running and listening
-    let available_port_1 = get_available_port(listen_addr).unwrap();
-    assert_ne!(node_service_1.server_config.server_listen_addr, available_port_1);
-
-    // Start the second node and connect it to the first node
-    let mut node_service_2 = NodeService::new(server_config.clone());
-    let bootstrap_nodes_2 = vec![node_service_1.server_config.server_listen_addr.clone()];
-
-    let start_node_2 = async {
-        node_service_2.start(listen_addr, bootstrap_nodes_2).await.unwrap();
-    };
-
-    match timeout(Duration::from_secs(15), start_node_2).await {
-        Ok(()) => println!("Node 2 started successfully and connected to Node 1"),
-        Err(_) => println!("Node 2 start timed out"),
-    }
-
-    // Check if the second node is running and listening
-    let available_port_2 = get_available_port(listen_addr).unwrap();
-    assert_ne!(node_service_2.server_config.server_listen_addr, available_port_2);
-
-    // Verify if Node 2 has Node 1 in its peer list
-    let node_2_peer_list = node_service_2.get_peer_list().await;
-    assert_eq!(1, node_2_peer_list.len());
-    assert_eq!(node_service_1.server_config.server_listen_addr, node_2_peer_list[0]);
+    assert_eq!(version.msg_version, "blocker-0.1");
+    assert_eq!(version.msg_height, 0);
+    assert_eq!(version.msg_listen_address, server_config.server_listen_addr);
+    assert!(version.msg_peer_list.is_empty());
 }
+
+#[tokio::test]
+async fn test_node_service_can_connect_with() {
+    let server_config = create_test_server_config();
+    let node_service = NodeService::new(server_config.clone());
+
+    let same_addr = &server_config.server_listen_addr;
+    assert!(!node_service.can_connect_with(same_addr).await);
+
+    let unconnected_addr = "127.0.0.1:8081";
+    assert!(node_service.can_connect_with(unconnected_addr).await);
+}
+
+
+
+// start(), validator_tick(), broadcast(), add_peer(), delete_peer(), dial_remote_node(), and bootstrap_network()

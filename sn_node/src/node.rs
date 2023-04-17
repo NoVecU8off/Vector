@@ -1,17 +1,13 @@
-use std::collections::HashMap;
-use std::sync::{Arc};
-use std::time::Duration;
-use std::any::Any;
+use std::{collections::{HashMap}, sync::{Arc}, time::{Duration}, any::{Any}};
+use tonic::{transport::{Server, Channel}, metadata::{MetadataKey}, Status, Request, Response};
 use hex::encode;
 use slog::{o, Drain, Logger, info, debug, error};
-use tonic::{transport::{Server, Channel}, Status, Request};
 use tokio::sync::{Mutex, RwLock};
 use sn_proto::messages::*;
 use sn_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use sn_transaction::transaction::*;
 use sn_cryptography::cryptography::Keypair;
-use anyhow::{Context, Result, anyhow};
-use std::net::{TcpListener, ToSocketAddrs};
+use anyhow::{Context, Result};
 
 pub const BLOCK_TIME: Duration = Duration::from_secs(5);
 
@@ -74,6 +70,56 @@ pub struct NodeService {
     pub logger: Logger,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
     pub mempool: Arc<Mempool>,
+    pub self_ref: Option<Arc<NodeService>>, // Add this field
+}
+
+#[tonic::async_trait]
+impl Node for NodeService {
+    async fn handshake(
+        &self,
+        request: Request<Version>,
+    ) -> Result<Response<Version>, Status> {
+        println!("Got a request: {:?}", request);
+        let version = request.into_inner();
+        let version_clone = version.clone();
+        let listen_addr = version.msg_listen_address;
+        let c = make_node_client(&listen_addr).await.unwrap();
+        self.add_peer(c, version_clone).await;
+        let reply = self.get_version().await;
+        Ok(Response::new(reply))
+    }
+
+    async fn handle_transaction(
+        &self,
+        request: Request<Transaction>,
+    ) -> Result<Response<Confirmed>, Status> {
+        let request_inner = request.get_ref().clone();
+        let peer = request
+            .metadata()
+            .get(MetadataKey::from_static("peer"))
+            .and_then(|peer_str| peer_str.to_str().ok())
+            .unwrap_or("unknown");
+        let tx = request_inner;
+        let tx_clone = tx.clone();
+        let hash = hex::encode(hash_transaction(&tx));
+        if self.mempool.add(tx).await {
+            let log_msg = format!(
+                "received tx: from={} hash={} we={}",
+                peer,
+                hash,
+                self.server_config.server_listen_addr
+            );
+            println!("{:?}", &log_msg);
+            let self_clone = self.self_ref.as_ref().unwrap().clone();
+            tokio::spawn(async move {
+                if let Err(err) = self_clone.broadcast(Box::new(tx_clone)).await {
+                    let log_msg = format!("broadcast error: err={}", err);
+                    println!("{:?}", &log_msg);
+                }
+            });
+        }
+        Ok(Response::new(Confirmed {}))
+    }
 }
 
 impl NodeService {
@@ -84,19 +130,18 @@ impl NodeService {
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-
+    
         NodeService {
             server_config: cfg,
             logger,
             peer_lock: Arc::new(RwLock::new(HashMap::new())),
             mempool: Arc::new(Mempool::new()),
+            self_ref: None,
         }
     }
 
-    pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>) -> Result<()> {
-        self.server_config.server_listen_addr = get_available_port(listen_addr)
-            .context(format!("Failed to get an available port for {}", listen_addr))?;
-        let node_service = NodeServer::new(self.clone());
+    pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>, cfg: ServerConfig) -> Result<()> {
+        let node_service = NodeService::new(cfg);
         let addr = listen_addr.parse().unwrap();
         info!(self.logger, "Node was configurated"; "address:port  " => &self.server_config.server_listen_addr);
         if !bootstrap_nodes.is_empty() {
@@ -116,11 +161,11 @@ impl NodeService {
             });
         }
         Server::builder()
-            .add_service(node_service)
+            .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await?;
             
-        Ok(())
+            Ok(())
     }
     
     pub async fn validator_tick(&self) {
@@ -141,7 +186,9 @@ impl NodeService {
             if let Some(tx) = msg.downcast_ref::<Transaction>() {
                 let peer_client_clone = Arc::clone(peer_client);
                 let mut peer_client_lock = peer_client_clone.lock().await;
-                let _ = peer_client_lock.handle_transaction(Request::new(tx.clone())).await?;
+                if let Err(err) = peer_client_lock.handle_transaction(Request::new(tx.clone())).await {
+                    return Err(err.into());
+                }
             }
         }
         Ok(())
@@ -177,7 +224,7 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("https://{}", addr))
+        let mut c = NodeClient::connect(format!("http://{}", addr))
             .await
             .context("Failed to connect to remote node")?;
         let v = c
@@ -214,57 +261,9 @@ impl NodeService {
         let peers = self.peer_lock.read().await;
         peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
     }
-    
-    pub async fn process_handshake(&self, request: Request<Version>) -> Result<tonic::Response<Version>, Status> {
-        let v = request.into_inner();
-        let v_request = tonic::Request::new(v);
-        match self.handshake(v_request).await {
-            Ok(version) => Ok(version),
-            Err(err) => Err(Status::internal(err.to_string())),
-        }
-    }
-
-    pub async fn process_incoming_transaction(&self, request: Request<Transaction>) -> Result<tonic::Response<Confirmed>, Status> {
-        let tx = request.into_inner();
-        let tx_request = tonic::Request::new(tx);
-        match self.handle_transaction(tx_request).await {
-            Ok(confirmed) => Ok(confirmed),
-            Err(err) => Err(Status::internal(err.to_string())),
-        }
-    }
 }
 
-pub async fn make_node_client(listen_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(format!("{}", listen_addr)).await?;
+pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
+    let node_client = NodeClient::connect(remote_addr.to_string()).await?;
     Ok(node_client)
 }
-
-pub fn get_available_port<A: ToSocketAddrs>(addr: A) -> Result<String> {
-    for address in addr.to_socket_addrs()? {
-        if let Ok(listener) = TcpListener::bind(address) {
-            return Ok(format!("{}", listener.local_addr()?));
-        }
-    }
-    Err(anyhow!("No available port found"))
-}
-
-#[tonic::async_trait]
-impl Node for NodeService {
-    async fn handshake(
-        &self,
-        request: Request<Version>,
-    ) -> Result<tonic::Response<Version>, Status> {
-        self.process_handshake(request).await
-    }
-
-    async fn handle_transaction(
-        &self,
-        request: Request<Transaction>,
-    ) -> Result<tonic::Response<Confirmed>, Status> {
-        self.process_incoming_transaction(request).await
-    }
-}
-
-// Make these changes:
-// The test case uses hard-coded addresses (127.0.0.1:0) for the nodes. It might be better to use dynamic addresses obtained from TcpListener::bind() as in the get_available_port() function in the main code.
-// The test case does not check whether the nodes actually connect to each other successfully. It might be useful to add some checks for this.
