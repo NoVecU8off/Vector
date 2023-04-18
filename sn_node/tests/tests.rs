@@ -319,7 +319,7 @@ fn test_broadcast() {
     });
     rt.block_on(async move {
         let (client, version) = node_service_1_clone_2
-                .dial_remote_node(&format!("http://{}", &node_service_2_clone_2.server_config.server_listen_addr))
+                .dial_remote_node(&&node_service_2_clone_2.server_config.server_listen_addr)
                 .await
                 .unwrap();
         node_service_1_clone_2.add_peer(client, version).await;
@@ -332,39 +332,38 @@ fn test_broadcast() {
 }
 
 #[test]
-fn test_add_peer() {
+fn test_add_and_delete_peer() {
     let rt = Runtime::new().unwrap();
     let server_config_1 = create_test_server_config_1();
     let server_config_2 = create_test_server_config_2();
-
     let mut node_service_1 = NodeService::new(server_config_1);
     let mut node_service_2 = NodeService::new(server_config_2);
-
     let node_service_1_clone_1 = node_service_1.clone();
     let node_service_1_clone_2 = node_service_1.clone();
     let node_service_2_clone_1 = node_service_2.clone();
     let node_service_2_clone_2 = node_service_2.clone();
-
     node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
     node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
-
     rt.spawn(async move {
         node_service_1.start(&node_service_1_clone_1.server_config.server_listen_addr, vec![]).await.unwrap();
     });
     rt.spawn(async move {
         node_service_2.start(&node_service_2_clone_1.server_config.server_listen_addr, vec![]).await.unwrap();
     });
-
     rt.block_on(async {
         let (client, version) = node_service_1_clone_2
-            .dial_remote_node(&format!("http://{}", node_service_2_clone_2.server_config.server_listen_addr))
+            .dial_remote_node(&node_service_2_clone_2.server_config.server_listen_addr)
             .await
             .unwrap();
         node_service_1_clone_2.add_peer(client, version).await;
-
         let peer_list_before = node_service_1_clone_2.get_peer_list().await;
         assert_eq!(peer_list_before.len(), 1);
         assert_eq!(peer_list_before[0], "127.0.0.1:8088");
+        println!("Peer list before deletion: {:?}", peer_list_before);
+        node_service_1_clone_2.delete_peer(&node_service_2_clone_2.server_config.server_listen_addr).await;
+        let peer_list_after = node_service_1_clone_2.get_peer_list().await;
+        println!("Peer list after deletion: {:?}", peer_list_after);
+        assert_eq!(peer_list_after.len(), 0);
     });
 }
 
@@ -390,7 +389,7 @@ async fn test_add_peer_async() {
     });
 
     let (client, version) = node_service_1
-        .dial_remote_node(&format!("http://{}", node_service_2.server_config.server_listen_addr))
+        .dial_remote_node(&node_service_2.server_config.server_listen_addr)
         .await
         .unwrap();
     node_service_1.add_peer(client, version).await;
@@ -413,30 +412,23 @@ async fn test_add_delete_peer_async() {
     tokio::spawn(async move {
         node_service_1_clone.clone().start(&node_service_1_clone.server_config.server_listen_addr, vec![]).await.unwrap();
     });
+    tokio::time::sleep(Duration::from_secs(5)).await;
     tokio::spawn(async move {
         node_service_2_clone.clone().start(&node_service_2_clone.server_config.server_listen_addr, vec![]).await.unwrap();
     });
     let (client, version) = node_service_1
-        .dial_remote_node(&format!("http://{}", node_service_2.server_config.server_listen_addr))
+        .dial_remote_node(&node_service_2.server_config.server_listen_addr)
         .await
         .unwrap();
-
-    node_service_1.add_peer(client.clone(), version).await;
+    node_service_1.add_peer(client, version).await;
     let peer_list_before = node_service_1.get_peer_list().await;
+    println!("Peer list before deletion: {:?}", peer_list_before);
     assert_eq!(peer_list_before.len(), 1);
     assert_eq!(peer_list_before[0], "127.0.0.1:8088");
-    // Add a small delay before deleting the peer
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    node_service_1.delete_peer(client).await;
-    tokio::time::sleep(Duration::from_secs(5)).await;
-    println!("Peer list before deletion: {:?}", peer_list_before);
+    node_service_1.delete_peer(&node_service_2.server_config.server_listen_addr).await;
     let peer_list_after = node_service_1.get_peer_list().await;
     println!("Peer list after deletion: {:?}", peer_list_after);
     assert_eq!(peer_list_after.len(), 0);
 }
-
-
-
-
 
 // dial_remote_node(), and bootstrap_network()
