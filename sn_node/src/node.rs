@@ -1,7 +1,7 @@
 use std::{collections::{HashMap}, sync::{Arc}, time::{Duration}, any::{Any}};
 use tonic::{transport::{Server, Channel}, metadata::{MetadataKey}, Status, Request, Response};
 use hex::encode;
-use slog::{o, Drain, Logger, info, debug, error};
+use slog::{o, Drain, Logger, info, error};
 use tokio::sync::{Mutex, RwLock};
 use sn_proto::messages::*;
 use sn_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
@@ -13,12 +13,20 @@ pub const BLOCK_TIME: Duration = Duration::from_secs(5);
 
 pub struct Mempool {
     pub lock: RwLock<HashMap<String, Transaction>>,
+    pub logger: Logger,
 }
 
 impl Mempool {
     pub fn new() -> Self {
+        let logger = {
+            let decorator = slog_term::TermDecorator::new().build();
+            let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+            let drain = slog_async::Async::new(drain).build().fuse();
+            Logger::root(drain, o!())
+        };
         Mempool {
             lock: RwLock::new(HashMap::new()),
+            logger,
         }
     }
 
@@ -26,6 +34,7 @@ impl Mempool {
         let mut lock = self.lock.write().await;
         let txx = lock.values().cloned().collect::<Vec<_>>();
         lock.clear();
+        info!(self.logger, "Mempool cleared, {} transactions removed", txx.len());
         txx
     }
 
@@ -46,7 +55,8 @@ impl Mempool {
         }
         let mut lock = self.lock.write().await;
         let hash = hex::encode(hash_transaction(&tx));
-        lock.insert(hash, tx);
+        lock.insert(hash.clone(), tx);
+        info!(self.logger, "Transaction added to mempool: {}", hash);
         true
     }
 }
@@ -70,7 +80,7 @@ pub struct NodeService {
     pub logger: Logger,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
     pub mempool: Arc<Mempool>,
-    pub self_ref: Option<Arc<NodeService>>, // Add this field
+    pub self_ref: Option<Arc<NodeService>>,
 }
 
 #[tonic::async_trait]
@@ -79,7 +89,6 @@ impl Node for NodeService {
         &self,
         request: Request<Version>,
     ) -> Result<Response<Version>, Status> {
-        println!("Got a request: {:?}", request);
         let version = request.into_inner();
         let version_clone = version.clone();
         let listen_addr = version.msg_listen_address;
@@ -103,18 +112,10 @@ impl Node for NodeService {
         let tx_clone = tx.clone();
         let hash = hex::encode(hash_transaction(&tx));
         if self.mempool.add(tx).await {
-            let log_msg = format!(
-                "received tx: from={} hash={} we={}",
-                peer,
-                hash,
-                self.server_config.server_listen_addr
-            );
-            println!("{:?}", &log_msg);
+            info!(self.logger, "Received transaction: {} from {}", hash, peer);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
                 if let Err(err) = self_clone.broadcast(Box::new(tx_clone)).await {
-                    let log_msg = format!("broadcast error: err={}", err);
-                    println!("{:?}", &log_msg);
                 }
             });
         }
@@ -148,21 +149,17 @@ impl NodeService {
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await?;
-        info!(self.logger, "Node started"; "port" => &self.server_config.server_listen_addr);
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
             tokio::spawn(async move {
                 if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
                     error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
-                } else {
-                    info!(node_clone.logger, "Nodes are bootstraped successfully");
                 }
             });
         }
         if self.server_config.keypair.is_some() {
             let node_clone = self.clone();
             tokio::spawn(async move {
-                info!(node_clone.logger, "Validator tick started successfully");
                 loop {
                     node_clone.validator_tick().await;
                 }
@@ -174,9 +171,7 @@ impl NodeService {
     pub async fn validator_tick(&self) {
         if let Some(keypair) = self.server_config.keypair.as_ref() {
             let public_key_hex = hex::encode(keypair.public.as_bytes());
-            info!(self.logger, "starting validator tick"; "pubkey" => public_key_hex, "block_time" => BLOCK_TIME.as_secs());
             let txx = self.mempool.clear().await;
-            debug!(self.logger, "time to create a new block"; "len_tx" => txx.len());
             tokio::time::sleep(BLOCK_TIME).await;
         } else {
             error!(self.logger, "No keypair provided, validator loop cannot start");
@@ -194,18 +189,20 @@ impl NodeService {
                 if addr != &self.server_config.server_listen_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
                         return Err(err.into());
+                    } else {
+                        info!(self.logger, "{}: broadcasted transaction {} to {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(&tx)), addr);
                     }
                 }
             }
         }
         Ok(())
-    }    
+    }
     
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
-        peers.insert(remote_addr, (Arc::new(c.into()), v.clone()));
-        debug!(self.logger, "new peer successfully connected"; "listen_addr" => &self.server_config.server_listen_addr, "remote_node" => v.msg_listen_address, "height" => v.msg_height);
+        peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone()));
+        info!(self.logger, "New peer added: {}", remote_addr);
     }
     
     pub async fn delete_peer(&self, c: &Arc<Mutex<NodeClient<Channel>>>) {
@@ -216,6 +213,7 @@ impl NodeService {
             .map(|(addr, _)| addr.clone());
         if let Some(addr) = to_remove {
             peers.remove(&addr);
+            info!(self.logger, "Peer removed: {}", addr);
         }
     }
 
@@ -226,6 +224,7 @@ impl NodeService {
             }
             let (c, v) = self.dial_remote_node(&addr).await?;
             self.add_peer(c, v).await;
+            info!(self.logger, "Bootstrapped node: {}", addr);
         }
         Ok(())
     }
@@ -239,6 +238,7 @@ impl NodeService {
             .await
             .context("Failed to perform handshake with remote node")?
             .into_inner();
+        info!(self.logger, "Dialed remote node: {}", addr);
         Ok((c, v))
     }
 
@@ -278,14 +278,3 @@ pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> 
 pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
     shutdown_tx.send(()).map_err(|_| "Failed to send shutdown signal")
 }
-
-// pub async fn get_received_transaction(&self) -> Result<Transaction, &'static str> {
-    //     let mempool = self.mempool.lock.read().await;
-    //     let transactions = mempool.values().cloned().collect::<Vec<Transaction>>();
-    //     if transactions.is_empty() {
-    //         Err("No transactions found in mempool")
-    //     } else {
-    //         Ok(transactions.last().unwrap().clone())
-    //     }
-    // }
-    
