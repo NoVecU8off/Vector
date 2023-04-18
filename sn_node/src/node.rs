@@ -113,7 +113,7 @@ impl Node for NodeService {
         let tx_clone = tx.clone();
         let hash = hex::encode(hash_transaction(&tx));
         if self.mempool.add(tx).await {
-            info!(self.logger, "Received transaction: {} from {}", hash, peer);
+            info!(self.logger, "{}: received transaction: {} from {}", self.server_config.server_listen_addr, hash, peer);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
                 if let Err(_err) = self_clone.broadcast(Box::new(tx_clone)).await {
@@ -132,7 +132,7 @@ impl NodeService {
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-        info!(logger, "NodeService created {:?}", cfg.server_listen_addr);
+        info!(logger, "NodeService {} created", cfg.server_listen_addr);
         NodeService {
             server_config: cfg,
             logger,
@@ -146,14 +146,14 @@ impl NodeService {
         self.server_config.server_listen_addr = listen_addr.to_string();
         let node_service = self.clone();
         let addr = listen_addr.parse().unwrap();
-        info!(self.logger, "Server {} starting listening on {}", self.server_config.server_listen_addr, listen_addr);
+        info!(self.logger, "NodeServer {} starting listening", self.server_config.server_listen_addr);
         Server::builder()
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await?;
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
-            info!(self.logger, "Bootstrapping network with nodes: {:?}", bootstrap_nodes);
+            info!(self.logger, "{}: bootstrapping network with nodes: {:?}", self.server_config.server_listen_addr, bootstrap_nodes);
             tokio::spawn(async move {
                 if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
                     error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
@@ -175,10 +175,10 @@ impl NodeService {
         if let Some(keypair) = self.server_config.keypair.as_ref() {
             let public_key_hex = hex::encode(keypair.public.as_bytes());
             let txx = self.mempool.clear().await;
-            info!(self.logger, "New block created by {} with {} transactions", public_key_hex, txx.len());
+            info!(self.logger, "{}: new block created by {} with {} transactions", self.server_config.server_listen_addr, public_key_hex, txx.len());
             tokio::time::sleep(BLOCK_TIME).await;
         } else {
-            error!(self.logger, "No keypair provided, validator loop cannot start");
+            error!(self.logger, "{}: no keypair provided, validator loop cannot start", self.server_config.server_listen_addr);
         }
     }
     
@@ -189,6 +189,7 @@ impl NodeService {
                 let peer_client_clone = Arc::clone(peer_client);
                 let mut peer_client_lock = peer_client_clone.lock().await;
                 let mut req = Request::new(tx.clone());
+                // req.metadata_mut().insert_bin("peer", MetadataValue::from_bytes(addr.as_bytes()));
                 req.metadata_mut().insert("peer", addr.parse().unwrap());
                 if addr != &self.server_config.server_listen_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
@@ -207,19 +208,19 @@ impl NodeService {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
         peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone()));
-        info!(self.logger, "New peer added: {}", remote_addr);
+        info!(self.logger, "{}: new peer added: {}", self.server_config.server_listen_addr, remote_addr);
     }
     
-    pub async fn delete_peer(&self, c: NodeClient<Channel>) {
+    pub async fn delete_peer(&self, addr: &str) {
         let mut peers = self.peer_lock.write().await;
-        let to_remove = peers
-            .iter()
-            .find(|(_, (peer, _))| Arc::ptr_eq(peer, &Arc::new(c.clone().into())))
-            .map(|(addr, _)| addr.clone());
-        if let Some(addr) = to_remove {
-            peers.remove(&addr);
-            info!(self.logger, "Peer removed: {}", addr);
+        if peers.remove(addr).is_some() {
+            info!(self.logger, "{}: peer removed: {}", self.server_config.server_listen_addr, addr);
         }
+    }
+
+    pub async fn get_peer_list(&self) -> Vec<String> {
+        let peers = self.peer_lock.read().await;
+        peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
     }
     
     pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {
@@ -229,13 +230,13 @@ impl NodeService {
             }
             let (c, v) = self.dial_remote_node(&addr).await?;
             self.add_peer(c, v).await;
-            info!(self.logger, "Bootstrapped node: {}", addr);
+            info!(self.logger, "{}: bootstrapped node: {}", self.server_config.server_listen_addr, addr);
         }
         Ok(())
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(addr.to_string())
+        let mut c = NodeClient::connect(format!("http://{}", addr.to_string()))
             .await
             .context("Failed to connect to remote node")?;
         let v = c
@@ -243,7 +244,7 @@ impl NodeService {
             .await
             .context("Failed to perform handshake with remote node")?
             .into_inner();
-        info!(self.logger, "Dialed remote node: {}", addr);
+        info!(self.logger, "{}: dialed remote node: {}", self.server_config.server_listen_addr, addr);
         Ok((c, v))
     }
 
@@ -267,11 +268,6 @@ impl NodeService {
             }
         }
         true
-    }
-
-    pub async fn get_peer_list(&self) -> Vec<String> {
-        let peers = self.peer_lock.read().await;
-        peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
     }
 }
 
