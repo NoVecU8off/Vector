@@ -20,10 +20,11 @@ impl Mempool {
     pub fn new() -> Self {
         let logger = {
             let decorator = slog_term::TermDecorator::new().build();
-            let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+            let drain = slog_term::FullFormat::new(decorator).build().fuse();
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
+        info!(logger, "Mempool created");
         Mempool {
             lock: RwLock::new(HashMap::new()),
             logger,
@@ -67,7 +68,7 @@ impl Default for Mempool {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ServerConfig {
     pub version: String,
     pub server_listen_addr: String,
@@ -127,11 +128,11 @@ impl NodeService {
     pub fn new(cfg: ServerConfig) -> Self {
         let logger = {
             let decorator = slog_term::TermDecorator::new().build();
-            let drain = slog_term::CompactFormat::new(decorator).build().fuse();
+            let drain = slog_term::FullFormat::new(decorator).build().fuse();
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-    
+        info!(logger, "NodeService created {:?}", cfg.server_listen_addr);
         NodeService {
             server_config: cfg,
             logger,
@@ -145,12 +146,14 @@ impl NodeService {
         self.server_config.server_listen_addr = listen_addr.to_string();
         let node_service = self.clone();
         let addr = listen_addr.parse().unwrap();
+        info!(self.logger, "Server {} starting listening on {}", self.server_config.server_listen_addr, listen_addr);
         Server::builder()
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await?;
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
+            info!(self.logger, "Bootstrapping network with nodes: {:?}", bootstrap_nodes);
             tokio::spawn(async move {
                 if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
                     error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
@@ -170,8 +173,9 @@ impl NodeService {
     
     pub async fn validator_tick(&self) {
         if let Some(keypair) = self.server_config.keypair.as_ref() {
-            let _public_key_hex = hex::encode(keypair.public.as_bytes());
-            let _txx = self.mempool.clear().await;
+            let public_key_hex = hex::encode(keypair.public.as_bytes());
+            let txx = self.mempool.clear().await;
+            info!(self.logger, "New block created by {} with {} transactions", public_key_hex, txx.len());
             tokio::time::sleep(BLOCK_TIME).await;
         } else {
             error!(self.logger, "No keypair provided, validator loop cannot start");
@@ -188,6 +192,7 @@ impl NodeService {
                 req.metadata_mut().insert("peer", addr.parse().unwrap());
                 if addr != &self.server_config.server_listen_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
+                        error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx)), addr, err);
                         return Err(err.into());
                     } else {
                         info!(self.logger, "{}: broadcasted transaction {} to {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
@@ -205,18 +210,18 @@ impl NodeService {
         info!(self.logger, "New peer added: {}", remote_addr);
     }
     
-    pub async fn delete_peer(&self, c: &Arc<Mutex<NodeClient<Channel>>>) {
+    pub async fn delete_peer(&self, c: NodeClient<Channel>) {
         let mut peers = self.peer_lock.write().await;
         let to_remove = peers
             .iter()
-            .find(|(_, (peer, _))| Arc::ptr_eq(peer, c))
+            .find(|(_, (peer, _))| Arc::ptr_eq(peer, &Arc::new(c.clone().into())))
             .map(|(addr, _)| addr.clone());
         if let Some(addr) = to_remove {
             peers.remove(&addr);
             info!(self.logger, "Peer removed: {}", addr);
         }
     }
-
+    
     pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {
         for addr in addrs {
             if !self.can_connect_with(&addr).await {
