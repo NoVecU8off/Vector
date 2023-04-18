@@ -115,7 +115,7 @@ impl Node for NodeService {
             info!(self.logger, "Received transaction: {} from {}", hash, peer);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                if let Err(err) = self_clone.broadcast(Box::new(tx_clone)).await {
+                if let Err(_err) = self_clone.broadcast(Box::new(tx_clone)).await {
                 }
             });
         }
@@ -170,8 +170,8 @@ impl NodeService {
     
     pub async fn validator_tick(&self) {
         if let Some(keypair) = self.server_config.keypair.as_ref() {
-            let public_key_hex = hex::encode(keypair.public.as_bytes());
-            let txx = self.mempool.clear().await;
+            let _public_key_hex = hex::encode(keypair.public.as_bytes());
+            let _txx = self.mempool.clear().await;
             tokio::time::sleep(BLOCK_TIME).await;
         } else {
             error!(self.logger, "No keypair provided, validator loop cannot start");
@@ -190,7 +190,7 @@ impl NodeService {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
                         return Err(err.into());
                     } else {
-                        info!(self.logger, "{}: broadcasted transaction {} to {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(&tx)), addr);
+                        info!(self.logger, "{}: broadcasted transaction {} to {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
                     }
                 }
             }
