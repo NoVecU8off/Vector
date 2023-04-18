@@ -185,17 +185,21 @@ impl NodeService {
     
     pub async fn broadcast(&self, msg: Box<dyn Any + Send + Sync>) -> Result<()> {
         let peers = self.peer_lock.read().await;
-        for (_, (peer_client, _)) in peers.iter() {
+        for (addr, (peer_client, _)) in peers.iter() {
             if let Some(tx) = msg.downcast_ref::<Transaction>() {
                 let peer_client_clone = Arc::clone(peer_client);
                 let mut peer_client_lock = peer_client_clone.lock().await;
-                if let Err(err) = peer_client_lock.handle_transaction(Request::new(tx.clone())).await {
-                    return Err(err.into());
+                let mut req = Request::new(tx.clone());
+                req.metadata_mut().insert("peer", addr.parse().unwrap());
+                if addr != &self.server_config.server_listen_addr {
+                    if let Err(err) = peer_client_lock.handle_transaction(req).await {
+                        return Err(err.into());
+                    }
                 }
             }
         }
         Ok(())
-    }
+    }    
     
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
         let mut peers = self.peer_lock.write().await;
@@ -267,10 +271,21 @@ impl NodeService {
 }
 
 pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(format!("http://{}", remote_addr)).await?;
+    let node_client = NodeClient::connect(format!("https://{}", remote_addr)).await?;
     Ok(node_client)
 }
 
 pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
     shutdown_tx.send(()).map_err(|_| "Failed to send shutdown signal")
 }
+
+// pub async fn get_received_transaction(&self) -> Result<Transaction, &'static str> {
+    //     let mempool = self.mempool.lock.read().await;
+    //     let transactions = mempool.values().cloned().collect::<Vec<Transaction>>();
+    //     if transactions.is_empty() {
+    //         Err("No transactions found in mempool")
+    //     } else {
+    //         Ok(transactions.last().unwrap().clone())
+    //     }
+    // }
+    
