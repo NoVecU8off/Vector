@@ -207,16 +207,22 @@ async fn test_start_stage_3() {
     println!("listen_addr: {:?}", listen_addr);
     let mut node_service = NodeService::new(server_config);
     println!("NodeService created successfully");
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let rt_clone = Arc::clone(&rt);
     let listen_addr_clone = listen_addr.clone();
     let node_handle = thread::spawn(move || {
         let rt_guard = rt_clone.lock().unwrap();
         rt_guard.block_on(async {
             println!("Starting the NodeService");
-            node_service.start(&listen_addr_clone, bootstrap_nodes).await.unwrap();
+            let node_shutdown = async {
+                tokio::select! {
+                    _ = node_service.start(&listen_addr_clone, bootstrap_nodes) => {}
+                    _ = shutdown_rx => {}
+                }
+            };
+            node_shutdown.await;
         })
     });
-    thread::sleep(Duration::from_secs(2));
     let mut node_client = make_node_client(&listen_addr).await.unwrap();
     let version = Version {
         msg_version: "test-1".to_string(),
@@ -230,6 +236,8 @@ async fn test_start_stage_3() {
     assert_eq!(received_version.msg_height, 0);
     assert_eq!(received_version.msg_listen_address, "127.0.0.1:8080");
     assert_eq!(received_version.msg_peer_list, vec!["127.0.0.1:8080".to_string()]);
+    let shutdown_result = shutdown(shutdown_tx).await;
+    assert!(shutdown_result.is_ok(), "Failed to shut down NodeService");
     drop(node_client);
     drop(rt);
     node_handle.join().unwrap();
@@ -319,7 +327,7 @@ fn test_broadcast() {
     });
     rt.block_on(async move {
         let (client, version) = node_service_1_clone_2
-                .dial_remote_node(&&node_service_2_clone_2.server_config.server_listen_addr)
+                .dial_remote_node(&node_service_2_clone_2.server_config.server_listen_addr)
                 .await
                 .unwrap();
         node_service_1_clone_2.add_peer(client, version).await;
@@ -431,4 +439,62 @@ async fn test_add_delete_peer_async() {
     assert_eq!(peer_list_after.len(), 0);
 }
 
-// dial_remote_node(), and bootstrap_network()
+#[tokio::test]
+async fn test_dial_remote_node() {
+    let node_service_1 = NodeService::new(create_test_server_config_1());
+    let node_service_2 = NodeService::new(create_test_server_config_2());
+    let node_service_1_clone = node_service_1.clone();
+    let node_service_2_clone = node_service_2.clone();
+    tokio::spawn(async move {
+        node_service_1
+            .clone()
+            .start(&node_service_1.server_config.server_listen_addr, vec![])
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    tokio::spawn(async move {
+        node_service_2
+            .clone()
+            .start(&node_service_2.server_config.server_listen_addr, vec![])
+            .await
+            .unwrap();
+    });
+    let (_client, version) = node_service_1_clone
+        .dial_remote_node(&node_service_2_clone.server_config.server_listen_addr)
+        .await
+        .unwrap();
+    assert_eq!(
+        version.msg_listen_address,
+        node_service_2_clone.server_config.server_listen_addr,
+        "Remote node version should have the correct listen address"
+    );
+    assert_eq!(
+        version.msg_version,
+        "test-1",
+        "Remote node version should match the expected version"
+    );
+}
+
+#[tokio::test]
+async fn test_bootstrap_network() {
+    let mut node1 = NodeService::new(create_test_server_config_1());
+    let node1_clone = node1.clone();
+    let mut node2 = NodeService::new(create_test_server_config_2());
+    let (shutdown_tx1, shutdown_rx1) = oneshot::channel();
+    let (shutdown_tx2, shutdown_rx2) = oneshot::channel();
+    tokio::spawn(async move {
+        node1.start("127.0.0.1:8080", vec![]).await.unwrap();
+        let _ = shutdown_rx1.await;
+    });
+    tokio::spawn(async move {
+        node2.start("127.0.0.1:8088", vec![]).await.unwrap();
+        let _ = shutdown_rx2.await;
+    });
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    node1_clone.bootstrap_network(vec!["127.0.0.1:8088".to_string()]).await.unwrap();
+    let peer_list = node1_clone.get_peer_list().await;
+    assert_eq!(peer_list, vec!["127.0.0.1:8088"]);
+    let _ = shutdown(shutdown_tx1).await;
+    let _ = shutdown(shutdown_tx2).await;
+}
