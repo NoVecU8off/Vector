@@ -113,7 +113,7 @@ impl Node for NodeService {
         let tx_clone = tx.clone();
         let hash = hex::encode(hash_transaction(&tx));
         if self.mempool.add(tx).await {
-            info!(self.logger, "{}: received transaction: {} from {}", self.server_config.server_listen_addr, hash, peer);
+            info!(self.logger, "{}: received transaction: \n {} \n from \n {}", self.server_config.server_listen_addr, hash, peer);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
                 if let Err(_err) = self_clone.broadcast(Box::new(tx_clone)).await {
@@ -196,7 +196,7 @@ impl NodeService {
                         error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx)), addr, err);
                         return Err(err.into());
                     } else {
-                        info!(self.logger, "{}: broadcasted transaction {} to {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
+                        info!(self.logger, "{}: broadcasted transaction \n {} \nto \n {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
                     }
                 }
             }
