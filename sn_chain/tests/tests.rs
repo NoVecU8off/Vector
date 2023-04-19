@@ -79,8 +79,6 @@ fn test_add_block() {
     };
     let signature = sign_block(&new_block, &keypair).unwrap();
     new_block.msg_signature = signature.to_vec();
-    // let add_block_result = chain.add_block(new_block);
-    // assert!(add_block_result.is_ok(), "Error adding block: {:?}", add_block_result.err());
     assert!(chain.add_block(new_block).is_ok());
 }
 

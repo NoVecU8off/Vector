@@ -58,8 +58,6 @@ impl Chain {
             headers: HeaderList::new(),
         };
         chain.add_block(create_genesis_block())?;
-        // println!("Genesis block added successfully");
-        // println!("Chain length: {}", chain.chain_len());
         Ok(chain)
     }
     pub fn chain_height(&self) -> usize {
@@ -84,6 +82,15 @@ impl Chain {
                     spent: false,
                 };
                 self.utxo_store.put(utxo)?;
+            }
+            for input in &tx.msg_inputs {
+                let prev_hash = encode(&input.msg_previous_tx_hash);
+                if let Some(mut utxo) = self.utxo_store.get(&prev_hash, input.msg_previous_out_index)? {
+                    utxo.spent = true;
+                    self.utxo_store.put(utxo)?;
+                } else {
+                    return Err(format!("UTXO not found for input {} of tx {}", input.msg_previous_out_index, hash).into());
+                }
             }
         }
         self.block_store.put(&block)?;
