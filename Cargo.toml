@@ -8,6 +8,7 @@ members = [
     "sn_proto",
     "sn_block",
     "sn_transaction",
-    "sn_utilites",
-    "sn_merkle"
+    "sn_merkle",
+    "sn_cli",
+    "sn_consensus",
 ]
