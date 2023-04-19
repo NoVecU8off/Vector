@@ -236,7 +236,7 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("http://{}", addr.to_string()))
+        let mut c = NodeClient::connect(format!("http://{}", addr))
             .await
             .context("Failed to connect to remote node")?;
         let v = c

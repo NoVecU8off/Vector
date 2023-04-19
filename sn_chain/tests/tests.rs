@@ -79,8 +79,6 @@ fn test_add_block() {
     };
     let signature = sign_block(&new_block, &keypair).unwrap();
     new_block.msg_signature = signature.to_vec();
-    // let add_block_result = chain.add_block(new_block);
-    // assert!(add_block_result.is_ok(), "Error adding block: {:?}", add_block_result.err());
     assert!(chain.add_block(new_block).is_ok());
 }
 
@@ -158,4 +156,81 @@ fn test_validate_transaction() {
     let keypair = Keypair::generate_keypair();
     let result = chain.validate_transaction(transaction, &[keypair]);
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_add_block_two() {
+    let mut chain = create_test_chain();
+    let genesis_block = chain.get_block_by_height(0).unwrap();
+    let genesis_hash = hash_header_by_block(&genesis_block).unwrap().to_vec();
+    let input_tx = &genesis_block.msg_transactions[0];
+    let input_tx_hash = hash_transaction(input_tx);
+    let input_amount = input_tx.msg_outputs[0].msg_amount;
+    let keypair = Keypair::generate_keypair();
+    let address = Keypair::derive_address(&keypair);
+
+    let mut input = TransactionInput {
+        msg_previous_tx_hash: input_tx_hash,
+        msg_previous_out_index: 0,
+        msg_public_key: keypair.public.to_bytes().to_vec(),
+        msg_signature: vec![],
+    };
+
+    let unsigned_input = TransactionInput {
+        msg_previous_tx_hash: input.msg_previous_tx_hash.clone(),
+        msg_previous_out_index: input.msg_previous_out_index,
+        msg_public_key: input.msg_public_key.clone(),
+        msg_signature: vec![],
+    };
+
+    let output = TransactionOutput {
+        msg_amount: input_amount,
+        msg_address: address.to_bytes().to_vec(),
+    };
+
+    let mut new_transaction = Transaction {
+        msg_version: 1,
+        msg_inputs: vec![unsigned_input],
+        msg_outputs: vec![output],
+    };
+
+    let signature = sign_transaction(&keypair, &new_transaction);
+    input.msg_signature = signature.to_vec();
+    new_transaction.msg_inputs[0] = input;
+    let merkle_tree = MerkleTree::new(&[new_transaction.clone()]);
+    let merkle_root = merkle_tree.root.to_vec();
+    let prev_header = genesis_block.msg_header.as_ref().unwrap();
+
+    let header = Header {
+        msg_version: 1,
+        msg_height: prev_header.msg_height + 1,
+        msg_previous_hash: hash_header(prev_header).unwrap().to_vec(),
+        msg_root_hash: merkle_root,
+        msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+    };
+    
+    let mut new_block = Block {
+        msg_header: Some(header),
+        msg_transactions: vec![new_transaction],
+        msg_public_key: keypair.public.to_bytes().to_vec(),
+        msg_signature: vec![],
+    };
+
+    let signature = sign_block(&new_block, &keypair).unwrap();
+    new_block.msg_signature = signature.to_vec();
+
+    // Test adding the new block to the chain
+    assert!(chain.add_block(new_block).is_ok());
+
+    // Test getting the block by height and checking its height
+    let retrieved_block = chain.get_block_by_height(1).unwrap();
+    assert_eq!(retrieved_block.msg_header.as_ref().unwrap().msg_height, 1);
+
+    // Test getting the block by hash and checking its height
+    let retrieved_block = chain.get_block_by_hash(&genesis_hash).unwrap();
+    assert_eq!(retrieved_block.msg_header.as_ref().unwrap().msg_height, 0);
+
+    // Test getting the block by hash and checking its previous hash
+    let retrieved_block = chain.get_block_by_height(1).unwrap();
+    assert_eq!(retrieved_block.msg_header.as_ref().unwrap().msg_previous_hash, genesis_hash);
 }
