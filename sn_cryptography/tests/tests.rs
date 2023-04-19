@@ -73,4 +73,3 @@ fn test_address_from_bytes() {
     let address = Address::from_bytes(bytes);
     assert_eq!(address.address, bytes);
 }
-
