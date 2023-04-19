@@ -138,7 +138,7 @@ impl Chain {
             return Err("invalid block signature".into());
         } 
         if self.chain_len() > 0 {
-            let last_block = self.get_block_by_height(self.chain_height())?;
+            let last_block = self.get_block_by_height(self.chain_height()).unwrap();
             let last_block_hash = hash_header_by_block(&last_block).unwrap().to_vec();
             if let Some(header) = incoming_block.msg_header.as_ref() {
                 if last_block_hash != header.msg_previous_hash {
