@@ -142,10 +142,9 @@ impl NodeService {
         }
     }
 
-    pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>) -> Result<()> {
-        self.server_config.server_listen_addr = listen_addr.to_string();
+    pub async fn start(&mut self, bootstrap_nodes: Vec<String>) -> Result<()> {
         let node_service = self.clone();
-        let addr = listen_addr.parse().unwrap();
+        let addr = self.server_config.server_listen_addr.parse().unwrap();
         info!(self.logger, "NodeServer {} starting listening", self.server_config.server_listen_addr);
         Server::builder()
             .add_service(NodeServer::new(node_service))

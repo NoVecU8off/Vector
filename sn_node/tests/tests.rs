@@ -157,7 +157,7 @@ fn test_start_stage_1() {
         let rt_guard = rt_clone.lock().unwrap();
         rt_guard.block_on(async {
             println!("Starting the NodeService");
-            node_service.start(&listen_addr, bootstrap_nodes).await.unwrap();
+            node_service.start(bootstrap_nodes).await.unwrap();
         })
     });
     // Give the node some time to start
@@ -185,7 +185,7 @@ fn test_start_stage_2() {
         let rt_guard = rt_clone.lock().unwrap();
         rt_guard.block_on(async {
             tokio::select! {
-                _ = node_service.start(&listen_addr, bootstrap_nodes) => {},
+                _ = node_service.start(bootstrap_nodes) => {},
                 _ = shutdown_rx => {
                     println!("Received shutdown signal");
                 },
@@ -209,14 +209,13 @@ async fn test_start_stage_3() {
     println!("NodeService created successfully");
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let rt_clone = Arc::clone(&rt);
-    let listen_addr_clone = listen_addr.clone();
     let node_handle = thread::spawn(move || {
         let rt_guard = rt_clone.lock().unwrap();
         rt_guard.block_on(async {
             println!("Starting the NodeService");
             let node_shutdown = async {
                 tokio::select! {
-                    _ = node_service.start(&listen_addr_clone, bootstrap_nodes) => {}
+                    _ = node_service.start(bootstrap_nodes) => {}
                     _ = shutdown_rx => {}
                 }
             };
@@ -256,14 +255,13 @@ async fn test_start_stage_4() {
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
     let rt_clone = Arc::clone(&rt);
-    let listen_addr_clone = listen_addr.clone();
     let node_handle = thread::spawn(move || {
         let rt_guard = rt_clone.lock().unwrap();
         rt_guard.block_on(async {
             println!("Starting the NodeService");
             let node_shutdown = async {
                 tokio::select! {
-                    _ = node_service.start(&listen_addr_clone, bootstrap_nodes) => {}
+                    _ = node_service.start(bootstrap_nodes) => {}
                     _ = shutdown_rx => {}
                 }
             };
@@ -314,16 +312,14 @@ fn test_broadcast() {
     let mut node_service_2 = NodeService::new(server_config_2);
     node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
     node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
-    let node_service_1_clone_1 = node_service_1.clone();
     let node_service_1_clone_2 = node_service_1.clone();
     let node_service_1_clone_3 = node_service_1.clone();
-    let node_service_2_clone_1 = node_service_2.clone();
     let node_service_2_clone_2 = node_service_2.clone();
     rt.spawn(async move {
-        node_service_1.start(&node_service_1_clone_1.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_1.start(vec![]).await.unwrap();
     });
     rt.spawn(async move {
-        node_service_2.start(&node_service_2_clone_1.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_2.start(vec![]).await.unwrap();
     });
     rt.block_on(async move {
         let (client, version) = node_service_1_clone_2
@@ -346,17 +342,15 @@ fn test_add_and_delete_peer() {
     let server_config_2 = create_test_server_config_2();
     let mut node_service_1 = NodeService::new(server_config_1);
     let mut node_service_2 = NodeService::new(server_config_2);
-    let node_service_1_clone_1 = node_service_1.clone();
     let node_service_1_clone_2 = node_service_1.clone();
-    let node_service_2_clone_1 = node_service_2.clone();
     let node_service_2_clone_2 = node_service_2.clone();
     node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
     node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
     rt.spawn(async move {
-        node_service_1.start(&node_service_1_clone_1.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_1.start(vec![]).await.unwrap();
     });
     rt.spawn(async move {
-        node_service_2.start(&node_service_2_clone_1.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_2.start(vec![]).await.unwrap();
     });
     rt.block_on(async {
         let (client, version) = node_service_1_clone_2
@@ -390,10 +384,10 @@ async fn test_add_peer_async() {
     let node_service_2_clone = node_service_2.clone();
 
     tokio::spawn(async move {
-        node_service_1_clone.clone().start(&node_service_1_clone.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_1_clone.clone().start(vec![]).await.unwrap();
     });
     tokio::spawn(async move {
-        node_service_2_clone.clone().start(&node_service_2_clone.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_2_clone.clone().start(vec![]).await.unwrap();
     });
 
     let (client, version) = node_service_1
@@ -418,11 +412,11 @@ async fn test_add_delete_peer_async() {
     let node_service_1_clone = node_service_1.clone();
     let node_service_2_clone = node_service_2.clone();
     tokio::spawn(async move {
-        node_service_1_clone.clone().start(&node_service_1_clone.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_1_clone.clone().start(vec![]).await.unwrap();
     });
     tokio::time::sleep(Duration::from_secs(5)).await;
     tokio::spawn(async move {
-        node_service_2_clone.clone().start(&node_service_2_clone.server_config.server_listen_addr, vec![]).await.unwrap();
+        node_service_2_clone.clone().start(vec![]).await.unwrap();
     });
     let (client, version) = node_service_1
         .dial_remote_node(&node_service_2.server_config.server_listen_addr)
@@ -448,7 +442,7 @@ async fn test_dial_remote_node() {
     tokio::spawn(async move {
         node_service_1
             .clone()
-            .start(&node_service_1.server_config.server_listen_addr, vec![])
+            .start(vec![])
             .await
             .unwrap();
     });
@@ -456,7 +450,7 @@ async fn test_dial_remote_node() {
     tokio::spawn(async move {
         node_service_2
             .clone()
-            .start(&node_service_2.server_config.server_listen_addr, vec![])
+            .start(vec![])
             .await
             .unwrap();
     });
@@ -484,11 +478,11 @@ async fn test_bootstrap_network() {
     let (shutdown_tx1, shutdown_rx1) = oneshot::channel();
     let (shutdown_tx2, shutdown_rx2) = oneshot::channel();
     tokio::spawn(async move {
-        node1.start("127.0.0.1:8080", vec![]).await.unwrap();
+        node1.start(vec![]).await.unwrap();
         let _ = shutdown_rx1.await;
     });
     tokio::spawn(async move {
-        node2.start("127.0.0.1:8088", vec![]).await.unwrap();
+        node2.start(vec![]).await.unwrap();
         let _ = shutdown_rx2.await;
     });
     tokio::time::sleep(Duration::from_secs(1)).await;
