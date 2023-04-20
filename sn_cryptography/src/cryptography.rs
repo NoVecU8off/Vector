@@ -5,10 +5,7 @@ use rand::{rngs::OsRng, RngCore};
 use sha3::{Sha3_512, Digest};
 use arrayref::{array_ref};
 use std::fmt;
-use serde::Serializer;
-use serde::Deserializer;
-use serde::{Serialize, Deserialize};
-use serde::{de::Error as DeError};
+use serde::{Serializer, Deserializer, Serialize, Deserialize, de::Error as DeError};
 
 pub fn generate_seed_thread() -> [u8; 32] {
     let mut threaded_seed = [0u8; 32];

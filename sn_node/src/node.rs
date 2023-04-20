@@ -1,5 +1,5 @@
 use std::{collections::{HashMap}, sync::{Arc}, time::{Duration}, any::{Any}};
-use tonic::{transport::{Server, Channel}, metadata::{MetadataKey}, Status, Request, Response};
+use tonic::{transport::{Server, Channel}, Status, Request, Response};
 use hex::encode;
 use slog::{o, Drain, Logger, info, error};
 use tokio::sync::{Mutex, RwLock};
@@ -10,10 +10,13 @@ use sn_transaction::transaction::*;
 use sn_cryptography::cryptography::Keypair;
 use anyhow::{Context, Result};
 use serde::{Serialize, Deserialize};
+use bincode::{serialize, deserialize};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
+use rustls::{Certificate, PrivateKey};
+use rcgen::CertificateParams;
+use std::path::PathBuf;
 
 pub const BLOCK_TIME: Duration = Duration::from_secs(5);
-pub const CONFIG_FILE: &str = "config.json";
 
 pub struct Mempool {
     pub lock: RwLock<HashMap<String, Transaction>>,
@@ -108,16 +111,11 @@ impl Node for NodeService {
         request: Request<Transaction>,
     ) -> Result<Response<Confirmed>, Status> {
         let request_inner = request.get_ref().clone();
-        let peer = request
-            .metadata()
-            .get(MetadataKey::from_static("peer"))
-            .and_then(|peer_str| peer_str.to_str().ok())
-            .unwrap_or("unknown");
         let tx = request_inner;
         let tx_clone = tx.clone();
         let hash = hex::encode(hash_transaction(&tx));
         if self.mempool.add(tx).await {
-            info!(self.logger, "{}: received transaction: \n {} \n from \n {}", self.server_config.server_listen_addr, hash, peer);
+            info!(self.logger, "{}: received transaction: {}", self.server_config.server_listen_addr, hash);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
                 if let Err(_err) = self_clone.broadcast(Box::new(tx_clone)).await {
@@ -274,23 +272,6 @@ impl NodeService {
     }
 }
 
-#[allow(dead_code)]
-async fn save_config(config: &ServerConfig) -> Result<(), anyhow::Error> {
-    let config_json = serde_json::to_string_pretty(config)?;
-    let mut file = File::create(CONFIG_FILE).await?;
-    file.write_all(config_json.as_bytes()).await?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn load_config() -> Result<ServerConfig, anyhow::Error> {
-    let mut file = File::open(CONFIG_FILE).await?;
-    let mut config_json = String::new();
-    file.read_to_string(&mut config_json).await?;
-    let config: ServerConfig = serde_json::from_str(&config_json)?;
-    Ok(config)
-}
-
 pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
     let node_client = NodeClient::connect(format!("https://{}", remote_addr)).await?;
     Ok(node_client)
@@ -299,3 +280,63 @@ pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> 
 pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
     shutdown_tx.send(()).map_err(|_| "Failed to send shutdown signal")
 }
+
+#[allow(dead_code)]
+async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), anyhow::Error> {
+    let serialized_data = serialize(config)?;
+    let mut file = File::create(config_path).await?;
+    file.write_all(&serialized_data).await?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error> {
+    let mut file = File::open(config_path).await?;
+    let mut serialized_data = Vec::new();
+    file.read_to_end(&mut serialized_data).await?;
+    let config: ServerConfig = deserialize(&serialized_data)?;
+    Ok(config)
+}
+
+fn load_certs_and_key() -> Result<(Vec<Certificate>, PrivateKey), Box<dyn std::error::Error>> {
+    if !std::path::Path::new("cert.pem").exists() || !std::path::Path::new("key.pem").exists() {
+        generate_self_signed_cert()?;
+    }
+
+    let cert = std::fs::read("cert.pem")?;
+    let key = std::fs::read("key.pem")?;
+
+    let cert = rustls::internal::pemfile::certs(&mut std::io::BufReader::new(&cert[..]))?;
+    let key = rustls::internal::pemfile::rsa_private_keys(&mut std::io::BufReader::new(&key[..]))?;
+
+    Ok((cert, key))
+}
+
+fn generate_self_signed_cert() -> Result<(), RcgenError> {
+    let params = CertificateParams::new(vec!["localhost".into()]);
+    let cert = rcgen::Certificate::from_params(params)?;
+
+    let cert_pem = Pem {
+        tag: "CERTIFICATE".to_string(),
+        contents: cert.serialize_pem()?.into_bytes(),
+    };
+    let key_pem = Pem {
+        tag: "PRIVATE KEY".to_string(),
+        contents: cert.serialize_private_key_pem().into_bytes(),
+    };
+
+    std::fs::write("cert.pem", encode(&cert_pem))?;
+    std::fs::write("key.pem", encode(&key_pem))?;
+
+    Ok(())
+}
+
+// let current_exe_path = match env::current_exe() {
+//     Ok(path) => path,
+//     Err(e) => {
+//         println!("Error getting current executable path: {:?}", e);
+//         return;
+//     }
+// };
+
+// let config_path = current_exe_path.parent().unwrap().join(CONFIG_FILE);
