@@ -1346,6 +1346,20 @@ name = "serde"
 version = "1.0.160"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bb2f3770c8bce3bcda7e149193a069a0f4365bda1fa5cd88e03bca26afc1216c"
+dependencies = [
+ "serde_derive",
+]
+
+[[package]]
+name = "serde_derive"
+version = "1.0.160"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "291a097c63d8497e00160b166a967a4a79c64f3facdd01cbd7502231688d77df"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.15",
+]
 
 [[package]]
 name = "serde_json"
@@ -1508,6 +1522,8 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "rand 0.8.5",
+ "serde",
+ "serde_json",
  "sha3",
 ]
 
@@ -1534,6 +1550,8 @@ dependencies = [
  "log",
  "rand 0.8.5",
  "reqwest",
+ "serde",
+ "serde_json",
  "slog",
  "slog-async",
  "slog-term",

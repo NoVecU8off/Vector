@@ -10,7 +10,7 @@ async fn main() {
     let server_config = ServerConfig {
         version: "1.0".to_string(),
         server_listen_addr: "127.0.0.1:3000".to_string(),
-        keypair: Some(Arc::new(Keypair::generate_keypair())),
+        keypair: Some(Keypair::generate_keypair()),
     };
 
     let mut node_service = NodeService::new(server_config);

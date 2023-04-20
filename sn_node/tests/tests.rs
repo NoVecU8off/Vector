@@ -12,7 +12,7 @@ use tokio::sync::{oneshot};
 fn create_test_server_config_1() -> ServerConfig {
     let version = "1.0.0".to_string();
     let server_listen_addr = "127.0.0.1:8080".to_string();
-    let keypair = Some(Arc::new(Keypair::generate_keypair()));
+    let keypair = Some(Keypair::generate_keypair());
         ServerConfig {
             version,
             server_listen_addr,
@@ -23,7 +23,7 @@ fn create_test_server_config_1() -> ServerConfig {
 fn create_test_server_config_2() -> ServerConfig {
     let version = "1.0.0".to_string();
     let server_listen_addr = "127.0.0.1:8088".to_string();
-    let keypair = Some(Arc::new(Keypair::generate_keypair()));
+    let keypair = Some(Keypair::generate_keypair());
         ServerConfig {
             version,
             server_listen_addr,
@@ -78,7 +78,7 @@ async fn test_mempool() {
 fn test_server_config_1() {
     let version = "1.0.0".to_string();
     let server_listen_addr = "127.0.0.1:8080".to_string();
-    let keypair = Some(Arc::new(Keypair::generate_keypair()));
+    let keypair = Some(Keypair::generate_keypair());
 
     let server_config = ServerConfig {
         version: version.clone(),
@@ -95,7 +95,7 @@ fn test_server_config_1() {
 fn test_server_config_2() {
     let version = "1.0.0".to_string();
     let server_listen_addr = "127.0.0.1:8088".to_string();
-    let keypair = Some(Arc::new(Keypair::generate_keypair()));
+    let keypair = Some(Keypair::generate_keypair());
 
     let server_config = ServerConfig {
         version: version.clone(),
@@ -292,7 +292,7 @@ async fn test_start_stage_4() {
 #[tokio::test]
 async fn test_validator_tick() {
     let mut server_config = create_test_server_config_1();
-    server_config.keypair = Some(Arc::new(Keypair::generate_keypair()));
+    server_config.keypair = Some(Keypair::generate_keypair());
     let node_service = NodeService::new(server_config);
     let transaction1 = create_random_transaction();
     let transaction2 = create_random_transaction();
