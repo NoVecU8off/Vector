@@ -6,4 +6,14 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = "4.2.2"
+sn_block = { path = "../sn_block", version = "0.1.0"}
+sn_cryptography = { path = "../sn_cryptography", version = "0.1.0"}
+sn_proto = { path = "../sn_proto", version = "0.1.0"}
+sn_store = { path = "../sn_store", version = "0.1.0"}
+sn_transaction = { path = "../sn_transaction", version = "0.1.0"}
+sn_merkle = { path = "../sn_merkle", version = "0.1.0"}
+sn_node = { path = "../sn_node", version = "0.1.0"}
+
+clap = "3.0.0"
+tokio = "1.27.0"
+tonic = "0.9.2"

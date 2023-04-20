@@ -3,13 +3,17 @@ use tonic::{transport::{Server, Channel}, metadata::{MetadataKey}, Status, Reque
 use hex::encode;
 use slog::{o, Drain, Logger, info, error};
 use tokio::sync::{Mutex, RwLock};
+use tokio::fs::{File};
 use sn_proto::messages::*;
 use sn_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use sn_transaction::transaction::*;
 use sn_cryptography::cryptography::Keypair;
 use anyhow::{Context, Result};
+use serde::{Serialize, Deserialize};
+use tokio::io::{AsyncWriteExt, AsyncReadExt};
 
 pub const BLOCK_TIME: Duration = Duration::from_secs(5);
+pub const CONFIG_FILE: &str = "config.json";
 
 pub struct Mempool {
     pub lock: RwLock<HashMap<String, Transaction>>,
@@ -68,11 +72,11 @@ impl Default for Mempool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
     pub version: String,
     pub server_listen_addr: String,
-    pub keypair: Option<Arc<Keypair>>,
+    pub keypair: Option<Keypair>,
 }
 
 #[derive(Clone)]
@@ -142,10 +146,9 @@ impl NodeService {
         }
     }
 
-    pub async fn start(&mut self, listen_addr: &str, bootstrap_nodes: Vec<String>) -> Result<()> {
-        self.server_config.server_listen_addr = listen_addr.to_string();
+    pub async fn start(&mut self, bootstrap_nodes: Vec<String>) -> Result<()> {
         let node_service = self.clone();
-        let addr = listen_addr.parse().unwrap();
+        let addr = self.server_config.server_listen_addr.parse().unwrap();
         info!(self.logger, "NodeServer {} starting listening", self.server_config.server_listen_addr);
         Server::builder()
             .add_service(NodeServer::new(node_service))
@@ -269,6 +272,23 @@ impl NodeService {
         }
         true
     }
+}
+
+#[allow(dead_code)]
+async fn save_config(config: &ServerConfig) -> Result<(), anyhow::Error> {
+    let config_json = serde_json::to_string_pretty(config)?;
+    let mut file = File::create(CONFIG_FILE).await?;
+    file.write_all(config_json.as_bytes()).await?;
+    Ok(())
+}
+
+#[allow(dead_code)]
+async fn load_config() -> Result<ServerConfig, anyhow::Error> {
+    let mut file = File::open(CONFIG_FILE).await?;
+    let mut config_json = String::new();
+    file.read_to_string(&mut config_json).await?;
+    let config: ServerConfig = serde_json::from_str(&config_json)?;
+    Ok(config)
 }
 
 pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {

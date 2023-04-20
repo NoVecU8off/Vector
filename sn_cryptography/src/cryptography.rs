@@ -5,6 +5,10 @@ use rand::{rngs::OsRng, RngCore};
 use sha3::{Sha3_512, Digest};
 use arrayref::{array_ref};
 use std::fmt;
+use serde::Serializer;
+use serde::Deserializer;
+use serde::{Serialize, Deserialize};
+use serde::{de::Error as DeError};
 
 pub fn generate_seed_thread() -> [u8; 32] {
     let mut threaded_seed = [0u8; 32];
@@ -196,5 +200,52 @@ impl fmt::Debug for Keypair {
             .field("optional_private", &self.optional_private)
             .field("public", &self.public)
             .finish()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct SerializableKeypair {
+    private: Vec<u8>,
+    optional_private: Option<Vec<u8>>,
+    expanded_private_key: Vec<u8>,
+    public: Vec<u8>,
+}
+
+impl Serialize for Keypair {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let serializable = SerializableKeypair {
+            private: self.private.to_bytes().to_vec(),
+            optional_private: self.optional_private.as_ref().map(|sk| sk.to_bytes().to_vec()),
+            expanded_private_key: self.expanded_private_key.to_bytes().to_vec(),
+            public: self.public.to_bytes().to_vec(),
+        };
+        serializable.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Keypair {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let serializable = SerializableKeypair::deserialize(deserializer)?;
+        let private = SecretKey::from_bytes(&serializable.private).map_err(DeError::custom)?;
+        let optional_private = if let Some(op_bytes) = serializable.optional_private {
+            Some(SecretKey::from_bytes(&op_bytes).map_err(DeError::custom)?)
+        } else {
+            None
+        };
+        let expanded_private_key = ExpandedSecretKey::from_bytes(&serializable.expanded_private_key).map_err(DeError::custom)?;
+        let public = PublicKey::from_bytes(&serializable.public).map_err(DeError::custom)?;
+        let keypair = Keypair {
+            private,
+            optional_private,
+            expanded_private_key,
+            public,
+        };
+        Ok(keypair)
     }
 }
