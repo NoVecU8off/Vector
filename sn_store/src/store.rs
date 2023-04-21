@@ -16,7 +16,7 @@ pub struct UTXO {
 
 pub trait UTXOStorer {
     fn put(&mut self, utxo: UTXO) -> Result<(), String>;
-    fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, String>; // Add the out_index parameter
+    fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, String>;
 }
 
 pub struct MemoryUTXOStore {

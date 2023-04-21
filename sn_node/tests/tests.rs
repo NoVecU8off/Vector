@@ -269,7 +269,7 @@ async fn test_start_stage_4() {
         })
     });
     thread::sleep(Duration::from_secs(2));
-    let mut node_client = make_node_client(&listen_addr).await.unwrap();
+    let mut node_client = make_node_client(&listen_addr).await.expect("Failed to create NodeClient");
     let version = Version {
         msg_version: "test-1".to_string(),
         msg_height: 0,

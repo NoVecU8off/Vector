@@ -12,68 +12,12 @@ use anyhow::{Context, Result};
 use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use rustls::{Certificate, PrivateKey};
-use rcgen::CertificateParams;
 use std::path::PathBuf;
+use tonic::transport::{ClientTlsConfig, ServerTlsConfig, Certificate, Identity};
+use rcgen::{generate_simple_self_signed, CertificateParams};
+use rcgen::{SanType};
 
 pub const BLOCK_TIME: Duration = Duration::from_secs(5);
-
-pub struct Mempool {
-    pub lock: RwLock<HashMap<String, Transaction>>,
-    pub logger: Logger,
-}
-
-impl Mempool {
-    pub fn new() -> Self {
-        let logger = {
-            let decorator = slog_term::TermDecorator::new().build();
-            let drain = slog_term::FullFormat::new(decorator).build().fuse();
-            let drain = slog_async::Async::new(drain).build().fuse();
-            Logger::root(drain, o!())
-        };
-        info!(logger, "Mempool created");
-        Mempool {
-            lock: RwLock::new(HashMap::new()),
-            logger,
-        }
-    }
-
-    pub async fn clear(&self) -> Vec<Transaction> {
-        let mut lock = self.lock.write().await;
-        let txx = lock.values().cloned().collect::<Vec<_>>();
-        lock.clear();
-        info!(self.logger, "Mempool cleared, {} transactions removed", txx.len());
-        txx
-    }
-
-    pub async fn len(&self) -> usize {
-        let lock = self.lock.read().await;
-        lock.len()
-    }
-
-    pub async fn has(&self, tx: &Transaction) -> bool {
-        let lock = self.lock.read().await;
-        let hex_hash = encode(hash_transaction(tx));
-        lock.contains_key(&hex_hash)
-    }
-
-    pub async fn add(&self, tx: Transaction) -> bool {
-        if self.has(&tx).await {
-            return false;
-        }
-        let mut lock = self.lock.write().await;
-        let hash = hex::encode(hash_transaction(&tx));
-        lock.insert(hash.clone(), tx);
-        info!(self.logger, "Transaction added to mempool: {}", hash);
-        true
-    }
-}
-
-impl Default for Mempool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -148,7 +92,13 @@ impl NodeService {
         let node_service = self.clone();
         let addr = self.server_config.server_listen_addr.parse().unwrap();
         info!(self.logger, "NodeServer {} starting listening", self.server_config.server_listen_addr);
+        let (cert_pem, key_pem) = generate_self_signed_cert_and_key()?;
+        let cert = Certificate::from_pem(cert_pem.clone());
+        let server_tls_config = ServerTlsConfig::new()
+            .identity(Identity::from_pem(cert_pem, &key_pem))
+            .client_ca_root(cert.clone());
         Server::builder()
+            .tls_config(server_tls_config)?
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await?;
@@ -197,7 +147,7 @@ impl NodeService {
                         error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx)), addr, err);
                         return Err(err.into());
                     } else {
-                        info!(self.logger, "{}: broadcasted transaction \n {} \nto \n {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
+                        info!(self.logger, "{}: broadcasted transaction \n {} \n to \n {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
                     }
                 }
             }
@@ -237,7 +187,7 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("http://{}", addr))
+        let mut c = NodeClient::connect(format!("https://{}", addr))
             .await
             .context("Failed to connect to remote node")?;
         let v = c
@@ -273,8 +223,36 @@ impl NodeService {
 }
 
 pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(format!("https://{}", remote_addr)).await?;
+    let addr = format!("https://{}", remote_addr).parse().unwrap();
+    let (cert_pem, key_pem) = generate_self_signed_cert_and_key()?;
+    let cert = Certificate::from_pem(cert_pem.clone());
+    let tls_config = ClientTlsConfig::new()
+        .domain_name(remote_addr)
+        .ca_certificate(cert.clone())
+        .identity(Identity::from_pem(&cert_pem, &key_pem));
+    let channel = Channel::builder(addr)
+        .tls_config(tls_config)?
+        .connect()
+        .await?;
+    let node_client = NodeClient::new(channel);
     Ok(node_client)
+}
+
+pub fn generate_self_signed_cert_and_key() -> Result<(String, String)> {
+    let mut params = CertificateParams::new(vec!["localhost".to_string()]);
+    params.alg = &rcgen::PKCS_ECDSA_P256_SHA256;
+    let subject_alt_names = params
+        .subject_alt_names
+        .iter()
+        .filter_map(|san| match san {
+            SanType::DnsName(name) => Some(name.clone()),
+            _ => None,
+        })
+        .collect::<Vec<String>>();
+        let rcgen_cert = generate_simple_self_signed(subject_alt_names).unwrap();
+        let cert_pem = rcgen_cert.serialize_pem().unwrap();
+        let key_pem = rcgen_cert.serialize_private_key_pem();
+    Ok((cert_pem, key_pem))
 }
 
 pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
@@ -282,7 +260,7 @@ pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(
 }
 
 #[allow(dead_code)]
-async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), anyhow::Error> {
+pub async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), anyhow::Error> {
     let serialized_data = serialize(config)?;
     let mut file = File::create(config_path).await?;
     file.write_all(&serialized_data).await?;
@@ -290,7 +268,7 @@ async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), 
 }
 
 #[allow(dead_code)]
-async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error> {
+pub async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error> {
     let mut file = File::open(config_path).await?;
     let mut serialized_data = Vec::new();
     file.read_to_end(&mut serialized_data).await?;
@@ -298,38 +276,63 @@ async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error
     Ok(config)
 }
 
-fn load_certs_and_key() -> Result<(Vec<Certificate>, PrivateKey), Box<dyn std::error::Error>> {
-    if !std::path::Path::new("cert.pem").exists() || !std::path::Path::new("key.pem").exists() {
-        generate_self_signed_cert()?;
+pub struct Mempool {
+    pub lock: RwLock<HashMap<String, Transaction>>,
+    pub logger: Logger,
+}
+
+impl Mempool {
+    pub fn new() -> Self {
+        let logger = {
+            let decorator = slog_term::TermDecorator::new().build();
+            let drain = slog_term::FullFormat::new(decorator).build().fuse();
+            let drain = slog_async::Async::new(drain).build().fuse();
+            Logger::root(drain, o!())
+        };
+        info!(logger, "Mempool created");
+        Mempool {
+            lock: RwLock::new(HashMap::new()),
+            logger,
+        }
     }
 
-    let cert = std::fs::read("cert.pem")?;
-    let key = std::fs::read("key.pem")?;
+    pub async fn clear(&self) -> Vec<Transaction> {
+        let mut lock = self.lock.write().await;
+        let txx = lock.values().cloned().collect::<Vec<_>>();
+        lock.clear();
+        info!(self.logger, "Mempool cleared, {} transactions removed", txx.len());
+        txx
+    }
 
-    let cert = rustls::internal::pemfile::certs(&mut std::io::BufReader::new(&cert[..]))?;
-    let key = rustls::internal::pemfile::rsa_private_keys(&mut std::io::BufReader::new(&key[..]))?;
+    pub async fn len(&self) -> usize {
+        let lock = self.lock.read().await;
+        lock.len()
+    }
 
-    Ok((cert, key))
+    pub async fn has(&self, tx: &Transaction) -> bool {
+        let lock = self.lock.read().await;
+        let hex_hash = encode(hash_transaction(tx));
+        lock.contains_key(&hex_hash)
+    }
+
+    pub async fn add(&self, tx: Transaction) -> bool {
+        if self.has(&tx).await {
+            return false;
+        }
+        let mut lock = self.lock.write().await;
+        let hash = hex::encode(hash_transaction(&tx));
+        lock.insert(hash.clone(), tx);
+        info!(self.logger, "Transaction added to mempool: {}", hash);
+        true
+    }
 }
 
-fn generate_self_signed_cert() -> Result<(), RcgenError> {
-    let params = CertificateParams::new(vec!["localhost".into()]);
-    let cert = rcgen::Certificate::from_params(params)?;
-
-    let cert_pem = Pem {
-        tag: "CERTIFICATE".to_string(),
-        contents: cert.serialize_pem()?.into_bytes(),
-    };
-    let key_pem = Pem {
-        tag: "PRIVATE KEY".to_string(),
-        contents: cert.serialize_private_key_pem().into_bytes(),
-    };
-
-    std::fs::write("cert.pem", encode(&cert_pem))?;
-    std::fs::write("key.pem", encode(&key_pem))?;
-
-    Ok(())
+impl Default for Mempool {
+    fn default() -> Self {
+        Self::new()
+    }
 }
+
 
 // let current_exe_path = match env::current_exe() {
 //     Ok(path) => path,
