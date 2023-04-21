@@ -223,20 +223,21 @@ impl NodeService {
 }
 
 pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
-    let addr = format!("https://{}", remote_addr).parse().unwrap();
+    let addr = format!("https://{}", remote_addr);
+    let addr_uri = addr.parse().unwrap();
     let (cert_pem, key_pem) = generate_self_signed_cert_and_key()?;
     let cert = Certificate::from_pem(cert_pem.clone());
     let tls_config = ClientTlsConfig::new()
-        .domain_name(remote_addr)
         .ca_certificate(cert.clone())
         .identity(Identity::from_pem(&cert_pem, &key_pem));
-    let channel = Channel::builder(addr)
+    let channel = Channel::builder(addr_uri)
         .tls_config(tls_config)?
         .connect()
         .await?;
     let node_client = NodeClient::new(channel);
     Ok(node_client)
 }
+
 
 pub fn generate_self_signed_cert_and_key() -> Result<(String, String)> {
     let mut params = CertificateParams::new(vec!["localhost".to_string()]);
