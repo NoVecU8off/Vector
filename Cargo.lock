@@ -1553,6 +1553,7 @@ dependencies = [
  "hex",
  "log",
  "native-tls",
+ "openssl",
  "pem 2.0.1",
  "rand 0.8.5",
  "rcgen",
