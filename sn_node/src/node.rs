@@ -1,5 +1,8 @@
 use std::{collections::{HashMap}, sync::{Arc}, time::{Duration}, any::{Any}};
-use tonic::{transport::{Server, Channel}, Status, Request, Response};
+use tonic::{transport::{Server, Channel, ClientTlsConfig}, Status, Request, Response};
+use tonic::transport::ServerTlsConfig;
+use tonic::transport::Identity;
+use tonic::transport::Certificate;
 use hex::encode;
 use slog::{o, Drain, Logger, info, error};
 use tokio::sync::{Mutex, RwLock};
@@ -13,8 +16,7 @@ use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use std::path::PathBuf;
-
-pub const BLOCK_TIME: Duration = Duration::from_secs(5);
+use tokio::fs;
 
 pub struct Mempool {
     pub lock: RwLock<HashMap<String, Transaction>>,
@@ -29,7 +31,7 @@ impl Mempool {
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-        info!(logger, "Mempool created");
+        info!(logger, "\nMempool created");
         Mempool {
             lock: RwLock::new(HashMap::new()),
             logger,
@@ -40,7 +42,7 @@ impl Mempool {
         let mut lock = self.lock.write().await;
         let txx = lock.values().cloned().collect::<Vec<_>>();
         lock.clear();
-        info!(self.logger, "Mempool cleared, {} transactions removed", txx.len());
+        info!(self.logger, "\nMempool cleared, {} transactions removed", txx.len());
         txx
     }
 
@@ -62,7 +64,7 @@ impl Mempool {
         let mut lock = self.lock.write().await;
         let hash = hex::encode(hash_transaction(&tx));
         lock.insert(hash.clone(), tx);
-        info!(self.logger, "Transaction added to mempool: {}", hash);
+        info!(self.logger, "\nTransaction added to mempool: {}", hash);
         true
     }
 }
@@ -75,9 +77,24 @@ impl Default for Mempool {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
-    pub version: String,
-    pub server_listen_addr: String,
-    pub keypair: Option<Keypair>,
+    pub cfg_version: String,
+    pub cfg_addr: String,
+    pub cfg_keypair: Keypair,
+    pub cfg_pem_certificate: Vec<u8>,
+    pub cfg_pem_key: Vec<u8>,
+}
+
+impl ServerConfig {
+    pub async fn new() -> Self {
+        let (cfg_pem_certificate, cfg_pem_key) = read_server_certs_and_keys().await.unwrap();
+        ServerConfig {
+            cfg_version: "1".to_string(),
+            cfg_addr: "192.168.0.120:8080".to_string(),
+            cfg_keypair: Keypair::generate_keypair(),
+            cfg_pem_certificate,
+            cfg_pem_key,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -97,8 +114,8 @@ impl Node for NodeService {
     ) -> Result<Response<Version>, Status> {
         let version = request.into_inner();
         let version_clone = version.clone();
-        let listen_addr = version.msg_listen_address;
-        let c = make_node_client(&listen_addr).await.unwrap();
+        let addr = version.msg_listen_address;
+        let c = make_node_client(&addr).await.unwrap();
         self.add_peer(c, version_clone).await;
         let reply = self.get_version().await;
         Ok(Response::new(reply))
@@ -113,7 +130,7 @@ impl Node for NodeService {
         let tx_clone = tx.clone();
         let hash = hex::encode(hash_transaction(&tx));
         if self.mempool.add(tx).await {
-            info!(self.logger, "{}: received transaction: {}", self.server_config.server_listen_addr, hash);
+            info!(self.logger, "\n{}: received transaction: {}", self.server_config.cfg_addr, hash);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
                 if let Err(_err) = self_clone.broadcast(Box::new(tx_clone)).await {
@@ -132,7 +149,7 @@ impl NodeService {
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-        info!(logger, "NodeService {} created", cfg.server_listen_addr);
+        info!(logger, "\nNodeService {} created", cfg.cfg_addr);
         NodeService {
             server_config: cfg,
             logger,
@@ -144,41 +161,42 @@ impl NodeService {
 
     pub async fn start(&mut self, bootstrap_nodes: Vec<String>) -> Result<()> {
         let node_service = self.clone();
-        let addr = self.server_config.server_listen_addr.parse().unwrap();
-        info!(self.logger, "NodeServer {} starting listening", self.server_config.server_listen_addr);
+        let addr = format!("{}", self.server_config.cfg_addr)
+            .parse()
+            .unwrap();
+        info!(self.logger, "\nNodeServer {} starting listening", self.server_config.cfg_addr);
+        let server_tls_config = ServerTlsConfig::new()
+            .identity(Identity::from_pem(&self.server_config.cfg_pem_certificate, &self.server_config.cfg_pem_key))
+            .client_ca_root(Certificate::from_pem(&self.server_config.cfg_pem_certificate));
         Server::builder()
+            .tls_config(server_tls_config)
+            .unwrap()
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await?;
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
-            info!(self.logger, "{}: bootstrapping network with nodes: {:?}", self.server_config.server_listen_addr, bootstrap_nodes);
+            info!(self.logger, "\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, bootstrap_nodes);
             tokio::spawn(async move {
                 if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
                     error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
                 }
             });
         }
-        if self.server_config.keypair.is_some() {
-            let node_clone = self.clone();
-            tokio::spawn(async move {
-                loop {
-                    node_clone.validator_tick().await;
-                }
-            });
-        }
+        let node_clone = self.clone();
+        tokio::spawn(async move {
+            loop {
+                node_clone.validator_tick().await;
+            }
+        });
         Ok(())
     }
     
     pub async fn validator_tick(&self) {
-        if let Some(keypair) = self.server_config.keypair.as_ref() {
-            let public_key_hex = hex::encode(keypair.public.as_bytes());
-            let txx = self.mempool.clear().await;
-            info!(self.logger, "{}: new block created by {} with {} transactions", self.server_config.server_listen_addr, public_key_hex, txx.len());
-            tokio::time::sleep(BLOCK_TIME).await;
-        } else {
-            error!(self.logger, "{}: no keypair provided, validator loop cannot start", self.server_config.server_listen_addr);
-        }
+        let public_key_hex = hex::encode(&self.server_config.cfg_keypair.public.as_bytes());
+        let txx = self.mempool.clear().await;
+        info!(self.logger, "\n{}: new block created by {} with {} transactions", self.server_config.cfg_addr, public_key_hex, txx.len());
+        tokio::time::sleep(Duration::from_secs(10)).await;
     }
     
     pub async fn broadcast(&self, msg: Box<dyn Any + Send + Sync>) -> Result<()> {
@@ -190,12 +208,12 @@ impl NodeService {
                 let mut req = Request::new(tx.clone());
                 // req.metadata_mut().insert_bin("peer", MetadataValue::from_bytes(addr.as_bytes()));
                 req.metadata_mut().insert("peer", addr.parse().unwrap());
-                if addr != &self.server_config.server_listen_addr {
+                if addr != &self.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
                         error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx)), addr, err);
                         return Err(err.into());
                     } else {
-                        info!(self.logger, "{}: broadcasted transaction \n {} \nto \n {}", self.server_config.server_listen_addr, hex::encode(hash_transaction(tx)), addr);
+                        info!(self.logger, "\n{}: broadcasted transaction \n {} \nto \n {}", self.server_config.cfg_addr, hex::encode(hash_transaction(tx)), addr);
                     }
                 }
             }
@@ -207,13 +225,13 @@ impl NodeService {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
         peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone()));
-        info!(self.logger, "{}: new peer added: {}", self.server_config.server_listen_addr, remote_addr);
+        info!(self.logger, "\n{}: new peer added: {}", self.server_config.cfg_addr, remote_addr);
     }
     
     pub async fn delete_peer(&self, addr: &str) {
         let mut peers = self.peer_lock.write().await;
         if peers.remove(addr).is_some() {
-            info!(self.logger, "{}: peer removed: {}", self.server_config.server_listen_addr, addr);
+            info!(self.logger, "\n{}: peer removed: {}", self.server_config.cfg_addr, addr);
         }
     }
 
@@ -229,13 +247,13 @@ impl NodeService {
             }
             let (c, v) = self.dial_remote_node(&addr).await?;
             self.add_peer(c, v).await;
-            info!(self.logger, "{}: bootstrapped node: {}", self.server_config.server_listen_addr, addr);
+            info!(self.logger, "\n{}: bootstrapped node: {}", self.server_config.cfg_addr, addr);
         }
         Ok(())
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("http://{}", addr))
+        let mut c = NodeClient::connect(format!("https://{}", addr))
             .await
             .context("Failed to connect to remote node")?;
         let v = c
@@ -243,7 +261,7 @@ impl NodeService {
             .await
             .context("Failed to perform handshake with remote node")?
             .into_inner();
-        info!(self.logger, "{}: dialed remote node: {}", self.server_config.server_listen_addr, addr);
+        info!(self.logger, "\n{}: dialed remote node: {}", self.server_config.cfg_addr, addr);
         Ok((c, v))
     }
 
@@ -251,13 +269,13 @@ impl NodeService {
         Version {
             msg_version: "test-1".to_string(),
             msg_height: 0,
-            msg_listen_address: self.server_config.server_listen_addr.clone(),
+            msg_listen_address: self.server_config.cfg_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
         }
     }
 
     pub async fn can_connect_with(&self, addr: &str) -> bool {
-        if self.server_config.server_listen_addr == addr {
+        if self.server_config.cfg_addr == addr {
             return false;
         }
         let connected_peers = self.get_peer_list().await;
@@ -270,8 +288,20 @@ impl NodeService {
     }
 }
 
-pub async fn make_node_client(remote_addr: &str) -> Result<NodeClient<Channel>> {
-    let node_client = NodeClient::connect(format!("http://{}", remote_addr)).await?;
+pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>> {
+    let (cli_pem_certificate, cli_pem_key) = read_client_certs_and_keys().await.unwrap();
+    let uri = format!("https://{}", addr).parse().unwrap();
+    let client_tls_config = ClientTlsConfig::new()
+        .domain_name("testserver.com")
+        .ca_certificate(Certificate::from_pem(cli_pem_certificate.clone()))
+        .identity(Identity::from_pem(cli_pem_certificate, cli_pem_key));
+    let channel = Channel::builder(uri)
+        .tls_config(client_tls_config)
+        .unwrap()
+        .connect()
+        .await
+        .unwrap();
+    let node_client = NodeClient::new(channel);
     Ok(node_client)
 }
 
@@ -296,45 +326,64 @@ async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error
     Ok(config)
 }
 
-// fn load_certs_and_key() -> Result<(Vec<Certificate>, PrivateKey), Box<dyn std::error::Error>> {
-//     if !std::path::Path::new("cert.pem").exists() || !std::path::Path::new("key.pem").exists() {
-//         generate_self_signed_cert()?;
-//     }
+pub async fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>), anyhow::Error> {
+    let cert_file_path = "./certs/end.fullchain";
+    let key_file_path = "./certs/end.key";
+    let cert_pem = fs::read(cert_file_path).await?;
+    let key_pem = fs::read(key_file_path).await?;
+    Ok((cert_pem, key_pem))
+}
 
-//     let cert = std::fs::read("cert.pem")?;
-//     let key = std::fs::read("key.pem")?;
+pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>), anyhow::Error> {
+    let cert_file_path = "./certs/ca.cert";
+    let key_file_path = "./certs/ca.key";
+    let cert_pem = fs::read(cert_file_path).await?;
+    let key_pem = fs::read(key_file_path).await?;
+    Ok((cert_pem, key_pem))
+}
 
-//     let cert = rustls::internal::pemfile::certs(&mut std::io::BufReader::new(&cert[..]))?;
-//     let key = rustls::internal::pemfile::rsa_private_keys(&mut std::io::BufReader::new(&key[..]))?;
+// use openssl::rsa::Rsa;
+// use openssl::x509::{X509, X509NameBuilder, X509ReqBuilder};
+// use openssl::pkey::PKey;
+// use openssl::asn1::Asn1Time;
+// use openssl::hash::MessageDigest;
+// use openssl::nid::Nid;
 
-//     Ok((cert, key))
+// pub async fn generate_self_signed_cert_and_key() -> Result<(Vec<u8>, Vec<u8>)> {
+//     // Generate a private key.
+//     let rsa = Rsa::generate(4096)?;
+//     let pkey = PKey::from_rsa(rsa)?;
+
+//     // Create a X509 name for the certificate.
+//     let mut x509_name = X509NameBuilder::new()?;
+//     x509_name.append_entry_by_nid(Nid::COMMONNAME, "localhost")?;
+//     let x509_name = x509_name.build();
+
+//     // Create a certificate request.
+//     let mut req_builder = X509ReqBuilder::new()?;
+//     req_builder.set_version(0)?;
+//     req_builder.set_subject_name(&x509_name)?;
+//     req_builder.set_pubkey(&pkey)?;
+//     req_builder.sign(&pkey, MessageDigest::sha256())?;
+//     let req = req_builder.build();
+
+//     // Create a self-signed certificate from the certificate request.
+//     let mut x509_builder = X509::builder()?;
+//     x509_builder.set_version(2)?;
+//     x509_builder.set_subject_name(&x509_name)?;
+//     x509_builder.set_issuer_name(&x509_name)?;
+//     x509_builder.set_pubkey(&req.public_key().unwrap())?;
+//     let not_before = Asn1Time::days_from_now(0)?;
+//     let not_after = Asn1Time::days_from_now(365)?;
+//     x509_builder.set_not_before(&not_before)?;
+//     x509_builder.set_not_after(&not_after)?;
+//     x509_builder.set_serial_number(&openssl::bn::BigNum::from_u32(1)?.to_asn1_integer().unwrap())?;
+//     x509_builder.sign(&pkey, MessageDigest::sha256())?;
+//     let cert = x509_builder.build();
+
+//     // Convert the certificate and private key to PEM format.
+//     let cert_pem = cert.to_pem()?;
+//     let pkey_pem = pkey.private_key_to_pem_pkcs8()?;
+
+//     Ok((cert_pem, pkey_pem))
 // }
-
-// fn generate_self_signed_cert() -> Result<()> {
-//     let params = CertificateParams::new(vec!["localhost".into()]);
-//     let cert = rcgen::Certificate::from_params(params)?;
-
-//     let cert_pem = Pem {
-//         tag: "CERTIFICATE".to_string(),
-//         contents: cert.serialize_pem()?.into_bytes(),
-//     };
-//     let key_pem = Pem {
-//         tag: "PRIVATE KEY".to_string(),
-//         contents: cert.serialize_private_key_pem().into_bytes(),
-//     };
-
-//     std::fs::write("cert.pem", encode(&cert_pem))?;
-//     std::fs::write("key.pem", encode(&key_pem))?;
-
-//     Ok(())
-// }
-
-// let current_exe_path = match env::current_exe() {
-//     Ok(path) => path,
-//     Err(e) => {
-//         println!("Error getting current executable path: {:?}", e);
-//         return;
-//     }
-// };
-
-// let config_path = current_exe_path.parent().unwrap().join(CONFIG_FILE);
