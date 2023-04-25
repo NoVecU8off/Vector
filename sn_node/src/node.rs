@@ -85,7 +85,7 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub async fn new() -> Self {
+    pub async fn default() -> Self {
         let (cfg_pem_certificate, cfg_pem_key) = read_server_certs_and_keys().await.unwrap();
         ServerConfig {
             cfg_version: "1".to_string(),
@@ -93,6 +93,22 @@ impl ServerConfig {
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
+        }
+    }
+
+    pub async fn new(
+        version: String,
+        address: String,
+        keypair: Keypair,
+        certificate_pem: Vec<u8>,
+        key_pem: Vec<u8>,
+    ) -> Self {
+        ServerConfig {
+            cfg_version: version,
+            cfg_addr: address,
+            cfg_keypair: keypair,
+            cfg_pem_certificate: certificate_pem,
+            cfg_pem_key: key_pem,
         }
     }
 }
@@ -341,49 +357,3 @@ pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>), anyhow::
     let key_pem = fs::read(key_file_path).await?;
     Ok((cert_pem, key_pem))
 }
-
-// use openssl::rsa::Rsa;
-// use openssl::x509::{X509, X509NameBuilder, X509ReqBuilder};
-// use openssl::pkey::PKey;
-// use openssl::asn1::Asn1Time;
-// use openssl::hash::MessageDigest;
-// use openssl::nid::Nid;
-
-// pub async fn generate_self_signed_cert_and_key() -> Result<(Vec<u8>, Vec<u8>)> {
-//     // Generate a private key.
-//     let rsa = Rsa::generate(4096)?;
-//     let pkey = PKey::from_rsa(rsa)?;
-
-//     // Create a X509 name for the certificate.
-//     let mut x509_name = X509NameBuilder::new()?;
-//     x509_name.append_entry_by_nid(Nid::COMMONNAME, "localhost")?;
-//     let x509_name = x509_name.build();
-
-//     // Create a certificate request.
-//     let mut req_builder = X509ReqBuilder::new()?;
-//     req_builder.set_version(0)?;
-//     req_builder.set_subject_name(&x509_name)?;
-//     req_builder.set_pubkey(&pkey)?;
-//     req_builder.sign(&pkey, MessageDigest::sha256())?;
-//     let req = req_builder.build();
-
-//     // Create a self-signed certificate from the certificate request.
-//     let mut x509_builder = X509::builder()?;
-//     x509_builder.set_version(2)?;
-//     x509_builder.set_subject_name(&x509_name)?;
-//     x509_builder.set_issuer_name(&x509_name)?;
-//     x509_builder.set_pubkey(&req.public_key().unwrap())?;
-//     let not_before = Asn1Time::days_from_now(0)?;
-//     let not_after = Asn1Time::days_from_now(365)?;
-//     x509_builder.set_not_before(&not_before)?;
-//     x509_builder.set_not_after(&not_after)?;
-//     x509_builder.set_serial_number(&openssl::bn::BigNum::from_u32(1)?.to_asn1_integer().unwrap())?;
-//     x509_builder.sign(&pkey, MessageDigest::sha256())?;
-//     let cert = x509_builder.build();
-
-//     // Convert the certificate and private key to PEM format.
-//     let cert_pem = cert.to_pem()?;
-//     let pkey_pem = pkey.private_key_to_pem_pkcs8()?;
-
-//     Ok((cert_pem, pkey_pem))
-// }

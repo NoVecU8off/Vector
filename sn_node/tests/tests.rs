@@ -5,7 +5,7 @@ use tokio::time::{sleep, Duration};
 #[test]
 fn test_make_node_client() {
     // Replace this with a valid address of a running NodeService instance.
-    let addr = "192.168.0.120:12345";
+    let addr = "192.168.0.120:8080";
 
     let rt = Runtime::new().unwrap();
     let result = rt.block_on(async { make_node_client(addr).await });
@@ -26,7 +26,7 @@ fn test_make_node_client() {
 fn test_start_node_and_make_node_client() {
     // Create a new ServerConfig and NodeService.
     let rt = Runtime::new().unwrap();
-    let server_config = rt.block_on(async { ServerConfig::new().await });
+    let server_config = rt.block_on(async { ServerConfig::default().await });
     let mut node_service = NodeService::new(server_config);
     let addr = &node_service.clone().server_config.cfg_addr;
 
