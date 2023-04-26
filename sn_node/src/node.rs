@@ -96,16 +96,27 @@ impl ServerConfig {
         }
     }
 
+    pub async fn default_b() -> Self {
+        let (cfg_pem_certificate, cfg_pem_key) = read_server_certs_and_keys().await.unwrap();
+        ServerConfig {
+            cfg_version: "1".to_string(),
+            cfg_addr: "192.168.0.120:8000".to_string(),
+            cfg_keypair: Keypair::generate_keypair(),
+            cfg_pem_certificate,
+            cfg_pem_key,
+        }
+    }
+
     pub async fn new(
-        version: String,
-        address: String,
+        version: &str,
+        address: &str,
         keypair: Keypair,
         certificate_pem: Vec<u8>,
         key_pem: Vec<u8>,
     ) -> Self {
         ServerConfig {
-            cfg_version: version,
-            cfg_addr: address,
+            cfg_version: version.to_string(),
+            cfg_addr: address.to_string(),
             cfg_keypair: keypair,
             cfg_pem_certificate: certificate_pem,
             cfg_pem_key: key_pem,
@@ -128,13 +139,26 @@ impl Node for NodeService {
         &self,
         request: Request<Version>,
     ) -> Result<Response<Version>, Status> {
+        info!(self.logger, "\nStarting handshaking");
         let version = request.into_inner();
         let version_clone = version.clone();
         let addr = version.msg_listen_address;
-        let c = make_node_client(&addr).await.unwrap();
-        self.add_peer(c, version_clone).await;
-        let reply = self.get_version().await;
-        Ok(Response::new(reply))
+        info!(self.logger, "\nRecieved version, address: {}", addr);
+        match make_node_client(&addr).await {
+            Ok(c) => {
+                info!(self.logger, "Created node client successfully");
+                self.add_peer(c, version_clone).await;
+
+                let reply = self.get_version().await;
+
+                info!(self.logger, "Returning version: {:?}", reply);
+                Ok(Response::new(reply))
+            }
+            Err(e) => {
+                error!(self.logger, "Failed to create node client: {:?}", e);
+                Err(Status::internal("Failed to create node client"))
+            }
+        }
     }
 
     async fn handle_transaction(
@@ -187,9 +211,14 @@ impl NodeService {
         Server::builder()
             .tls_config(server_tls_config)
             .unwrap()
+            .accept_http1(true)
             .add_service(NodeServer::new(node_service))
             .serve(addr)
-            .await?;
+            .await
+            .map_err(|err| {
+                error!(self.logger, "Error listening for incoming connections: {:?}", err);
+                err
+            })?;
         if !bootstrap_nodes.is_empty() {
             let node_clone = self.clone();
             info!(self.logger, "\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, bootstrap_nodes);
@@ -222,7 +251,6 @@ impl NodeService {
                 let peer_client_clone = Arc::clone(peer_client);
                 let mut peer_client_lock = peer_client_clone.lock().await;
                 let mut req = Request::new(tx.clone());
-                // req.metadata_mut().insert_bin("peer", MetadataValue::from_bytes(addr.as_bytes()));
                 req.metadata_mut().insert("peer", addr.parse().unwrap());
                 if addr != &self.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
@@ -269,13 +297,21 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
-        let mut c = NodeClient::connect(format!("https://{}", addr))
+        let mut c = make_node_client(addr)
             .await
-            .context("Failed to connect to remote node")?;
+            .map_err(|err| {
+                error!(self.logger, "Failed to create node client: {:?}", err);
+                err
+            })
+            .context("Failed to create node for dial")?;
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
-            .context("Failed to perform handshake with remote node")?
+            .map_err(|err| {
+                error!(self.logger, "Failed to perform handshake with remote node: {:?}", err);
+                err
+            })
+            .context("Handshake failure")?
             .into_inner();
         info!(self.logger, "\n{}: dialed remote node: {}", self.server_config.cfg_addr, addr);
         Ok((c, v))
@@ -283,7 +319,7 @@ impl NodeService {
 
     pub async fn get_version(&self) -> Version {
         Version {
-            msg_version: "test-1".to_string(),
+            msg_version: self.server_config.cfg_version.clone(),
             msg_height: 0,
             msg_listen_address: self.server_config.cfg_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
