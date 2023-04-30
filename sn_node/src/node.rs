@@ -16,7 +16,7 @@ use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use std::path::PathBuf;
-use tokio::fs;
+use std::fs;
 
 pub struct Mempool {
     pub lock: RwLock<HashMap<String, Transaction>>,
@@ -82,28 +82,31 @@ pub struct ServerConfig {
     pub cfg_keypair: Keypair,
     pub cfg_pem_certificate: Vec<u8>,
     pub cfg_pem_key: Vec<u8>,
+    pub cfg_root_crt: Vec<u8>,
 }
 
 impl ServerConfig {
     pub async fn default() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key) = read_server_certs_and_keys().await.unwrap();
+        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
             cfg_version: "1".to_string(),
-            cfg_addr: "192.168.0.120:8080".to_string(),
+            cfg_addr: "127.0.0.1:8000".to_string(),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
+            cfg_root_crt,
         }
     }
 
     pub async fn default_b() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key) = read_server_certs_and_keys().await.unwrap();
+        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
             cfg_version: "1".to_string(),
-            cfg_addr: "192.168.0.120:8000".to_string(),
+            cfg_addr: "127.0.0.1:8080".to_string(),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
+            cfg_root_crt,
         }
     }
 
@@ -113,6 +116,7 @@ impl ServerConfig {
         keypair: Keypair,
         certificate_pem: Vec<u8>,
         key_pem: Vec<u8>,
+        root_pem: Vec<u8>,
     ) -> Self {
         ServerConfig {
             cfg_version: version.to_string(),
@@ -120,6 +124,7 @@ impl ServerConfig {
             cfg_keypair: keypair,
             cfg_pem_certificate: certificate_pem,
             cfg_pem_key: key_pem,
+            cfg_root_crt: root_pem,
         }
     }
 }
@@ -207,7 +212,8 @@ impl NodeService {
         info!(self.logger, "\nNodeServer {} starting listening", self.server_config.cfg_addr);
         let server_tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&self.server_config.cfg_pem_certificate, &self.server_config.cfg_pem_key))
-            .client_ca_root(Certificate::from_pem(&self.server_config.cfg_pem_certificate));
+            .client_ca_root(Certificate::from_pem(&self.server_config.cfg_root_crt))
+            .client_auth_optional(true);
         Server::builder()
             .tls_config(server_tls_config)
             .unwrap()
@@ -311,7 +317,7 @@ impl NodeService {
                 error!(self.logger, "Failed to perform handshake with remote node: {:?}", err);
                 err
             })
-            .context("Handshake failure")?
+            .unwrap()
             .into_inner();
         info!(self.logger, "\n{}: dialed remote node: {}", self.server_config.cfg_addr, addr);
         Ok((c, v))
@@ -341,11 +347,11 @@ impl NodeService {
 }
 
 pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>> {
-    let (cli_pem_certificate, cli_pem_key) = read_client_certs_and_keys().await.unwrap();
+    let (cli_pem_certificate, cli_pem_key, cli_root) = read_client_certs_and_keys().await.unwrap();
     let uri = format!("https://{}", addr).parse().unwrap();
     let client_tls_config = ClientTlsConfig::new()
-        .domain_name("testserver.com")
-        .ca_certificate(Certificate::from_pem(cli_pem_certificate.clone()))
+        .domain_name("cryptotron.test.com")
+        .ca_certificate(Certificate::from_pem(cli_root))
         .identity(Identity::from_pem(cli_pem_certificate, cli_pem_key));
     let channel = Channel::builder(uri)
         .tls_config(client_tls_config)
@@ -378,18 +384,22 @@ async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error
     Ok(config)
 }
 
-pub async fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>), anyhow::Error> {
-    let cert_file_path = "./certs/end.fullchain";
-    let key_file_path = "./certs/end.key";
-    let cert_pem = fs::read(cert_file_path).await?;
-    let key_pem = fs::read(key_file_path).await?;
-    Ok((cert_pem, key_pem))
+pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
+    let cert_file_path = "./certs/server.crt";
+    let key_file_path = "./certs/server.key";
+    let root_file_path = "./certs/root.crt";
+    let cert_pem = fs::read(cert_file_path)?;
+    let key_pem = fs::read(key_file_path)?;
+    let root_pem = fs::read(root_file_path)?;
+    Ok((cert_pem, key_pem, root_pem))
 }
 
-pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>), anyhow::Error> {
-    let cert_file_path = "./certs/ca.cert";
-    let key_file_path = "./certs/ca.key";
-    let cert_pem = fs::read(cert_file_path).await?;
-    let key_pem = fs::read(key_file_path).await?;
-    Ok((cert_pem, key_pem))
+pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
+    let cert_file_path = "./certs/client.crt";
+    let key_file_path = "./certs/client.key";
+    let root_file_path = "./certs/root.crt";
+    let cert_pem = fs::read(cert_file_path)?;
+    let key_pem = fs::read(key_file_path)?;
+    let root_pem = fs::read(root_file_path)?;
+    Ok((cert_pem, key_pem, root_pem))
 }
