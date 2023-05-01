@@ -4,6 +4,7 @@ use tokio::time::{sleep, Duration};
 use sn_cryptography::cryptography::Keypair;
 use sn_proto::messages::{Transaction, TransactionInput, TransactionOutput};
 use tonic::codegen::Arc;
+use sn_server::server::*;
 
 pub fn create_random_transaction() -> Transaction {
     let keypair = Keypair::generate_keypair();

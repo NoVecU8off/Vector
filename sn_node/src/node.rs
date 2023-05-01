@@ -3,131 +3,15 @@ use tonic::{transport::{Server, Channel, ClientTlsConfig}, Status, Request, Resp
 use tonic::transport::ServerTlsConfig;
 use tonic::transport::Identity;
 use tonic::transport::Certificate;
-use hex::encode;
 use slog::{o, Drain, Logger, info, error};
 use tokio::sync::{Mutex, RwLock};
-use tokio::fs::{File};
 use sn_proto::messages::*;
 use sn_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use sn_transaction::transaction::*;
-use sn_cryptography::cryptography::Keypair;
 use anyhow::{Context, Result};
-use serde::{Serialize, Deserialize};
-use bincode::{serialize, deserialize};
-use tokio::io::{AsyncWriteExt, AsyncReadExt};
-use std::path::PathBuf;
-use std::fs;
-
-pub struct Mempool {
-    pub lock: RwLock<HashMap<String, Transaction>>,
-    pub logger: Logger,
-}
-
-impl Mempool {
-    pub fn new() -> Self {
-        let logger = {
-            let decorator = slog_term::TermDecorator::new().build();
-            let drain = slog_term::FullFormat::new(decorator).build().fuse();
-            let drain = slog_async::Async::new(drain).build().fuse();
-            Logger::root(drain, o!())
-        };
-        info!(logger, "\nMempool created");
-        Mempool {
-            lock: RwLock::new(HashMap::new()),
-            logger,
-        }
-    }
-
-    pub async fn clear(&self) -> Vec<Transaction> {
-        let mut lock = self.lock.write().await;
-        let txx = lock.values().cloned().collect::<Vec<_>>();
-        lock.clear();
-        info!(self.logger, "\nMempool cleared, {} transactions removed", txx.len());
-        txx
-    }
-
-    pub async fn len(&self) -> usize {
-        let lock = self.lock.read().await;
-        lock.len()
-    }
-
-    pub async fn has(&self, tx: &Transaction) -> bool {
-        let lock = self.lock.read().await;
-        let hex_hash = encode(hash_transaction(tx).await);
-        lock.contains_key(&hex_hash)
-    }
-
-    pub async fn add(&self, tx: Transaction) -> bool {
-        if self.has(&tx).await {
-            return false;
-        }
-        let mut lock = self.lock.write().await;
-        let hash = hex::encode(hash_transaction(&tx).await);
-        lock.insert(hash.clone(), tx);
-        info!(self.logger, "\nTransaction added to mempool: {}", hash);
-        true
-    }
-}
-
-impl Default for Mempool {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServerConfig {
-    pub cfg_version: String,
-    pub cfg_addr: String,
-    pub cfg_keypair: Keypair,
-    pub cfg_pem_certificate: Vec<u8>,
-    pub cfg_pem_key: Vec<u8>,
-    pub cfg_root_crt: Vec<u8>,
-}
-
-impl ServerConfig {
-    pub async fn default() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
-        ServerConfig {
-            cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8000".to_string(),
-            cfg_keypair: Keypair::generate_keypair(),
-            cfg_pem_certificate,
-            cfg_pem_key,
-            cfg_root_crt,
-        }
-    }
-
-    pub async fn default_b() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
-        ServerConfig {
-            cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8080".to_string(),
-            cfg_keypair: Keypair::generate_keypair(),
-            cfg_pem_certificate,
-            cfg_pem_key,
-            cfg_root_crt,
-        }
-    }
-
-    pub async fn new(
-        version: &str,
-        address: &str,
-        keypair: Keypair,
-        certificate_pem: Vec<u8>,
-        key_pem: Vec<u8>,
-        root_pem: Vec<u8>,
-    ) -> Self {
-        ServerConfig {
-            cfg_version: version.to_string(),
-            cfg_addr: address.to_string(),
-            cfg_keypair: keypair,
-            cfg_pem_certificate: certificate_pem,
-            cfg_pem_key: key_pem,
-            cfg_root_crt: root_pem,
-        }
-    }
-}
+use std::net::SocketAddr;
+use sn_mempool::mempool::*;
+use sn_server::server::*;
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -153,9 +37,7 @@ impl Node for NodeService {
             Ok(c) => {
                 info!(self.logger, "Created node client successfully");
                 self.add_peer(c, version_clone).await;
-
                 let reply = self.get_version().await;
-
                 info!(self.logger, "Returning version: {:?}", reply);
                 Ok(Response::new(reply))
             }
@@ -210,11 +92,20 @@ impl NodeService {
             .parse()
             .unwrap();
         info!(self.logger, "\nNodeServer {} starting listening", self.server_config.cfg_addr);
+        self.setup_server(node_service, addr).await?;
+        if !bootstrap_nodes.is_empty() {
+            self.bootstrap(bootstrap_nodes).await?;
+        }
+        self.start_validator_tick().await;
+        Ok(())
+    }
+    
+    pub async fn setup_server(&self, node_service: NodeService, addr: SocketAddr) -> Result<()> {
         let server_tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&self.server_config.cfg_pem_certificate, &self.server_config.cfg_pem_key))
             .client_ca_root(Certificate::from_pem(&self.server_config.cfg_root_crt))
             .client_auth_optional(true);
-        Server::builder()
+        Ok(Server::builder()
             .tls_config(server_tls_config)
             .unwrap()
             .accept_http1(true)
@@ -224,23 +115,27 @@ impl NodeService {
             .map_err(|err| {
                 error!(self.logger, "Error listening for incoming connections: {:?}", err);
                 err
-            })?;
-        if !bootstrap_nodes.is_empty() {
-            let node_clone = self.clone();
-            info!(self.logger, "\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, bootstrap_nodes);
-            tokio::spawn(async move {
-                if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
-                    error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
-                }
-            });
-        }
+            })?)
+    }
+    
+    pub async fn bootstrap(&self, bootstrap_nodes: Vec<String>) -> Result<()> {
+        let node_clone = self.clone();
+        info!(self.logger, "\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, bootstrap_nodes);
+        tokio::spawn(async move {
+            if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
+                error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
+            }
+        });
+        Ok(())
+    }
+    
+    pub async fn start_validator_tick(&self) {
         let node_clone = self.clone();
         tokio::spawn(async move {
             loop {
                 node_clone.validator_tick().await;
             }
         });
-        Ok(())
     }
     
     pub async fn validator_tick(&self) {
@@ -365,41 +260,4 @@ pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>> {
 
 pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
     shutdown_tx.send(()).map_err(|_| "Failed to send shutdown signal")
-}
-
-#[allow(dead_code)]
-async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), anyhow::Error> {
-    let serialized_data = serialize(config)?;
-    let mut file = File::create(config_path).await?;
-    file.write_all(&serialized_data).await?;
-    Ok(())
-}
-
-#[allow(dead_code)]
-async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error> {
-    let mut file = File::open(config_path).await?;
-    let mut serialized_data = Vec::new();
-    file.read_to_end(&mut serialized_data).await?;
-    let config: ServerConfig = deserialize(&serialized_data)?;
-    Ok(config)
-}
-
-pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
-    let cert_file_path = "./certs/server.crt";
-    let key_file_path = "./certs/server.key";
-    let root_file_path = "./certs/root.crt";
-    let cert_pem = fs::read(cert_file_path)?;
-    let key_pem = fs::read(key_file_path)?;
-    let root_pem = fs::read(root_file_path)?;
-    Ok((cert_pem, key_pem, root_pem))
-}
-
-pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
-    let cert_file_path = "./certs/client.crt";
-    let key_file_path = "./certs/client.key";
-    let root_file_path = "./certs/root.crt";
-    let cert_pem = fs::read(cert_file_path)?;
-    let key_pem = fs::read(key_file_path)?;
-    let root_pem = fs::read(root_file_path)?;
-    Ok((cert_pem, key_pem, root_pem))
 }
