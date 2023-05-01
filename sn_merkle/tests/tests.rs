@@ -41,33 +41,37 @@ fn sample_transactions() -> Vec<Transaction> {
     ]
 }
 
-#[test]
-fn test_new() {
+#[tokio::test]
+async fn test_new() {
     let transactions = sample_transactions();
-    let tree = MerkleTree::new(&transactions);
+    let tree = MerkleTree::new(&transactions).await.unwrap();
 
     assert_eq!(tree.get_leaves().len(), transactions.len());
     assert!(!tree.get_root().is_empty());
 }
 
-#[test]
-fn test_verify() {
+#[tokio::test]
+async fn test_verify() {
     let transactions = sample_transactions();
-    let tree = MerkleTree::new(&transactions);
-
+    let tree = MerkleTree::new(&transactions).await.unwrap();
     for (_index, transaction) in transactions.iter().enumerate() {
-        let (leaf_index, proof) = tree.get_proof(transaction).unwrap();
-        assert!(tree.verify(transaction, leaf_index, &proof));
+        if let Some((leaf_index, proof)) = tree.get_proof(transaction).await.unwrap() {
+            assert!(tree.verify(transaction, leaf_index, &proof).await.unwrap());
+        } else {
+            panic!("Proof not found for transaction");
+        }
     }
 }
 
-#[test]
-fn test_add_leaf() {
+
+
+#[tokio::test]
+async fn test_add_leaf() {
     let transactions = sample_transactions();
     let mut tree = if transactions.len() > 1 {
-        MerkleTree::new(&transactions[0..1])
+        MerkleTree::new(&transactions[0..1]).await.unwrap()
     } else {
-        MerkleTree::new(&[])
+        MerkleTree::new(&[]).await.unwrap()
     };
 
     let original_root = tree.get_root().to_vec();
@@ -92,20 +96,20 @@ fn test_add_leaf() {
         ],
     };
 
-    tree.add_leaf(new_transaction.clone());
+    tree.add_leaf(new_transaction.clone()).await;
 
     assert_ne!(tree.get_root(), &original_root[..]);
     assert_eq!(tree.get_leaves().len(), original_leaves_len + 1);
 }
 
-#[test]
-fn test_remove_leaf() {
+#[tokio::test]
+async fn test_remove_leaf() {
     let transactions = sample_transactions();
-    let mut tree = MerkleTree::new(&transactions);
+    let mut tree = MerkleTree::new(&transactions).await.unwrap();
 
     let original_root = tree.get_root().to_vec();
 
-    assert!(tree.remove_leaf(&transactions[0]));
+    assert!(tree.remove_leaf(&transactions[0]).await.unwrap());
 
     assert_ne!(tree.get_root(), &original_root[..]);
     assert_eq!(tree.get_leaves().len(), transactions.len() - 1);

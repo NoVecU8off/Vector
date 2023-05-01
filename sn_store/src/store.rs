@@ -5,6 +5,8 @@ use sn_proto::messages::{Block, Transaction};
 use sn_transaction::{transaction::hash_transaction};
 use sn_block::{block::hash_header_by_block};
 use std::sync::Arc;
+use anyhow::{Error, Result};
+use async_trait::async_trait;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct UTXO {
@@ -14,9 +16,10 @@ pub struct UTXO {
     pub spent: bool,
 }
 
-pub trait UTXOStorer {
-    fn put(&mut self, utxo: UTXO) -> Result<(), String>;
-    fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, String>;
+#[async_trait]
+pub trait UTXOStorer: Send + Sync {
+    async fn put(&mut self, utxo: UTXO) -> Result<(), Error>;
+    async fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, Error>;
 }
 
 pub struct MemoryUTXOStore {
@@ -31,6 +34,7 @@ impl MemoryUTXOStore {
     }
 }
 
+#[async_trait]
 impl Clone for MemoryUTXOStore {
     fn clone(&self) -> Self {
         MemoryUTXOStore {
@@ -39,30 +43,32 @@ impl Clone for MemoryUTXOStore {
     }
 }
 
+#[async_trait]
 impl Default for MemoryUTXOStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[async_trait]
 impl UTXOStorer for MemoryUTXOStore {
-    fn put(&mut self, utxo: UTXO) -> Result<(), String> {
+    async fn put(&mut self, utxo: UTXO) -> Result<()> {
         let key = format!("{}_{}", utxo.hash, utxo.out_index);
         let mut data = self.data.write().unwrap();
         data.insert(key, utxo);
         Ok(())
     }
-    fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, String> {
+    async fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>> {
         let key = format!("{}_{}", hash, out_index);
-        // println!("Debug: get key: {}", key); // Add debug print
         let data = self.data.read().unwrap();
         Ok(data.get(&key).cloned()) // Cloning the UTXO
     }
 }
 
-pub trait TXStorer {
-    fn put(&mut self, tx: Transaction) -> Result<(), String>;
-    fn get(&self, hash: &str) -> Result<Option<Transaction>, String>; // Updated return type
+#[async_trait]
+pub trait TXStorer: Send + Sync {
+    async fn put(&mut self, tx: Transaction) -> Result<(), Error>;
+    async fn get(&self, hash: &str) -> Result<Option<Transaction>, Error>;
 }
 
 pub struct MemoryTXStore {
@@ -77,28 +83,31 @@ impl MemoryTXStore {
     }
 }
 
+#[async_trait]
 impl TXStorer for MemoryTXStore {
-    fn put(&mut self, tx: Transaction) -> Result<(), String> {
-        let hash = encode(hash_transaction(&tx));
+    async fn put(&mut self, tx: Transaction) -> Result<()> {
+        let hash = encode(hash_transaction(&tx).await);
         let mut data = self.lock.write().unwrap();
         data.insert(hash, tx);
         Ok(())
     }
-    fn get(&self, hash: &str) -> Result<Option<Transaction>, String> {
+    async fn get(&self, hash: &str) -> Result<Option<Transaction>> {
         let data = self.lock.read().unwrap();
         Ok(data.get(hash).cloned())
     }
 }
 
+#[async_trait]
 impl Default for MemoryTXStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub trait BlockStorer {
-    fn put(&self, block: &Block) -> Result<(), String>;
-    fn get(&self, hash: &str) -> Result<Option<Block>, String>;
+#[async_trait]
+pub trait BlockStorer: Send + Sync {
+    async fn put(&self, block: &Block) -> Result<(), Error>;
+    async fn get(&self, hash: &str) -> Result<Option<Block>, Error>;
 }
 
 pub struct MemoryBlockStore {
@@ -113,16 +122,17 @@ impl MemoryBlockStore {
     }
 }
 
+#[async_trait]
 impl BlockStorer for MemoryBlockStore {
-    fn put(&self, block: &Block) -> Result<(), String> {
-        let mut blocks = self.blocks.write().map_err(|e| e.to_string())?;
-        let hash = hash_header_by_block(block).map_err(|e| e.to_string())?;
+    async fn put(&self, block: &Block) -> Result<()> {
+        let mut blocks = self.blocks.write().map_err(|e| anyhow::Error::msg(e.to_string()))?;
+        let hash = hash_header_by_block(block).unwrap();
         let hash_str = encode(hash); 
         blocks.insert(hash_str, block.clone());
         Ok(())
     }
-    fn get(&self, hash: &str) -> Result<Option<Block>, String> {
-        let blocks = self.blocks.read().map_err(|e| e.to_string())?;
+    async fn get(&self, hash: &str) -> Result<Option<Block>> {
+        let blocks = self.blocks.read().map_err(|e| e.to_string()).unwrap();
         Ok(blocks.get(hash).cloned())  
     }
 }

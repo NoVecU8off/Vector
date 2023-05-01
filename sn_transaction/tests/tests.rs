@@ -61,6 +61,7 @@ fn test_address_to_string() {
     let address = Address::from_bytes([
         119, 2, 129, 224, 245, 161, 44, 24, 46, 93, 89, 87, 144, 63, 53, 63, 33, 64, 92, 127,
     ]);
+    println!("{}", address.to_string());
     assert_eq!(
         address.to_string(),
         "770281e0f5a12c182e5d5957903f353f21405c7f"
@@ -94,48 +95,48 @@ fn create_random_transaction() -> Transaction {
     }
 }
 
-#[test]
-fn test_hash_transaction() {
+#[tokio::test]
+async fn test_hash_transaction() {
     let transaction1 = create_random_transaction();
     let transaction2 = create_random_transaction();
 
-    let hash1 = hash_transaction(&transaction1);
-    let hash2 = hash_transaction(&transaction2);
+    let hash1 = hash_transaction(&transaction1).await;
+    let hash2 = hash_transaction(&transaction2).await;
 
     assert_ne!(hash1, hash2);
 }
 
-#[test]
-fn test_hash_transaction_without_signature() {
+#[tokio::test]
+async fn test_hash_transaction_without_signature() {
     let mut transaction = create_random_transaction();
-    let hash_before_signing = hash_transaction_without_signature(&transaction);
+    let hash_before_signing = hash_transaction_without_signature(&transaction).await;
 
     // Add a random signature
     transaction.msg_inputs[0].msg_signature = (0..64).map(|_| rand::random::<u8>()).collect();
 
-    let hash_after_signing = hash_transaction_without_signature(&transaction);
+    let hash_after_signing = hash_transaction_without_signature(&transaction).await;
 
     assert_eq!(hash_before_signing, hash_after_signing);
 }
 
-#[test]
-fn test_sign_transaction() {
+#[tokio::test]
+async fn test_sign_transaction() {
     let keypair = Keypair::generate_keypair();
     let transaction = create_random_transaction();
 
-    let signature = sign_transaction(&keypair, &transaction);
+    let signature = sign_transaction(&keypair, &transaction).await;
 
-    let transaction_hash = hash_transaction(&transaction);
+    let transaction_hash = hash_transaction(&transaction).await;
     assert!(keypair.verify(&transaction_hash, &signature));
 }
 
-#[test]
-fn test_verify_transaction_two() {
+#[tokio::test]
+async fn test_verify_transaction_two() {
     let keypair = Keypair::generate_keypair();
     let mut transaction = create_random_transaction();
 
-    let signature = sign_transaction(&keypair, &transaction);
+    let signature = sign_transaction(&keypair, &transaction).await;
     transaction.msg_inputs[0].msg_signature = signature.signature.to_bytes().to_vec();
 
-    assert!(verify_transaction(&transaction, &[keypair.public]));
+    assert!(verify_transaction(&transaction, &[keypair.public]).await);
 }

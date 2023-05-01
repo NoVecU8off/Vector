@@ -6,7 +6,7 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use sn_merkle::merkle::*;
 
-    fn create_sample_block() -> Block {
+    async fn create_sample_block() -> Block {
         let transactions = vec![
             Transaction {
                 msg_inputs: vec![],
@@ -20,7 +20,7 @@ mod tests {
             },
         ];
     
-        let merkle_tree = MerkleTree::new(&transactions);
+        let merkle_tree = MerkleTree::new(&transactions).await.unwrap();
         let merkle_root = merkle_tree.root.to_vec();
     
         let header = Header {
@@ -42,41 +42,41 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_sign_and_verify_block() {
-        let block = create_sample_block();
+    #[tokio::test]
+    async fn test_sign_and_verify_block() {
+        let block = create_sample_block().await;
         let keypair = Keypair::generate_keypair();
-        let signature = sign_block(&block, &keypair).unwrap();
+        let signature = sign_block(&block, &keypair).await.unwrap();
 
-        let result = verify_block(&block, &signature, &keypair).unwrap();
+        let result = verify_block(&block, &signature, &keypair).await.unwrap();
         assert!(result);
     }
 
-    #[test]
-    fn test_verify_root_hash() {
-        let block = create_sample_block();
-        assert!(verify_root_hash(&block));
+    #[tokio::test]
+    async fn test_verify_root_hash() {
+        let block = create_sample_block().await;
+        assert!(verify_root_hash(&block).await.unwrap());
     }
 
-    #[test]
-    fn test_hash_block() {
-        let block = create_sample_block();
+    #[tokio::test]
+    async fn test_hash_block() {
+        let block = create_sample_block().await;
         let hash = hash_header_by_block(&block).unwrap();
         assert_eq!(hash.len(), 64);
     }
 
-    #[test]
-    fn test_hash_header_by_block() {
-        let block = create_sample_block();
+    #[tokio::test]
+    async fn test_hash_header_by_block() {
+        let block = create_sample_block().await;
         let hash = hash_header_by_block(&block).unwrap();
         assert_eq!(hash.len(), 64);
     }
 
-    #[test]
-    fn test_hash_header() {
-        let block = create_sample_block();
+    #[tokio::test]
+    async fn test_hash_header() {
+        let block = create_sample_block().await;
         let header = block.msg_header.unwrap();
-        let hash = hash_header(&header).unwrap();
+        let hash = hash_header(&header).await.unwrap();
         assert_eq!(hash.len(), 64);
     }
 }
