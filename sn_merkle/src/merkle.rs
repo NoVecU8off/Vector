@@ -1,6 +1,7 @@
 use sha3::{Digest, Sha3_512};
 use sn_proto::messages::{Transaction};
 use prost::Message;
+use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
@@ -17,21 +18,22 @@ pub struct TransactionWrapper {
 }
 
 impl MerkleTree {
-    pub fn new(transactions: &[Transaction]) -> MerkleTree {
-        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions);
+    pub async fn new(transactions: &[Transaction]) -> Result<MerkleTree> {
+        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions).await;
         let nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
-        let (root, depth) = MerkleTree::build(&nodes);  
-        MerkleTree {
+        let (root, depth) = MerkleTree::build(&nodes).await.unwrap();  
+        let merkle = MerkleTree {
             root,
             depth,
             leaves,
             nodes,
-        }
+        };
+        Ok(merkle)
     }
 
-    pub fn build(nodes: &[Vec<u8>]) -> (Vec<u8>, u64) {
+    pub async fn build(nodes: &[Vec<u8>]) -> Result<(Vec<u8>, u64)> {
         if nodes.is_empty() {
-            return (Vec::new(), 0);
+            return Ok((Vec::new(), 0));
         }   
         let mut level = nodes.to_vec();
         let mut next_level = Vec::new();
@@ -52,10 +54,10 @@ impl MerkleTree {
             level = next_level.drain(..).collect();
             depth += 1;
         }
-        (level[0].clone(), depth)
+        Ok((level[0].clone(), depth))
     }
     
-    pub fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> bool {
+    pub async fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> Result<bool> {
         let mut hasher = Sha3_512::new();
         let mut bytes = Vec::new();
         leaf.encode(&mut bytes).unwrap();
@@ -63,7 +65,7 @@ impl MerkleTree {
         let mut current_hash = hasher.finalize().to_vec();
         let mut current_index = index; 
         if proof.is_empty() {
-            return current_hash == self.root;
+            return Ok(current_hash == self.root); // Wrap in Ok()
         }
         println!("Initial hash: {:?}", current_hash);
         for sibling in proof {
@@ -79,11 +81,11 @@ impl MerkleTree {
             current_index /= 2;
             println!("Updated hash: {:?}", current_hash);
         }
-        current_hash == self.root
-    }
+        Ok(current_hash == self.root) // Wrap in Ok()
+    }    
 
-    pub fn get_proof(&self, transaction: &Transaction) -> Option<(usize, Vec<Vec<u8>>)> {
-        let leaf_index = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction)?;
+    pub async fn get_proof(&self, transaction: &Transaction) -> Result<Option<(usize, Vec<Vec<u8>>)>> {
+        let leaf_index = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction).unwrap();
         let mut proof = Vec::new();
         let mut index = leaf_index;
         let max_depth = self.depth as isize;
@@ -100,17 +102,17 @@ impl MerkleTree {
             println!("Current proof: {:?}", proof);
             index /= 2;
         }
-        Some((leaf_index, proof))
+        Ok(Some((leaf_index, proof)))
     }
 
-    pub fn add_leaf(&mut self, transaction: Transaction) {
+    pub async fn add_leaf(&mut self, transaction: Transaction) {
         if self.leaves.len() == 1 {
             let new_transactions = vec![self.leaves[0].transaction.clone(), transaction];
-            *self = MerkleTree::new(&new_transactions);
+            *self = MerkleTree::new(&new_transactions).await.unwrap();
             self.depth = 1; // Update the depth after reconstructing the tree
             return;
         }
-        let wrapper = compute_hashes(&[transaction]).into_iter().next().unwrap();
+        let wrapper = compute_hashes(&[transaction]).await.into_iter().next().unwrap();
         self.leaves.push(wrapper.clone());
         self.nodes.push(wrapper.hash.clone());
         let mut index = self.leaves.len() - 1;
@@ -136,7 +138,7 @@ impl MerkleTree {
         self.root = current_hash;
     }
 
-    pub fn remove_leaf(&mut self, transaction: &Transaction) -> bool {
+    pub async fn remove_leaf(&mut self, transaction: &Transaction) -> Result<bool> {
         if let Some(index) = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction) {
             self.leaves.remove(index);
             self.nodes.remove(index);
@@ -157,9 +159,9 @@ impl MerkleTree {
                 self.nodes[parent_index] = current_hash.clone();
             }
             self.root = current_hash;
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 
@@ -184,7 +186,7 @@ impl MerkleTree {
     }
 }
 
-pub fn compute_hashes(transactions: &[Transaction]) -> Vec<TransactionWrapper> {
+pub async fn compute_hashes(transactions: &[Transaction]) -> Vec<TransactionWrapper> {
     transactions
         .iter()
         .map(|transaction| {

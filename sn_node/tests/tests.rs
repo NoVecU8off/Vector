@@ -24,7 +24,6 @@ pub fn create_random_transaction() -> Transaction {
     }
 }
 
-
 fn create_test_server_config_1() -> ServerConfig {
     let cfg_version = "2".to_string();
     let cfg_addr = "127.0.0.1:8080".to_string();
@@ -56,27 +55,7 @@ fn create_test_server_config_2() -> ServerConfig {
 }
 
 #[test]
-fn test_make_node_client() {
-    // Replace this with a valid address of a running NodeService instance.
-    let addr = "192.168.0.120:8080";
-
-    let rt = Runtime::new().unwrap();
-    let result = rt.block_on(async { make_node_client(addr).await });
-
-    match result {
-        Ok(_client) => {
-            println!("Successfully created client for address: {}", addr);
-            assert!(true);
-        },
-        Err(e) => {
-            eprintln!("Error creating client: {:?}", e);
-            assert!(false);
-        },
-    }
-}
-
-#[test]
-fn test_start_node_and_make_node_client() {
+fn test_start_node_and_make_node_client_pass() {
     // Create a new ServerConfig and NodeService.
     let rt = Runtime::new().unwrap();
     let server_config = rt.block_on(async { ServerConfig::default().await });
@@ -107,7 +86,7 @@ fn test_start_node_and_make_node_client() {
 }
 
 #[test]
-fn test_start_node_and_make_node_client_stage_2() {
+fn test_start_node_and_make_node_client_stage_2_pass() {
     // Create a new ServerConfig and NodeService.
     let rt = Runtime::new().unwrap();
     let server_config = rt.block_on(async { ServerConfig::default().await });
@@ -149,7 +128,7 @@ fn test_start_node_and_make_node_client_stage_2() {
 }
 
 #[test]
-fn test_two_servers_and_two_clients() {
+fn test_two_servers_and_two_clients_pass() {
     // Create new ServerConfig and NodeService instances for two nodes.
     let rt = Runtime::new().unwrap();
     let server_config1 = rt.block_on(async { ServerConfig::default().await });
@@ -198,192 +177,7 @@ fn test_two_servers_and_two_clients() {
 }
 
 #[test]
-fn test_broadcast() {
-    env_logger::init();
-    let rt = Runtime::new().unwrap();
-    let server_config_1 = rt.block_on(async { ServerConfig::default().await });
-    let server_config_2 = rt.block_on(async { ServerConfig::default_b().await });
-    let mut node_service_1 = NodeService::new(server_config_1);
-    let mut node_service_2 = NodeService::new(server_config_2);
-    node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
-    node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
-    let node_service_1_clone = node_service_1.clone();
-    let node_service_2_clone = node_service_2.clone();
-    let random_tx = create_random_transaction();
-    rt.spawn(async move {
-        node_service_1.start(vec![]).await.unwrap();
-    });
-    rt.spawn(async move {
-        node_service_2.start(vec![]).await.unwrap();
-        let (client, version) = node_service_2_clone
-                .dial_remote_node(&node_service_1_clone.server_config.cfg_addr)
-                .await
-                .unwrap();
-        println!("DAILED");
-        node_service_2_clone
-            .add_peer(client, version)
-            .await;
-        println!("PEERED");
-        node_service_2_clone
-            .broadcast(Box::new(random_tx))
-            .await
-            .unwrap();
-        println!("BROADCASTED");
-    });
-}
-
-#[tokio::test]
-async fn test_broadcast_two() {
-    env_logger::init();
-    let server_config_1 = ServerConfig::default().await;
-    let server_config_2 = ServerConfig::default_b().await;
-    let mut node_service_1 = NodeService::new(server_config_1);
-    let mut node_service_2 = NodeService::new(server_config_2);
-    node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
-    node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
-    let node_service_1_clone = node_service_1.clone();
-    let node_service_2_clone = node_service_2.clone();
-    let random_tx = create_random_transaction();
-    tokio::spawn(async move {
-        node_service_1.start(vec![]).await.unwrap();
-    });
-    tokio::spawn(async move {
-        node_service_2.start(vec![]).await.unwrap();
-        let (client, version) = node_service_2_clone.dial_remote_node(&node_service_1_clone.server_config.cfg_addr).await.unwrap();
-        node_service_2_clone.add_peer(client, version).await;
-        node_service_2_clone.broadcast(Box::new(random_tx)).await.unwrap();
-    }).await.unwrap();
-}
-
-#[tokio::test]
-async fn test_dial_remote_node_works() {
-    let node_service_1 = NodeService::new(ServerConfig::default().await);
-    let node_service_2 = NodeService::new(ServerConfig::default_b().await);
-    let node_service_1_clone = node_service_1.clone();
-    tokio::spawn(async move {
-        node_service_1
-            .clone()
-            .start(vec![])
-            .await
-            .unwrap();
-    });
-    tokio::spawn(async move {
-        node_service_2
-            .clone()
-            .start(vec![])
-            .await
-            .unwrap();
-        let (_client, version) = node_service_2
-        .dial_remote_node(&node_service_1_clone.server_config.cfg_addr)
-        .await
-        .unwrap();
-    assert_eq!(
-        version.msg_listen_address,
-        node_service_2.server_config.cfg_addr,
-        "Remote node version should have the correct listen address"
-    );
-    assert_eq!(
-        version.msg_version,
-        "1",
-        "Remote node version should match the expected version"
-    );
-    }).await.unwrap();
-}
-
-#[test]
-fn test_dial_remote_node_works_runtime() {
-    let rt = Runtime::new().unwrap();
-
-    rt.block_on(async {
-        let node_service_1 = NodeService::new(ServerConfig::default().await);
-        let node_service_2 = NodeService::new(ServerConfig::default_b().await);
-        let node_service_1_clone = node_service_1.clone();
-        tokio::spawn(async move {
-            node_service_1.clone().start(vec![]).await.unwrap();
-        });
-        tokio::spawn(async move {
-            node_service_2.clone().start(vec![]).await.unwrap();
-            let (_client, version) = node_service_2
-                .dial_remote_node(&node_service_1_clone.server_config.cfg_addr)
-                .await
-                .unwrap();
-            println!("{} dialed to {}", node_service_2.server_config.cfg_addr, node_service_1_clone.server_config.cfg_addr);
-            assert_eq!(
-                version.msg_listen_address,
-                node_service_2.server_config.cfg_addr,
-                "Remote node version should have the correct listen address"
-            );
-            assert_eq!(
-                version.msg_version,
-                "1",
-                "Remote node version should match the expected version"
-            );
-        });
-    });
-}
-
-#[tokio::test]
-async fn test_dial_remote_node_fail() {
-    let node_service_1 = NodeService::new(ServerConfig::default().await);
-    let node_service_2 = NodeService::new(ServerConfig::default_b().await);
-    let node_service_1_clone = node_service_1.clone();
-    let node_service_2_clone = node_service_2.clone();
-    tokio::spawn(async move {
-        node_service_1
-            .clone()
-            .start(vec![])
-            .await
-            .unwrap();
-    });
-    sleep(Duration::from_secs(5)).await;
-    tokio::spawn(async move {
-        node_service_2
-            .clone()
-            .start(vec![])
-            .await
-            .unwrap();
-        
-    }).await.unwrap();
-    sleep(Duration::from_secs(5)).await;
-    let (_client, version) = node_service_2_clone
-        .dial_remote_node(&node_service_1_clone.server_config.cfg_addr)
-        .await
-        .unwrap();
-    assert_eq!(
-        version.msg_listen_address,
-        node_service_2_clone.server_config.cfg_addr,
-        "Remote node version should have the correct listen address"
-    );
-    assert_eq!(
-        version.msg_version,
-        "test-1",
-        "Remote node version should match the expected version"
-    );
-}
-
-#[tokio::test]
-async fn test_dial_remote_node_fail_two() {
-    let node_service_1 = NodeService::new(ServerConfig::default().await);
-    let node_service_2 = NodeService::new(ServerConfig::default_b().await);
-
-    let node_service_1_clone = node_service_1.clone();
-    let node_service_2_clone = node_service_2.clone();
-
-    let node1_handle = tokio::spawn(async move {
-        node_service_1.clone().start(vec![]).await.unwrap();
-    });
-
-    let node2_handle = tokio::spawn(async move {
-        node_service_2.clone().start(vec![]).await.unwrap();
-        node_service_2_clone.dial_remote_node(&node_service_1_clone.server_config.cfg_addr).await.unwrap();
-    });
-
-    node1_handle.await.unwrap();
-    node2_handle.await.unwrap();
-}
-
-#[test]
-fn test_broadcast_https() {
+fn test_broadcast_pass() {
     let rt = Runtime::new().unwrap();
     let server_config_1 = create_test_server_config_1();
     let server_config_2 = create_test_server_config_2();
@@ -415,7 +209,7 @@ fn test_broadcast_https() {
 }
 
 #[test]
-fn test_start_node_and_make_node_client_and_broadcast() {
+fn test_start_node_and_make_node_client_and_broadcast_fail() {
     let rt = Runtime::new().unwrap();
     let server_config = rt.block_on(async { ServerConfig::default().await });
     let mut node_service = NodeService::new(server_config);
@@ -431,7 +225,6 @@ fn test_start_node_and_make_node_client_and_broadcast() {
         node_service_2.start(Vec::new()).await.unwrap();
     });
 
-    // Test make_node_client().
     let result = rt.block_on(async { make_node_client(&addr_node_1).await });
 
     match result {

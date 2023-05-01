@@ -1,25 +1,26 @@
-use std::error::Error;
 use sn_chain::chain::*;
 use sn_cryptography::cryptography::{Keypair};
 use sn_block::block::*;
+use anyhow::Result;
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // 1. Create a block and a keypair.
-    let block = create_genesis_block();
+    let block = create_genesis_block().await.unwrap();
     let keypair = Keypair::generate_keypair();
 
     // 2. Sign the block.
-    let signature = sign_block(&block, &keypair)?;
+    let signature = sign_block(&block, &keypair).await.unwrap();
 
     // 3. Verify the block's signature.
-    let is_signature_valid = verify_block(&block, &signature, &keypair)?;
+    let is_signature_valid = verify_block(&block, &signature, &keypair).await.unwrap();
 
     // 4. Verify the block's Merkle root hash.
-    let is_root_hash_valid = verify_root_hash(&block);
+    let is_root_hash_valid = verify_root_hash(&block).await.unwrap();
 
     // 5. Hash the block and its header.
-    let block_hash = hash_header_by_block(&block)?;
-    let header_hash = hash_header_by_block(&block)?;
+    let block_hash = hash_header_by_block(&block).unwrap();
+    let header_hash = hash_header_by_block(&block).unwrap();
 
     // 6. Compare the hashes.
     let are_hashes_equal = block_hash == header_hash;

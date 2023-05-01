@@ -53,7 +53,7 @@ impl Mempool {
 
     pub async fn has(&self, tx: &Transaction) -> bool {
         let lock = self.lock.read().await;
-        let hex_hash = encode(hash_transaction(tx));
+        let hex_hash = encode(hash_transaction(tx).await);
         lock.contains_key(&hex_hash)
     }
 
@@ -62,7 +62,7 @@ impl Mempool {
             return false;
         }
         let mut lock = self.lock.write().await;
-        let hash = hex::encode(hash_transaction(&tx));
+        let hash = hex::encode(hash_transaction(&tx).await);
         lock.insert(hash.clone(), tx);
         info!(self.logger, "\nTransaction added to mempool: {}", hash);
         true
@@ -173,7 +173,7 @@ impl Node for NodeService {
         let request_inner = request.get_ref().clone();
         let tx = request_inner;
         let tx_clone = tx.clone();
-        let hash = hex::encode(hash_transaction(&tx));
+        let hash = hex::encode(hash_transaction(&tx).await);
         if self.mempool.add(tx).await {
             info!(self.logger, "\n{}: received transaction: {}", self.server_config.cfg_addr, hash);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
@@ -260,10 +260,10 @@ impl NodeService {
                 req.metadata_mut().insert("peer", addr.parse().unwrap());
                 if addr != &self.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
-                        error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx)), addr, err);
+                        error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx).await), addr, err);
                         return Err(err.into());
                     } else {
-                        info!(self.logger, "\n{}: broadcasted transaction \n {} \nto \n {}", self.server_config.cfg_addr, hex::encode(hash_transaction(tx)), addr);
+                        info!(self.logger, "\n{}: broadcasted transaction \n {} \nto \n {}", self.server_config.cfg_addr, hex::encode(hash_transaction(tx).await), addr);
                     }
                 }
             }
