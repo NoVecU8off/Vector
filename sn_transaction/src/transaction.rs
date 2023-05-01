@@ -44,7 +44,7 @@ pub async fn verify_transaction(transaction: &Transaction, public_keys: &[Public
     true
 }
 
-pub async  fn verify_transaction_one(transaction: &Transaction, keypairs: &[Keypair]) -> bool {
+pub async fn verify_transaction_one(transaction: &Transaction, keypairs: &[Keypair]) -> bool {
     for input in &transaction.msg_inputs {
         if input.msg_signature.is_empty() {
             panic!("The transaction has no signature");

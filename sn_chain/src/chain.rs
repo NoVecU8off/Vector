@@ -79,35 +79,63 @@ impl Chain {
 
     pub async fn add_block(&mut self, block: Block) -> Result<()> {
         self.validate_block(&block).await.unwrap();
-        let header = block.msg_header.as_ref().ok_or("missing block header").unwrap().clone();
-        self.headers.add_header(header);  
-        for tx in &block.msg_transactions {
-            let cloned_tx = tx.clone();
-            self.tx_store.put(cloned_tx).await?;
-            let hash = encode(hash_transaction(tx).await); 
-            for (i, output) in tx.msg_outputs.iter().enumerate() {
-                let utxo = UTXO {
-                    hash: hash.clone(),
-                    amount: output.msg_amount,
-                    out_index: i as u32,
-                    spent: false,
-                };
-                self.utxo_store.put(utxo).await?;
-            }
-            for input in &tx.msg_inputs {
-                let prev_hash = encode(&input.msg_previous_tx_hash);
-                if let Some(mut utxo) = self.utxo_store.get(&prev_hash, input.msg_previous_out_index).await.unwrap() {
-                    utxo.spent = true;
-                    self.utxo_store.put(utxo).await?;
-                } else {
-                    return Err(Error::msg(format!("UTXO not found for input {} of tx {}", input.msg_previous_out_index, hash)));
-                }
-            }
-        }
+        let header = block
+            .msg_header
+            .as_ref()
+            .ok_or("missing block header")
+            .unwrap()
+            .clone();
+        self.headers.add_header(header);
+        self.add_transactions(&block).await?;
         self.block_store.put(&block).await?;
         Ok(())
     }
-
+    
+    async fn add_transactions(&mut self, block: &Block) -> Result<()> {
+        for tx in &block.msg_transactions {
+            let cloned_tx = tx.clone();
+            self.tx_store.put(cloned_tx).await?;
+            let hash = encode(hash_transaction(tx).await);
+            self.add_outputs(tx, &hash).await?;
+            self.update_inputs(tx, &hash).await?;
+        }
+        Ok(())
+    }
+    
+    async fn add_outputs(&mut self, tx: &Transaction, hash: &str) -> Result<()> {
+        for (i, output) in tx.msg_outputs.iter().enumerate() {
+            let utxo = UTXO {
+                hash: hash.clone().to_string(),
+                amount: output.msg_amount,
+                out_index: i as u32,
+                spent: false,
+            };
+            self.utxo_store.put(utxo).await?;
+        }
+        Ok(())
+    }
+    
+    async fn update_inputs(&mut self, tx: &Transaction, hash: &str) -> Result<()> {
+        for input in &tx.msg_inputs {
+            let prev_hash = encode(&input.msg_previous_tx_hash);
+            if let Some(mut utxo) = self
+                .utxo_store
+                .get(&prev_hash, input.msg_previous_out_index)
+                .await
+                .unwrap()
+            {
+                utxo.spent = true;
+                self.utxo_store.put(utxo).await?;
+            } else {
+                return Err(Error::msg(format!(
+                    "UTXO not found for input {} of tx {}",
+                    input.msg_previous_out_index, hash
+                )));
+            }
+        }
+        Ok(())
+    }
+    
     pub async fn get_block_by_hash(&self, hash: &[u8]) -> Result<Block> {
         let hash_hex = encode(hash);
         match self.block_store.get(&hash_hex).await {
@@ -135,9 +163,35 @@ impl Chain {
         Ok(block)
     }
 
-    pub async fn validate_block(&self, incoming_block: &Block) -> Result<()> {
+    async fn check_transaction_signature(&self, transaction: &Transaction, keypair: &[Keypair]) -> Result<()> {
+        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public).collect(); 
+        if !verify_transaction(transaction, &public_keys).await {
+            Err(anyhow::anyhow!("invalid transaction signature"))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn check_transaction_inputs(&self, transaction: &Transaction) -> Result<i32> {
+        let mut sum_inputs = 0;
+        let hash = hex::encode(hash_transaction(transaction).await);
+        for (i, input) in transaction.msg_inputs.iter().enumerate() {
+            let prev_hash = hex::encode(&input.msg_previous_tx_hash);
+            if let Some(utxo) = self.utxo_store.get(&prev_hash, input.msg_previous_out_index).await.unwrap() {
+                sum_inputs += utxo.amount as i32;
+                if utxo.spent {
+                    return Err(anyhow::anyhow!("input {} of tx {} is already spent", i, hash).into());
+                }
+            } else {
+                return Err(anyhow::anyhow!("UTXO not found for input {} of tx {}", i, hash).into());
+            }
+        }
+        Ok(sum_inputs)
+    }
+
+    async fn check_block_signature(&self, incoming_block: &Block) -> Result<()> {
         let signature_vec = incoming_block.msg_signature.clone();
-        let signature = Signature::signature_from_vec(&signature_vec);   
+        let signature = Signature::signature_from_vec(&signature_vec);
         let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
             .map_err(|_| "Invalid public key in block").unwrap();
         let keypair = Keypair {
@@ -147,8 +201,32 @@ impl Chain {
             public: public_key,
         };
         if !verify_block(incoming_block, &signature, &keypair).await.unwrap() {
-            return Err(anyhow::anyhow!("invalid block signature"));
-        } 
+            Err(anyhow::anyhow!("invalid block signature"))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn check_transactions_in_block(&self, incoming_block: &Block, keypair: &[Keypair]) -> Result<()> {
+        let keypair_arc = Arc::new(keypair.to_vec());
+        let tx_futures = incoming_block
+            .msg_transactions
+            .iter()
+            .map(|tx| {
+                let chain = self.clone();
+                let keypair = keypair_arc.clone();
+                async move { chain.validate_transaction(tx, &keypair).await }
+            });
+        futures::stream::iter(tx_futures)
+            .buffer_unordered(16)
+            .for_each_concurrent(None, |result| async move {
+                result.unwrap();
+            })
+            .await;
+        Ok(())
+    }
+
+    async fn check_previous_block_hash(&self, incoming_block: &Block) -> Result<()> {
         if self.chain_len() > 0 {
             let last_block = self.get_block_by_height(self.chain_height()).await.unwrap();
             let last_block_hash = hash_header_by_block(&last_block).unwrap().to_vec();
@@ -160,48 +238,40 @@ impl Chain {
                 return Err(anyhow::anyhow!("Block header is missing"));
             }
         }
-        let keypair_arc = Arc::new(keypair.clone());
-        let tx_futures = incoming_block
-            .msg_transactions
-            .iter()
-            .map(|tx| {
-                let chain = self.clone();
-                let keypair = keypair_arc.clone();
-                async move { chain.validate_transaction(tx, &[keypair.as_ref().clone()]).await }
-            });
-        futures::stream::iter(tx_futures)
-            .buffer_unordered(8) // Change this number to control concurrency
-            .for_each_concurrent(None, |result| async move {
-                result.unwrap();
-            })
-            .await;
         Ok(())
-    }    
+    }
+    
+    // Add a new function to get the keypair for block validation
+    async fn get_keypair_for_block(&self, incoming_block: &Block) -> Result<Vec<Keypair>> {
+        // Replace this with the appropriate logic for getting the correct keypair(s) for the block
+        let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
+            .map_err(|_| "Invalid public key in block").unwrap();
+        let keypair = Keypair {
+            private: SecretKey::from_bytes(&[0u8; 32]).unwrap(),
+            optional_private: None,
+            expanded_private_key: ExpandedSecretKey::from(&SecretKey::from_bytes(&[0u8; 32]).unwrap()),
+            public: public_key,
+        };
+        Ok(vec![keypair])
+    }
+
+    pub async fn validate_block(&self, incoming_block: &Block) -> Result<()> {
+        self.check_block_signature(incoming_block).await?;
+        self.check_previous_block_hash(incoming_block).await?;
+        let keypair = self.get_keypair_for_block(incoming_block).await?;
+        self.check_transactions_in_block(incoming_block, &keypair).await?;
+        Ok(())
+    }
 
     pub async fn validate_transaction(&self, transaction: &Transaction, keypair: &[Keypair]) -> Result<()> {
-        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public).collect(); 
-        if !verify_transaction(transaction, &public_keys).await {
-            return Err(anyhow::anyhow!("invalid transaction signature"));
-        }    
-        let n_inputs = transaction.msg_inputs.len();
-        let hash = hex::encode(hash_transaction(transaction).await);
-        let mut sum_inputs = 0;   
-        for i in 0..n_inputs {   
-            let prev_hash = hex::encode(&transaction.msg_inputs[i].msg_previous_tx_hash);
-            if let Some(utxo) = self.utxo_store.get(&prev_hash, transaction.msg_inputs[i].msg_previous_out_index).await.unwrap() {
-                sum_inputs += utxo.amount as i32;   
-                if utxo.spent {
-                    return Err(anyhow::anyhow!("input {} of tx {} is already spent", i, hash).into());
-                }
-            } else {
-                return Err(anyhow::anyhow!("UTXO not found for input {} of tx {}", i, hash).into());
-            }   
-        }    
-        let sum_outputs: i32 = transaction.msg_outputs.iter().map(|o| o.msg_amount as i32).sum();   
+        self.check_transaction_signature(transaction, keypair).await?;
+        let sum_inputs = self.check_transaction_inputs(transaction).await?;
+        let sum_outputs: i32 = transaction.msg_outputs.iter().map(|o| o.msg_amount as i32).sum();
         if sum_inputs < sum_outputs {
-            return Err(anyhow::anyhow!("insufficient balance got ({}) spending ({})", sum_inputs, sum_outputs).into());
-        }   
-        Ok(())   
+            Err(anyhow::anyhow!("insufficient balance got ({}) spending ({})", sum_inputs, sum_outputs).into())
+        } else {
+            Ok(())
+        }
     }
 }
 
