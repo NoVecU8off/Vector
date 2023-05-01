@@ -1,4 +1,3 @@
-
 use sn_proto::messages::{Transaction, TransactionInput, TransactionOutput};
 use sn_merkle::merkle::*;
 
@@ -44,7 +43,7 @@ fn sample_transactions() -> Vec<Transaction> {
 #[tokio::test]
 async fn test_new() {
     let transactions = sample_transactions();
-    let tree = MerkleTree::new(&transactions).await.unwrap();
+    let tree = MerkleTree::new(&transactions).unwrap();
 
     assert_eq!(tree.get_leaves().len(), transactions.len());
     assert!(!tree.get_root().is_empty());
@@ -53,7 +52,7 @@ async fn test_new() {
 #[tokio::test]
 async fn test_verify() {
     let transactions = sample_transactions();
-    let tree = MerkleTree::new(&transactions).await.unwrap();
+    let tree = MerkleTree::new(&transactions).unwrap();
     for (_index, transaction) in transactions.iter().enumerate() {
         if let Some((leaf_index, proof)) = tree.get_proof(transaction).await.unwrap() {
             assert!(tree.verify(transaction, leaf_index, &proof).await.unwrap());
@@ -69,9 +68,9 @@ async fn test_verify() {
 async fn test_add_leaf() {
     let transactions = sample_transactions();
     let mut tree = if transactions.len() > 1 {
-        MerkleTree::new(&transactions[0..1]).await.unwrap()
+        MerkleTree::new(&transactions[0..1]).unwrap()
     } else {
-        MerkleTree::new(&[]).await.unwrap()
+        MerkleTree::new(&[]).unwrap()
     };
 
     let original_root = tree.get_root().to_vec();
@@ -96,7 +95,7 @@ async fn test_add_leaf() {
         ],
     };
 
-    tree.add_leaf(new_transaction.clone()).await;
+    tree.add_leaf(new_transaction.clone());
 
     assert_ne!(tree.get_root(), &original_root[..]);
     assert_eq!(tree.get_leaves().len(), original_leaves_len + 1);
@@ -105,7 +104,7 @@ async fn test_add_leaf() {
 #[tokio::test]
 async fn test_remove_leaf() {
     let transactions = sample_transactions();
-    let mut tree = MerkleTree::new(&transactions).await.unwrap();
+    let mut tree = MerkleTree::new(&transactions).unwrap();
 
     let original_root = tree.get_root().to_vec();
 

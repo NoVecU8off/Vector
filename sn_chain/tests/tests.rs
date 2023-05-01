@@ -64,7 +64,7 @@ async fn test_add_block() {
     let signature = sign_transaction(&keypair, &new_transaction).await;
     input.msg_signature = signature.to_vec();
     new_transaction.msg_inputs[0] = input;
-    let merkle_tree = MerkleTree::new(&[new_transaction.clone()]).await.unwrap();
+    let merkle_tree = MerkleTree::new(&[new_transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let prev_header = genesis_block.msg_header.as_ref().unwrap();
     let header = Header {
@@ -121,7 +121,7 @@ async fn test_validate_block_another() {
         msg_inputs: vec![],
         msg_outputs: vec![output],
     };
-    let merkle_tree = MerkleTree::new(&[transaction.clone()]).await.unwrap();
+    let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let last_block = chain.get_block_by_height(chain.chain_height()).await.unwrap();
     let prev_header = last_block.msg_header.as_ref().unwrap();
@@ -154,7 +154,7 @@ async fn test_validate_transaction() {
     let genesis_block = chain.get_block_by_height(0).await.unwrap();
     let transaction = &genesis_block.msg_transactions[0];
     let keypair = Keypair::generate_keypair();
-    assert!(chain.validate_transaction(transaction, &[keypair]).await.is_ok());
+    assert!(chain.validate_transaction(transaction, &[keypair]).is_ok());
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn test_rt_validate_transaction() {
         let genesis_block = chain.get_block_by_height(0).await.unwrap();
         let transaction = &genesis_block.msg_transactions[0];
         let keypair = Keypair::generate_keypair();
-        assert!(chain.validate_transaction(transaction, &[keypair]).await.is_ok());
+        assert!(chain.validate_transaction(transaction, &[keypair]).is_ok());
     });
 }
 
@@ -208,7 +208,7 @@ async fn test_add_block_two() {
     let signature = sign_transaction(&keypair, &new_transaction).await;
     input.msg_signature = signature.to_vec();
     new_transaction.msg_inputs[0] = input;
-    let merkle_tree = MerkleTree::new(&[new_transaction.clone()]).await.unwrap();
+    let merkle_tree = MerkleTree::new(&[new_transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let prev_header = genesis_block.msg_header.as_ref().unwrap();
 

@@ -1,5 +1,4 @@
 use sn_store::store::*;
-use tokio::runtime::Runtime;
 use hex::encode;
 use sn_transaction::transaction::*;
 use sn_block::block::*;
@@ -41,7 +40,7 @@ async fn create_sample_block() -> Block {
         },
     ];
 
-    let merkle_tree = MerkleTree::new(&transactions).await.unwrap();
+    let merkle_tree = MerkleTree::new(&transactions).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
 
     let header = Header {
@@ -72,10 +71,10 @@ fn memory_utxo_store() {
         amount: 100,
         spent: false,
     };
-    let put_result = Runtime::new().unwrap().block_on(store.put(utxo.clone()));
+    let put_result = store.put(utxo.clone());
     assert!(put_result.is_ok());
 
-    let get_result = Runtime::new().unwrap().block_on(store.get(&utxo.hash, utxo.out_index));
+    let get_result = store.get(&utxo.hash, utxo.out_index);
     assert_eq!(get_result.unwrap(), Some(utxo));
 }
 

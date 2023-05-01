@@ -16,10 +16,10 @@ pub struct UTXO {
     pub spent: bool,
 }
 
-#[async_trait]
+// #[async_trait]
 pub trait UTXOStorer: Send + Sync {
-    async fn put(&mut self, utxo: UTXO) -> Result<(), Error>;
-    async fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, Error>;
+    fn put(&mut self, utxo: UTXO) -> Result<(), Error>;
+    fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, Error>;
 }
 
 pub struct MemoryUTXOStore {
@@ -50,15 +50,15 @@ impl Default for MemoryUTXOStore {
     }
 }
 
-#[async_trait]
+// #[async_trait]
 impl UTXOStorer for MemoryUTXOStore {
-    async fn put(&mut self, utxo: UTXO) -> Result<()> {
+    fn put(&mut self, utxo: UTXO) -> Result<()> {
         let key = format!("{}_{}", utxo.hash, utxo.out_index);
         let mut data = self.data.write().unwrap();
         data.insert(key, utxo);
         Ok(())
     }
-    async fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>> {
+    fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>> {
         let key = format!("{}_{}", hash, out_index);
         let data = self.data.read().unwrap();
         Ok(data.get(&key).cloned()) // Cloning the UTXO
