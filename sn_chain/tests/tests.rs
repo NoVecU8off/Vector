@@ -154,7 +154,7 @@ async fn test_validate_transaction() {
     let genesis_block = chain.get_block_by_height(0).await.unwrap();
     let transaction = &genesis_block.msg_transactions[0];
     let keypair = Keypair::generate_keypair();
-    assert!(chain.validate_transaction(transaction, &[keypair]).await.is_ok());
+    assert!(chain.validate_transaction(transaction, &[keypair]).is_ok());
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn test_rt_validate_transaction() {
         let genesis_block = chain.get_block_by_height(0).await.unwrap();
         let transaction = &genesis_block.msg_transactions[0];
         let keypair = Keypair::generate_keypair();
-        assert!(chain.validate_transaction(transaction, &[keypair]).await.is_ok());
+        assert!(chain.validate_transaction(transaction, &[keypair]).is_ok());
     });
 }
 

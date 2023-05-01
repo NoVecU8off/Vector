@@ -109,12 +109,12 @@ async fn test_hash_transaction() {
 #[tokio::test]
 async fn test_hash_transaction_without_signature() {
     let mut transaction = create_random_transaction();
-    let hash_before_signing = hash_transaction_without_signature(&transaction).await;
+    let hash_before_signing = hash_transaction_without_signature(&transaction);
 
     // Add a random signature
     transaction.msg_inputs[0].msg_signature = (0..64).map(|_| rand::random::<u8>()).collect();
 
-    let hash_after_signing = hash_transaction_without_signature(&transaction).await;
+    let hash_after_signing = hash_transaction_without_signature(&transaction);
 
     assert_eq!(hash_before_signing, hash_after_signing);
 }
@@ -138,5 +138,5 @@ async fn test_verify_transaction_two() {
     let signature = sign_transaction(&keypair, &transaction).await;
     transaction.msg_inputs[0].msg_signature = signature.signature.to_bytes().to_vec();
 
-    assert!(verify_transaction(&transaction, &[keypair.public]).await);
+    assert!(verify_transaction(&transaction, &[keypair.public]));
 }
