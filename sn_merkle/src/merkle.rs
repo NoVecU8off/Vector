@@ -2,6 +2,7 @@ use sha3::{Digest, Sha3_512};
 use sn_proto::messages::{Transaction};
 use prost::Message;
 use anyhow::Result;
+use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
@@ -18,10 +19,10 @@ pub struct TransactionWrapper {
 }
 
 impl MerkleTree {
-    pub async fn new(transactions: &[Transaction]) -> Result<MerkleTree> {
-        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions).await;
+    pub fn new(transactions: &[Transaction]) -> Result<MerkleTree> {
+        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions);
         let nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
-        let (root, depth) = MerkleTree::build(&nodes).await.unwrap();  
+        let (root, depth) = MerkleTree::build(&nodes).unwrap();  
         let merkle = MerkleTree {
             root,
             depth,
@@ -31,31 +32,36 @@ impl MerkleTree {
         Ok(merkle)
     }
 
-    pub async fn build(nodes: &[Vec<u8>]) -> Result<(Vec<u8>, u64)> {
+    pub fn build(nodes: &[Vec<u8>]) -> Result<(Vec<u8>, u64)> {
         if nodes.is_empty() {
             return Ok((Vec::new(), 0));
-        }   
+        }
         let mut level = nodes.to_vec();
         let mut next_level = Vec::new();
-        let mut depth = 0;    
+        let mut depth = 0;
         while level.len() > 1 {
             if level.len() % 2 != 0 {
                 level.push(level.last().unwrap().clone());
-            }   
-            for i in (0..level.len()).step_by(2) {
-                let mut hasher = Sha3_512::new();
+            }
+            next_level.par_extend(
+                (0..level.len())
+                    .into_par_iter()
+                    .step_by(2)
+                    .map(|i| {
+                        let mut hasher = Sha3_512::new();
     
-                hasher.update(&level[i]);
-                hasher.update(&level[i + 1]);
+                        hasher.update(&level[i]);
+                        hasher.update(&level[i + 1]);
     
-                let hash = hasher.finalize().to_vec();
-                next_level.push(hash);
-            }   
+                        hasher.finalize().to_vec()
+                    }),
+            );
             level = next_level.drain(..).collect();
             depth += 1;
         }
         Ok((level[0].clone(), depth))
     }
+    
     
     pub async fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> Result<bool> {
         let mut hasher = Sha3_512::new();
@@ -105,14 +111,14 @@ impl MerkleTree {
         Ok(Some((leaf_index, proof)))
     }
 
-    pub async fn add_leaf(&mut self, transaction: Transaction) {
+    pub fn add_leaf(&mut self, transaction: Transaction) {
         if self.leaves.len() == 1 {
             let new_transactions = vec![self.leaves[0].transaction.clone(), transaction];
-            *self = MerkleTree::new(&new_transactions).await.unwrap();
+            *self = MerkleTree::new(&new_transactions).unwrap();
             self.depth = 1; // Update the depth after reconstructing the tree
             return;
         }
-        let wrapper = compute_hashes(&[transaction]).await.into_iter().next().unwrap();
+        let wrapper = compute_hashes(&[transaction]).into_iter().next().unwrap();
         self.leaves.push(wrapper.clone());
         self.nodes.push(wrapper.hash.clone());
         let mut index = self.leaves.len() - 1;
@@ -136,7 +142,7 @@ impl MerkleTree {
             index = parent_index;
         }
         self.root = current_hash;
-    }
+    }    
 
     pub async fn remove_leaf(&mut self, transaction: &Transaction) -> Result<bool> {
         if let Some(index) = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction) {
@@ -186,9 +192,9 @@ impl MerkleTree {
     }
 }
 
-pub async fn compute_hashes(transactions: &[Transaction]) -> Vec<TransactionWrapper> {
+pub fn compute_hashes(transactions: &[Transaction]) -> Vec<TransactionWrapper> {
     transactions
-        .iter()
+        .par_iter()
         .map(|transaction| {
             let mut bytes = Vec::new();
             transaction.encode(&mut bytes).unwrap();

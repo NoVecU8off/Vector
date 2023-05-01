@@ -20,7 +20,7 @@ mod tests {
             },
         ];
     
-        let merkle_tree = MerkleTree::new(&transactions).await.unwrap();
+        let merkle_tree = MerkleTree::new(&transactions).unwrap();
         let merkle_root = merkle_tree.root.to_vec();
     
         let header = Header {

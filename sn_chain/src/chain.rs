@@ -280,7 +280,7 @@ pub async fn create_genesis_block() -> Result<Block> {
         msg_inputs: vec![],
         msg_outputs: vec![output],
     };
-    let merkle_tree = MerkleTree::new(&[transaction.clone()]).await.unwrap();
+    let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let header = Header {
         msg_version: 1,

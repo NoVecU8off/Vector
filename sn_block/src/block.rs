@@ -22,7 +22,7 @@ pub fn verify_block_sync(block: &Block, signature: &Signature, keypair: &Keypair
 }
 
 pub async fn verify_root_hash(block: &Block) -> Result<bool> {
-    let merkle_tree = MerkleTree::new(&block.msg_transactions).await.unwrap();
+    let merkle_tree = MerkleTree::new(&block.msg_transactions).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     if let Some(header) = block.msg_header.as_ref() {
         Ok(header.msg_root_hash == merkle_root)
