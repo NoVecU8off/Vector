@@ -1843,6 +1843,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "sn_mempool"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "slog",
+ "slog-async",
+ "slog-term",
+ "sn_cryptography",
+ "sn_proto",
+ "sn_transaction",
+ "tokio",
+]
+
+[[package]]
 name = "sn_merkle"
 version = "0.1.0"
 dependencies = [
@@ -1877,7 +1891,9 @@ dependencies = [
  "slog-async",
  "slog-term",
  "sn_cryptography",
+ "sn_mempool",
  "sn_proto",
+ "sn_server",
  "sn_transaction",
  "tokio",
  "tokio-rustls",
@@ -1898,6 +1914,39 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-build",
+]
+
+[[package]]
+name = "sn_server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bincode",
+ "env_logger",
+ "futures",
+ "hex",
+ "log",
+ "native-tls",
+ "openssl",
+ "pem 2.0.1",
+ "rand 0.8.5",
+ "rcgen",
+ "rustls",
+ "serde",
+ "slog",
+ "slog-async",
+ "slog-term",
+ "sn_cryptography",
+ "sn_mempool",
+ "sn_proto",
+ "sn_transaction",
+ "tokio",
+ "tokio-rustls",
+ "tokio-stream",
+ "tonic",
+ "url",
+ "webpki",
+ "webpki-roots",
 ]
 
 [[package]]
