@@ -8,6 +8,8 @@ service Node {
 
 	rpc HandleTransaction(Transaction) returns (Confirmed);
 
+	rpc HandleTransactionsBatch(TransactionsBatch) returns (Confirmed);
+
 }
 
 message Block {
@@ -65,6 +67,12 @@ message Transaction {
 	repeated TransactionInput msg_inputs = 2;
 
 	repeated TransactionOutput msg_outputs = 3;
+
+}
+
+message TransactionsBatch {
+
+    repeated Transaction transactions = 1;
 
 }
 

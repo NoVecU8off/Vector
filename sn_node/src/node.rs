@@ -1,17 +1,20 @@
-use std::{collections::{HashMap}, sync::{Arc}, time::{Duration}, any::{Any}};
-use tonic::{transport::{Server, Channel, ClientTlsConfig}, Status, Request, Response};
-use tonic::transport::ServerTlsConfig;
-use tonic::transport::Identity;
-use tonic::transport::Certificate;
-use slog::{o, Drain, Logger, info, error};
-use tokio::sync::{Mutex, RwLock};
 use sn_proto::messages::*;
 use sn_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use sn_transaction::transaction::*;
-use anyhow::{Context, Result};
-use std::net::SocketAddr;
 use sn_mempool::mempool::*;
 use sn_server::server::*;
+use std::{collections::{HashMap}, sync::{Arc}, time::{Duration}};
+use std::net::SocketAddr;
+use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
+use tokio::sync::{Mutex, RwLock};
+use slog::{o, Drain, Logger, info, error};
+use anyhow::{Context, Result};
+
+#[derive(Clone)]
+pub enum Message {
+    Transaction(Transaction),
+    TransactionBatch(TransactionsBatch),
+}
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -60,12 +63,37 @@ impl Node for NodeService {
             info!(self.logger, "\n{}: received transaction: {}", self.server_config.cfg_addr, hash);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                if let Err(_err) = self_clone.broadcast(Box::new(tx_clone)).await {
+                if let Err(_err) = self_clone.collect_and_broadcast_transactions(Message::Transaction(tx_clone)).await {
                 }
             });
         }
         Ok(Response::new(Confirmed {}))
     }
+    
+    async fn handle_transactions_batch(
+        &self,
+        request: Request<TransactionsBatch>,
+    ) -> Result<Response<Confirmed>, Status> {
+        let request_inner = request.get_ref().clone();
+        let txb = request_inner;
+        let txb_clone = txb.clone();
+        let hashes = hash_transactions_batch(&txb).await;
+        let hashes_str = hashes
+            .into_iter()
+            .map(|hash| hex::encode(hash))
+            .collect::<Vec<_>>()
+            .join(", ");
+        
+        if self.mempool.add_batch(txb).await {
+            info!(self.logger, "\n{}: received transactions: {}", self.server_config.cfg_addr, hashes_str);
+            let self_clone = self.self_ref.as_ref().unwrap().clone();
+            tokio::spawn(async move {
+                if let Err(_err) = self_clone.collect_and_broadcast_transactions(Message::TransactionBatch(txb_clone)).await {
+                }
+            });
+        }
+        Ok(Response::new(Confirmed {}))
+    }    
 }
 
 impl NodeService {
@@ -145,27 +173,6 @@ impl NodeService {
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
     
-    pub async fn broadcast(&self, msg: Box<dyn Any + Send + Sync>) -> Result<()> {
-        let peers = self.peer_lock.read().await;
-        for (addr, (peer_client, _)) in peers.iter() {
-            if let Some(tx) = msg.downcast_ref::<Transaction>() {
-                let peer_client_clone = Arc::clone(peer_client);
-                let mut peer_client_lock = peer_client_clone.lock().await;
-                let mut req = Request::new(tx.clone());
-                req.metadata_mut().insert("peer", addr.parse().unwrap());
-                if addr != &self.server_config.cfg_addr {
-                    if let Err(err) = peer_client_lock.handle_transaction(req).await {
-                        error!(self.logger, "Failed to broadcast transaction {} to {}: {:?}", hex::encode(hash_transaction(tx).await), addr, err);
-                        return Err(err.into());
-                    } else {
-                        info!(self.logger, "\n{}: broadcasted transaction \n {} \nto \n {}", self.server_config.cfg_addr, hex::encode(hash_transaction(tx).await), addr);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-    
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
@@ -183,18 +190,6 @@ impl NodeService {
     pub async fn get_peer_list(&self) -> Vec<String> {
         let peers = self.peer_lock.read().await;
         peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
-    }
-    
-    pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {
-        for addr in addrs {
-            if !self.can_connect_with(&addr).await {
-                continue;
-            }
-            let (c, v) = self.dial_remote_node(&addr).await?;
-            self.add_peer(c, v).await;
-            info!(self.logger, "\n{}: bootstrapped node: {}", self.server_config.cfg_addr, addr);
-        }
-        Ok(())
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
@@ -227,17 +222,135 @@ impl NodeService {
         }
     }
 
+    pub async fn broadcast_batch(&self, messages: Vec<Message>) -> Result<()> {
+        let peers_data = {
+            let peers = self.peer_lock.read().await;
+            peers
+                .iter()
+                .map(|(addr, (peer_client, _))| (addr.clone(), Arc::clone(peer_client)))
+                .collect::<Vec<_>>()
+        };
+        let mut tasks = Vec::new();
+        for (addr, peer_client) in peers_data {
+            let messages_clone = messages.clone();
+            let self_clone = self.clone();
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                for msg in messages_clone {
+                    match msg {
+                        Message::Transaction(tx) => {
+                            let tx_clone = tx.clone();
+                            let mut req = Request::new(tx_clone.clone());
+                            req.metadata_mut().insert("peer", addr.parse().unwrap());
+                            if addr != self_clone.server_config.cfg_addr {
+                                if let Err(err) = peer_client_lock.handle_transaction(req).await {
+                                    error!(
+                                        self_clone.logger,
+                                        "Failed to broadcast transaction {} to {}: {:?}",
+                                        hex::encode(hash_transaction(&tx_clone).await),
+                                        addr,
+                                        err
+                                    );
+                                } else {
+                                    info!(
+                                        self_clone.logger,
+                                        "\n{}: broadcasted transaction \n {} \nto \n {}",
+                                        self_clone.server_config.cfg_addr,
+                                        hex::encode(hash_transaction(&tx_clone.clone()).await),
+                                        addr
+                                    );
+                                }
+                            }
+                        }
+                        Message::TransactionBatch(txb) => {
+                            let txb_clone = txb.clone();
+                            let mut req = Request::new(txb_clone.clone());
+                            req.metadata_mut().insert("peer", addr.parse().unwrap());
+                            if addr != self_clone.server_config.cfg_addr {
+                                if let Err(err) = peer_client_lock.handle_transactions_batch(req).await {
+                                    error!(
+                                        self_clone.logger,
+                                        "Failed to broadcast transactions batch to {}: {:?}",
+                                        addr,
+                                        err
+                                    );
+                                } else {
+                                    info!(
+                                        self_clone.logger,
+                                        "\n{}: broadcasted transactions batch to \n {}",
+                                        self_clone.server_config.cfg_addr,
+                                        addr
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        for task in tasks {
+            task.await?;
+        }
+        Ok(())
+    }
+
+    pub async fn collect_and_broadcast_transactions(
+        &self,
+        message: Message,
+    ) -> Result<()> {
+        match message {
+            Message::Transaction(tx) => {
+                self.broadcast_batch(vec![Message::Transaction(tx)]).await
+            }
+            Message::TransactionBatch(txb) => {
+                self.broadcast_batch(vec![Message::TransactionBatch(txb)]).await
+            }
+        }
+    }
+    
+    pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {
+        let mut tasks = Vec::new();
+        for addr in addrs {
+            if !self.can_connect_with(&addr).await {
+                continue;
+            }
+            let node_service_clone = self.clone();
+            let addr_clone = addr.clone();
+            let task = tokio::spawn(async move {
+                match node_service_clone.dial_remote_node(&addr_clone).await {
+                    Ok((c, v)) => {
+                        node_service_clone.add_peer(c, v).await;
+                        info!(node_service_clone.logger, "\n{}: bootstrapped node: {}", node_service_clone.server_config.cfg_addr, addr_clone);
+                    }
+                    Err(e) => {
+                        error!(node_service_clone.logger, "Error dialing remote node {}: {:?}", addr_clone, e);
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        for task in tasks {
+            task.await?;
+        }
+        Ok(())
+    }
+
     pub async fn can_connect_with(&self, addr: &str) -> bool {
         if self.server_config.cfg_addr == addr {
             return false;
         }
         let connected_peers = self.get_peer_list().await;
-        for connected_addr in connected_peers {
-            if addr == connected_addr {
-                return false;
-            }
-        }
-        true
+        let addr_owned = addr.to_owned();
+        let check_tasks: Vec<_> = connected_peers
+            .into_iter()
+            .map(|connected_addr| {
+                let addr_clone = addr_owned.clone();
+                tokio::spawn(async move { addr_clone == connected_addr })
+            })
+            .collect();
+        let results = futures::future::join_all(check_tasks).await;
+        !results.into_iter().any(|res| res.unwrap_or(false))
     }
 }
 

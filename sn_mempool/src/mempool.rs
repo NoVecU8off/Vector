@@ -2,7 +2,7 @@ use hex::encode;
 use slog::{o, Logger, info, Drain};
 use tokio::sync::{RwLock};
 use std::collections::HashMap;
-use sn_proto::messages::Transaction;
+use sn_proto::messages::{Transaction, TransactionsBatch};
 use sn_transaction::transaction::hash_transaction;
 
 pub struct Mempool {
@@ -53,6 +53,16 @@ impl Mempool {
         lock.insert(hash.clone(), tx);
         info!(self.logger, "\nTransaction added to mempool: {}", hash);
         true
+    }
+
+    pub async fn add_batch(&self, txb: TransactionsBatch) -> bool {
+        let mut added_any = false;
+        for tx in txb.transactions.into_iter() {
+            if self.add(tx).await {
+                added_any = true;
+            }
+        }
+        added_any
     }
 }
 
