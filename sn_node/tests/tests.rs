@@ -1,6 +1,5 @@
 use sn_node::node::*;
 use tokio::runtime::Runtime;
-use tokio::time::{sleep, Duration};
 use sn_cryptography::cryptography::Keypair;
 use sn_proto::messages::{Transaction, TransactionInput, TransactionOutput};
 use tonic::codegen::Arc;
@@ -68,9 +67,6 @@ fn test_start_node_and_make_node_client_pass() {
         node_service.start(Vec::new()).await.unwrap();
     });
 
-    // Give the NodeService some time to start.
-    rt.block_on(async { sleep(Duration::from_secs(2)).await });
-
     // Test make_node_client().
     let result = rt.block_on(async { make_node_client(&addr).await });
 
@@ -100,9 +96,6 @@ fn test_start_node_and_make_node_client_stage_2_pass() {
         node_service.start(Vec::new()).await.unwrap();
     });
 
-    // Give the NodeService some time to start.
-    rt.block_on(async { sleep(Duration::from_secs(2)).await });
-
     let server_config_1 = rt.block_on(async { ServerConfig::default_b().await });
     let mut node_service_1 = NodeService::new(server_config_1);
     let addr_1 = &node_service_1.clone().server_config.cfg_addr;
@@ -111,9 +104,6 @@ fn test_start_node_and_make_node_client_stage_2_pass() {
     rt.spawn(async move {
         node_service_1.start(Vec::new()).await.unwrap();
     });
-
-    // Give the NodeService some time to start.
-    rt.block_on(async { sleep(Duration::from_secs(2)).await });
 
     // Test make_node_client().
     let result = rt.block_on(async { node_service_clone.dial_remote_node(&addr_1).await });
@@ -147,12 +137,53 @@ fn test_two_servers_and_two_clients_pass() {
         node_service2.start(Vec::new()).await.unwrap();
     });
 
-    // Give both NodeService instances some time to start.
-    rt.block_on(async { sleep(Duration::from_secs(2)).await });
-
     // Test make_node_client() for both server addresses.
     let result1 = rt.block_on(async { make_node_client(&addr1).await });
     let result2 = rt.block_on(async { make_node_client(&addr2).await });
+
+    match result1 {
+        Ok(_client) => {
+            println!("Successfully created client1 for address: {}", addr1);
+            assert!(true);
+        },
+        Err(e) => {
+            eprintln!("Error creating client1: {:?}", e);
+            assert!(false);
+        },
+    }
+
+    match result2 {
+        Ok(_client) => {
+            println!("Successfully created client2 for address: {}", addr2);
+            assert!(true);
+        },
+        Err(e) => {
+            eprintln!("Error creating client2: {:?}", e);
+            assert!(false);
+        },
+    }
+}
+
+#[tokio::test]
+async fn test_two_servers_and_two_clients_pass_async() {
+    // Create new ServerConfig and NodeService instances for two nodes.
+    let server_config1 = ServerConfig::default().await;
+    let server_config2 = ServerConfig::default_b().await;
+    let mut node_service1 = NodeService::new(server_config1);
+    let mut node_service2 = NodeService::new(server_config2);
+    let addr1 = &node_service1.clone().server_config.cfg_addr;
+    let addr2 = &node_service2.clone().server_config.cfg_addr;
+
+    // Start both NodeService instances.
+    tokio::spawn(async move {
+        node_service1.start(Vec::new()).await.unwrap();
+    });
+    tokio::spawn(async move {
+        node_service2.start(Vec::new()).await.unwrap();
+    });
+
+    let result1 = make_node_client(&addr1).await;
+    let result2 = make_node_client(&addr2).await;
 
     match result1 {
         Ok(_client) => {
@@ -203,8 +234,9 @@ fn test_broadcast_pass() {
         node_service_1_clone_2.add_peer(client, version).await;
     });
     let random_tx = create_random_transaction();
+    let message = Message::Transaction(random_tx.clone());
     rt.block_on(async move {
-        node_service_1_clone_3.broadcast(Box::new(random_tx)).await.unwrap();
+        node_service_1_clone_3.collect_and_broadcast_transactions(message).await.unwrap();
     });
     rt.shutdown_background();
 }
