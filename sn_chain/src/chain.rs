@@ -195,9 +195,7 @@ impl Chain {
         Ok(())
     }
     
-    // Add a new function to get the keypair for block validation
     async fn get_keypair_for_block(&self, incoming_block: &Block) -> Result<Vec<Keypair>> {
-        // Replace this with the appropriate logic for getting the correct keypair(s) for the block
         let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
             .map_err(|_| "Invalid public key in block").unwrap();
         let keypair = Keypair {

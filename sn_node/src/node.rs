@@ -57,13 +57,12 @@ impl Node for NodeService {
     ) -> Result<Response<Confirmed>, Status> {
         let request_inner = request.get_ref().clone();
         let tx = request_inner;
-        let tx_clone = tx.clone();
         let hash = hex::encode(hash_transaction(&tx).await);
-        if self.mempool.add(tx).await {
+        if self.mempool.add(tx.clone()).await {
             info!(self.logger, "\n{}: received transaction: {}", self.server_config.cfg_addr, hash);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                if let Err(_err) = self_clone.collect_and_broadcast_transactions(Message::Transaction(tx_clone)).await {
+                if let Err(_err) = self_clone.collect_and_broadcast_transactions(vec![tx]).await {
                 }
             });
         }
@@ -76,24 +75,24 @@ impl Node for NodeService {
     ) -> Result<Response<Confirmed>, Status> {
         let request_inner = request.get_ref().clone();
         let txb = request_inner;
-        let txb_clone = txb.clone();
+        let transactions = txb.transactions.clone();
         let hashes = hash_transactions_batch(&txb).await;
         let hashes_str = hashes
             .into_iter()
             .map(|hash| hex::encode(hash))
             .collect::<Vec<_>>()
             .join(", ");
-        
-        if self.mempool.add_batch(txb).await {
+        if self.mempool.add_batch(txb.clone()).await {
             info!(self.logger, "\n{}: received transactions: {}", self.server_config.cfg_addr, hashes_str);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
             tokio::spawn(async move {
-                if let Err(_err) = self_clone.collect_and_broadcast_transactions(Message::TransactionBatch(txb_clone)).await {
+                if let Err(_err) = self_clone.collect_and_broadcast_transactions(transactions).await {
                 }
             });
         }
         Ok(Response::new(Confirmed {}))
-    }    
+    }
+      
 }
 
 impl NodeService {
@@ -114,15 +113,15 @@ impl NodeService {
         }
     }
 
-    pub async fn start(&mut self, bootstrap_nodes: Vec<String>) -> Result<()> {
+    pub async fn start(&mut self, bootstraped_nodes: Vec<String>) -> Result<()> {
         let node_service = self.clone();
         let addr = format!("{}", self.server_config.cfg_addr)
             .parse()
             .unwrap();
         info!(self.logger, "\nNodeServer {} starting listening", self.server_config.cfg_addr);
         self.setup_server(node_service, addr).await?;
-        if !bootstrap_nodes.is_empty() {
-            self.bootstrap(bootstrap_nodes).await?;
+        if !bootstraped_nodes.is_empty() {
+            self.bootstrap(bootstraped_nodes).await?;
         }
         self.start_validator_tick().await;
         Ok(())
@@ -146,11 +145,11 @@ impl NodeService {
             })?)
     }
     
-    pub async fn bootstrap(&self, bootstrap_nodes: Vec<String>) -> Result<()> {
+    pub async fn bootstrap(&self, unbootstraped_nodes: Vec<String>) -> Result<()> {
         let node_clone = self.clone();
-        info!(self.logger, "\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, bootstrap_nodes);
+        info!(self.logger, "\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, unbootstraped_nodes);
         tokio::spawn(async move {
-            if let Err(e) = node_clone.bootstrap_network(bootstrap_nodes).await {
+            if let Err(e) = node_clone.bootstrap_network(unbootstraped_nodes).await {
                 error!(node_clone.logger, "Error bootstrapping network: {:?}", e);
             }
         });
@@ -297,16 +296,14 @@ impl NodeService {
 
     pub async fn collect_and_broadcast_transactions(
         &self,
-        message: Message,
+        transactions: Vec<Transaction>,
     ) -> Result<()> {
-        match message {
-            Message::Transaction(tx) => {
-                self.broadcast_batch(vec![Message::Transaction(tx)]).await
-            }
-            Message::TransactionBatch(txb) => {
-                self.broadcast_batch(vec![Message::TransactionBatch(txb)]).await
-            }
-        }
+        let message = if transactions.len() == 1 {
+            Message::Transaction(transactions[0].clone())
+        } else {
+            Message::TransactionBatch(TransactionsBatch { transactions })
+        };
+        self.broadcast_batch(vec![message]).await
     }
     
     pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {

@@ -228,15 +228,18 @@ fn test_broadcast_pass() {
     });
     rt.block_on(async move {
         let (client, version) = node_service_1_clone_2
-                .dial_remote_node(&node_service_2_clone_2.server_config.cfg_addr)
-                .await
-                .unwrap();
+            .dial_remote_node(&node_service_2_clone_2.server_config.cfg_addr)
+            .await
+            .unwrap();
         node_service_1_clone_2.add_peer(client, version).await;
     });
-    let random_tx = create_random_transaction();
-    let message = Message::Transaction(random_tx.clone());
+    let random_tx1 = create_random_transaction();
+    let random_tx2: Transaction = create_random_transaction();
     rt.block_on(async move {
-        node_service_1_clone_3.collect_and_broadcast_transactions(message).await.unwrap();
+        node_service_1_clone_3
+            .collect_and_broadcast_transactions(vec![random_tx1, random_tx2])
+            .await
+            .unwrap();
     });
     rt.shutdown_background();
 }
