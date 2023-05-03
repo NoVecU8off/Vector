@@ -12,7 +12,6 @@ use anyhow::{Context, Result};
 
 #[derive(Clone)]
 pub enum Message {
-    Transaction(Transaction),
     TransactionBatch(TransactionsBatch),
 }
 
@@ -50,24 +49,6 @@ impl Node for NodeService {
             }
         }
     }
-
-    async fn handle_transaction(
-        &self,
-        request: Request<Transaction>,
-    ) -> Result<Response<Confirmed>, Status> {
-        let request_inner = request.get_ref().clone();
-        let tx = request_inner;
-        let hash = hex::encode(hash_transaction(&tx).await);
-        if self.mempool.add(tx.clone()).await {
-            info!(self.logger, "\n{}: received transaction: {}", self.server_config.cfg_addr, hash);
-            let self_clone = self.self_ref.as_ref().unwrap().clone();
-            tokio::spawn(async move {
-                if let Err(_err) = self_clone.collect_and_broadcast_transactions(vec![tx]).await {
-                }
-            });
-        }
-        Ok(Response::new(Confirmed {}))
-    }
     
     async fn handle_transactions_batch(
         &self,
@@ -92,7 +73,6 @@ impl Node for NodeService {
         }
         Ok(Response::new(Confirmed {}))
     }
-      
 }
 
 impl NodeService {
@@ -221,7 +201,7 @@ impl NodeService {
         }
     }
 
-    pub async fn broadcast_batch(&self, messages: Vec<Message>) -> Result<()> {
+    pub async fn broadcast_batch(&self, transactions_batches: Vec<TransactionsBatch>) -> Result<()> {
         let peers_data = {
             let peers = self.peer_lock.read().await;
             peers
@@ -231,57 +211,29 @@ impl NodeService {
         };
         let mut tasks = Vec::new();
         for (addr, peer_client) in peers_data {
-            let messages_clone = messages.clone();
+            let transactions_batches_clone = transactions_batches.clone();
             let self_clone = self.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
-                for msg in messages_clone {
-                    match msg {
-                        Message::Transaction(tx) => {
-                            let tx_clone = tx.clone();
-                            let mut req = Request::new(tx_clone.clone());
-                            req.metadata_mut().insert("peer", addr.parse().unwrap());
-                            if addr != self_clone.server_config.cfg_addr {
-                                if let Err(err) = peer_client_lock.handle_transaction(req).await {
-                                    error!(
-                                        self_clone.logger,
-                                        "Failed to broadcast transaction {} to {}: {:?}",
-                                        hex::encode(hash_transaction(&tx_clone).await),
-                                        addr,
-                                        err
-                                    );
-                                } else {
-                                    info!(
-                                        self_clone.logger,
-                                        "\n{}: broadcasted transaction \n {} \nto \n {}",
-                                        self_clone.server_config.cfg_addr,
-                                        hex::encode(hash_transaction(&tx_clone.clone()).await),
-                                        addr
-                                    );
-                                }
-                            }
-                        }
-                        Message::TransactionBatch(txb) => {
-                            let txb_clone = txb.clone();
-                            let mut req = Request::new(txb_clone.clone());
-                            req.metadata_mut().insert("peer", addr.parse().unwrap());
-                            if addr != self_clone.server_config.cfg_addr {
-                                if let Err(err) = peer_client_lock.handle_transactions_batch(req).await {
-                                    error!(
-                                        self_clone.logger,
-                                        "Failed to broadcast transactions batch to {}: {:?}",
-                                        addr,
-                                        err
-                                    );
-                                } else {
-                                    info!(
-                                        self_clone.logger,
-                                        "\n{}: broadcasted transactions batch to \n {}",
-                                        self_clone.server_config.cfg_addr,
-                                        addr
-                                    );
-                                }
-                            }
+                for txb in transactions_batches_clone {
+                    let txb_clone = txb.clone();
+                    let mut req = Request::new(txb_clone.clone());
+                    req.metadata_mut().insert("peer", addr.parse().unwrap());
+                    if addr != self_clone.server_config.cfg_addr {
+                        if let Err(err) = peer_client_lock.handle_transactions_batch(req).await {
+                            error!(
+                                self_clone.logger,
+                                "Failed to broadcast transactions batch to {}: {:?}",
+                                addr,
+                                err
+                            );
+                        } else {
+                            info!(
+                                self_clone.logger,
+                                "\n{}: broadcasted transactions batch to \n {}",
+                                self_clone.server_config.cfg_addr,
+                                addr
+                            );
                         }
                     }
                 }
@@ -292,18 +244,14 @@ impl NodeService {
             task.await?;
         }
         Ok(())
-    }
+    }    
 
     pub async fn collect_and_broadcast_transactions(
         &self,
         transactions: Vec<Transaction>,
     ) -> Result<()> {
-        let message = if transactions.len() == 1 {
-            Message::Transaction(transactions[0].clone())
-        } else {
-            Message::TransactionBatch(TransactionsBatch { transactions })
-        };
-        self.broadcast_batch(vec![message]).await
+        let transactions_batch = TransactionsBatch { transactions };
+        self.broadcast_batch(vec![transactions_batch]).await
     }
     
     pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {

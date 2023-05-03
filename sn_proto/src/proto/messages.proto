@@ -6,8 +6,6 @@ service Node {
 
 	rpc Handshake(Version) returns (Version);
 
-	rpc HandleTransaction(Transaction) returns (Confirmed);
-
 	rpc HandleTransactionsBatch(TransactionsBatch) returns (Confirmed);
 
 }
