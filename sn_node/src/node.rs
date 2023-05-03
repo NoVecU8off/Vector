@@ -93,15 +93,15 @@ impl NodeService {
         }
     }
 
-    pub async fn start(&mut self, bootstraped_nodes: Vec<String>) -> Result<()> {
+    pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<()> {
         let node_service = self.clone();
         let addr = format!("{}", self.server_config.cfg_addr)
             .parse()
             .unwrap();
         info!(self.logger, "\nNodeServer {} starting listening", self.server_config.cfg_addr);
         self.setup_server(node_service, addr).await?;
-        if !bootstraped_nodes.is_empty() {
-            self.bootstrap(bootstraped_nodes).await?;
+        if !nodes_to_bootstrap.is_empty() {
+            self.bootstrap(nodes_to_bootstrap).await?;
         }
         self.start_validator_tick().await;
         Ok(())
