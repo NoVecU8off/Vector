@@ -14,9 +14,6 @@ sn_server = { path = "../sn_server", version = "0.1.0"}
 
 hex = "0.4.3"
 futures = "0.3.28"
-slog = "2.7.0"
-slog-term = "2.9.0"
-slog-async = "2.7.0"
 tokio = { version = "1.27.0", features = ["full"] }
 tonic = { version = "0.9.2", features = ["tls", "transport"] }
 anyhow = "1.0.70"
@@ -35,3 +32,4 @@ tokio-rustls = "0.24.0"
 rustls = "0.21.0"
 webpki-roots = "0.23.0"
 env_logger = "0.10.0"
+ed25519-dalek = "1.0.0"

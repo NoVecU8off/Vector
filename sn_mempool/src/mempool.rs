@@ -5,6 +5,8 @@ use std::collections::HashMap;
 use sn_proto::messages::{Transaction, TransactionsBatch};
 use sn_transaction::transaction::hash_transaction;
 
+
+#[derive(Debug)]
 pub struct Mempool {
     pub lock: RwLock<HashMap<String, Transaction>>,
     pub logger: Logger,
