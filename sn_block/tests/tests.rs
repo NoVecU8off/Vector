@@ -12,11 +12,13 @@ mod tests {
                 msg_inputs: vec![],
                 msg_outputs: vec![],
                 msg_version: 1,
+                msg_relative_timestamp: 1,
             },
             Transaction {
                 msg_inputs: vec![],
                 msg_outputs: vec![],
                 msg_version: 1,
+                msg_relative_timestamp: 2,
             },
         ];
     

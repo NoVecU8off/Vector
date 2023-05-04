@@ -15,3 +15,38 @@ network communication.
 Parallelize bootstrapping: In the bootstrap_network method, you can connect to multiple bootstrap nodes concurrently. 
 Instead of connecting to each node sequentially, you could use tokio::spawn or futures::join_all to initiate connections 
 to all bootstrap nodes in parallel. This can improve the speed of bootstrapping your node.
+
+_______________________________________________________________________________________________________________________________
+
+Distributed Hash Table (DHT): You can use a DHT like Kademlia to store information about active nodes in the network. 
+In Kademlia, nodes are assigned a unique identifier based on their IP addresses. When a node wants to discover other 
+nodes, it sends a lookup request to the closest nodes it knows about, which in turn forward the request to their closest 
+nodes. This process continues until the target node is found. By implementing a DHT, your nodes can efficiently find 
+and connect to other nodes in the network without manual input.
+
+Node bootstrap: When a new node joins the network, it needs a way to discover initial peers. You can set up a few well-known, 
+stable bootstrap nodes that new nodes can connect to when they first join the network. These bootstrap nodes can help new 
+nodes find other peers and populate their initial routing tables.
+
+Periodic peer discovery: Nodes should periodically refresh their knowledge of the network by sending out peer discovery 
+requests. This ensures that they stay up-to-date with the active nodes in the network and can adapt to changes in the network 
+topology.
+
+NAT traversal techniques: If your nodes are behind NATs or firewalls, you might need to implement NAT traversal techniques 
+like STUN, TURN, or ICE to help nodes establish direct connections with each other.
+
+Peer exchange (PEX): Once nodes are connected, they can exchange information about other known nodes. This helps them 
+maintain an updated list of active peers and discover new nodes as they join the network.
+
+{{{{{{
+    Choose a DHT library, like rust-libp2p for Rust, that supports Kademlia, and integrate it into your project.
+
+    Set up and maintain a few well-known bootstrap nodes that new nodes can connect to when they first join the network.
+
+    Modify your node's logic to perform periodic peer discovery using the DHT and update its internal list of active nodes.
+
+    Implement NAT traversal techniques, if necessary, to help nodes establish direct connections with each other.
+
+    Modify your gRPC communication protocol to include peer exchange messages so that nodes can share information about other 
+    known nodes with each other.
+}}}}}}

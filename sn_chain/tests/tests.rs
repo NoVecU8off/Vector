@@ -60,6 +60,7 @@ async fn test_add_block() {
         msg_version: 1,
         msg_inputs: vec![unsigned_input],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 123,
     };
     let signature = sign_transaction(&keypair, &new_transaction).await;
     input.msg_signature = signature.to_vec();
@@ -120,6 +121,7 @@ async fn test_validate_block_another() {
         msg_version: 1,
         msg_inputs: vec![],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 125,
     };
     let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
@@ -203,6 +205,7 @@ async fn test_add_block_two() {
         msg_version: 1,
         msg_inputs: vec![unsigned_input],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 12,
     };
 
     let signature = sign_transaction(&keypair, &new_transaction).await;

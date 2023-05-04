@@ -19,6 +19,7 @@ fn sample_transactions() -> Vec<Transaction> {
                     msg_address: vec![10, 11, 12],
                 },
             ],
+            msg_relative_timestamp: 583,
         },
         Transaction {
             msg_version: 2,
@@ -36,6 +37,7 @@ fn sample_transactions() -> Vec<Transaction> {
                     msg_address: vec![101, 11, 12],
                 },
             ],
+            msg_relative_timestamp: 8646,
         },
     ]
 }
@@ -93,6 +95,7 @@ async fn test_add_leaf() {
                 msg_address: vec![101, 11, 12],
             },
         ],
+        msg_relative_timestamp: 327,
     };
 
     tree.add_leaf(new_transaction.clone());

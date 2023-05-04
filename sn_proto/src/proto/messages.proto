@@ -6,8 +6,6 @@ service Node {
 
 	rpc Handshake(Version) returns (Version);
 
-	rpc HandleTransaction(Transaction) returns (Confirmed);
-
 	rpc HandleTransactionsBatch(TransactionsBatch) returns (Confirmed);
 
 }
@@ -62,12 +60,14 @@ message TransactionOutput {
 
 message Transaction {
 
-	int32 msg_version = 1;
+    int32 msg_version = 1;
 
-	repeated TransactionInput msg_inputs = 2;
+    repeated TransactionInput msg_inputs = 2;
 
-	repeated TransactionOutput msg_outputs = 3;
+    repeated TransactionOutput msg_outputs = 3;
 
+    int64 msg_relative_timestamp = 4;
+	
 }
 
 message TransactionsBatch {

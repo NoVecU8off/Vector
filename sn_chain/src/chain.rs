@@ -195,9 +195,7 @@ impl Chain {
         Ok(())
     }
     
-    // Add a new function to get the keypair for block validation
     async fn get_keypair_for_block(&self, incoming_block: &Block) -> Result<Vec<Keypair>> {
-        // Replace this with the appropriate logic for getting the correct keypair(s) for the block
         let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
             .map_err(|_| "Invalid public key in block").unwrap();
         let keypair = Keypair {
@@ -279,6 +277,7 @@ pub async fn create_genesis_block() -> Result<Block> {
         msg_version: 1,
         msg_inputs: vec![],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 0,
     };
     let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
@@ -299,3 +298,4 @@ pub async fn create_genesis_block() -> Result<Block> {
     block.msg_signature = signature.to_vec();
     Ok(block)
 }
+
