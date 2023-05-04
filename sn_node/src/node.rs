@@ -22,6 +22,13 @@ pub struct NodeService {
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
     pub mempool: Arc<Mempool>,
     pub self_ref: Option<Arc<NodeService>>,
+    pub poh_sequence: Arc<Mutex<Vec<PoHEntry>>>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PoHEntry {
+    pub relative_timestamp: i64,
+    pub transaction_hash: Vec<u8>,
 }
 
 #[tonic::async_trait]
@@ -59,17 +66,21 @@ impl Node for NodeService {
         let transactions = txb.transactions.clone();
         let hashes = hash_transactions_batch(&txb).await;
         let hashes_str = hashes
-            .into_iter()
+            .iter()
             .map(|hash| hex::encode(hash))
             .collect::<Vec<_>>()
             .join(", ");
         if self.mempool.add_batch(txb.clone()).await {
             info!(self.logger, "\n{}: received transactions: {}", self.server_config.cfg_addr, hashes_str);
             let self_clone = self.self_ref.as_ref().unwrap().clone();
+            let transactions_clone = transactions.clone();
             tokio::spawn(async move {
-                if let Err(_err) = self_clone.collect_and_broadcast_transactions(transactions).await {
+                if let Err(_err) = self_clone.collect_and_broadcast_transactions(transactions_clone).await {
                 }
             });
+            for hash in hashes {
+                self.generate_poh_entry(Some(hash)).await;
+            }
         }
         Ok(Response::new(Confirmed {}))
     }
@@ -90,6 +101,7 @@ impl NodeService {
             peer_lock: Arc::new(RwLock::new(HashMap::new())),
             mempool: Arc::new(Mempool::new()),
             self_ref: None,
+            poh_sequence: Arc::new(Mutex::new(Vec::<PoHEntry>::new())), // Add this field
         }
     }
 
@@ -103,6 +115,7 @@ impl NodeService {
         if !nodes_to_bootstrap.is_empty() {
             self.bootstrap(nodes_to_bootstrap).await?;
         }
+        self.start_poh_tick().await;
         self.start_validator_tick().await;
         Ok(())
     }
@@ -136,13 +149,52 @@ impl NodeService {
         Ok(())
     }
     
+    pub async fn start_poh_tick(&self) {
+        let node_clone = self.clone();
+        tokio::spawn(async move {
+            loop {
+                node_clone.generate_poh_entry(None).await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        });
+    }
+
     pub async fn start_validator_tick(&self) {
         let node_clone = self.clone();
         tokio::spawn(async move {
             loop {
-                node_clone.validator_tick().await;
+                let num_transactions = node_clone.mempool.len().await;
+                if num_transactions >= 100 {
+                    node_clone.validator_tick().await;
+                }
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
         });
+    }
+
+    pub async fn generate_poh_entry(&self, transaction_hash: Option<Vec<u8>>) {
+        let mut poh_sequence = self.poh_sequence.lock().await;
+        
+        let relative_timestamp = match poh_sequence.last() {
+            Some(last_entry) => last_entry.relative_timestamp + 1,
+            None => 0,
+        };
+    
+        let entry_hash = match transaction_hash {
+            Some(hash) => {
+                let prev_hash = poh_sequence.last().unwrap().transaction_hash.clone();
+                let mut combined_hash = prev_hash;
+                combined_hash.extend(hash);
+                hash_poh_entering_transaction(&combined_hash).await
+            }
+            None => Vec::new(),
+        };
+    
+        let entry = PoHEntry {
+            relative_timestamp,
+            transaction_hash: entry_hash,
+        };
+        poh_sequence.push(entry);
     }
     
     pub async fn validator_tick(&self) {

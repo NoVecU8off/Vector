@@ -277,6 +277,7 @@ pub async fn create_genesis_block() -> Result<Block> {
         msg_version: 1,
         msg_inputs: vec![],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 0,
     };
     let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
@@ -297,3 +298,4 @@ pub async fn create_genesis_block() -> Result<Block> {
     block.msg_signature = signature.to_vec();
     Ok(block)
 }
+

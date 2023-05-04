@@ -21,6 +21,7 @@ pub fn create_random_transaction() -> Transaction {
         msg_version: rand::random::<i32>(),
         msg_inputs: vec![input],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 5638,
     }
 }
 

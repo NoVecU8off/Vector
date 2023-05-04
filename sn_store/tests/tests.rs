@@ -23,6 +23,7 @@ pub fn create_sample_transaction() -> Transaction {
         msg_version: rand::random::<i32>(),
         msg_inputs: vec![input],
         msg_outputs: vec![output],
+        msg_relative_timestamp: 21,
     }
 }
 
@@ -32,11 +33,13 @@ async fn create_sample_block() -> Block {
             msg_inputs: vec![],
             msg_outputs: vec![],
             msg_version: 1,
+            msg_relative_timestamp: 221,
         },
         Transaction {
             msg_inputs: vec![],
             msg_outputs: vec![],
             msg_version: 1,
+            msg_relative_timestamp: 21,
         },
     ];
 
