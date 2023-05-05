@@ -77,6 +77,14 @@ impl Chain {
         self.headers.headers_list_len()
     }
 
+    pub async fn validate_block(&self, incoming_block: &Block) -> Result<()> {
+        self.check_block_signature(incoming_block).await?;
+        self.check_previous_block_hash(incoming_block).await?;
+        let keypair = self.get_keypair_for_block(incoming_block).await?;
+        self.check_transactions_in_block(incoming_block, &keypair)?;
+        Ok(())
+    }
+
     pub async fn add_block(&mut self, block: Block) -> Result<()> {
         self.validate_block(&block).await.unwrap();
         let header = block
@@ -205,14 +213,6 @@ impl Chain {
             public: public_key,
         };
         Ok(vec![keypair])
-    }
-
-    pub async fn validate_block(&self, incoming_block: &Block) -> Result<()> {
-        self.check_block_signature(incoming_block).await?;
-        self.check_previous_block_hash(incoming_block).await?;
-        let keypair = self.get_keypair_for_block(incoming_block).await?;
-        self.check_transactions_in_block(incoming_block, &keypair)?;
-        Ok(())
     }
 
     fn check_transactions_in_block(&self, incoming_block: &Block, keypair: &[Keypair]) -> Result<()> {

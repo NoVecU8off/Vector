@@ -1920,6 +1920,8 @@ dependencies = [
  "rcgen",
  "rustls",
  "serde",
+ "sha3",
+ "sn_chain",
  "sn_cryptography",
  "sn_mempool",
  "sn_proto",
