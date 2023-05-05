@@ -1,5 +1,5 @@
 use sn_cryptography::cryptography::{Keypair, Signature};
-use sn_proto::messages::{Transaction, TransactionsBatch};
+use sn_proto::messages::{Transaction, TransactionBatch};
 use ed25519_dalek::PublicKey;
 use sha3::{Digest, Sha3_512};
 use prost::Message;
@@ -17,9 +17,9 @@ pub async fn hash_transaction(transaction: &Transaction) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-pub async fn hash_transactions_batch(transactions_batch: &TransactionsBatch) -> Vec<Vec<u8>> {
+pub async fn hash_transactions_batch(transaction_batch: &TransactionBatch) -> Vec<Vec<u8>> {
     let mut hashes = Vec::new();
-    for transaction in transactions_batch.transactions.iter() {
+    for transaction in transaction_batch.transactions.iter() {
         let mut transaction_bytes = Vec::new();
         transaction.encode(&mut transaction_bytes).unwrap();
         let mut hasher = Sha3_512::new();

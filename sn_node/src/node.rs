@@ -13,7 +13,8 @@ use crate::validator::*;
 
 #[derive(Clone)]
 pub enum Message {
-    TransactionBatch(TransactionsBatch),
+    TransactionBatch(TransactionBatch),
+    Vote(Vote),
 }
 
 #[derive(Clone, Debug)]
@@ -52,9 +53,9 @@ impl Node for NodeService {
         }
     }
     
-    async fn handle_transactions_batch(
+    async fn handle_transactions(
         &self,
-        request: Request<TransactionsBatch>,
+        request: Request<TransactionBatch>,
     ) -> Result<Response<Confirmed>, Status> {
         let request_inner = request.get_ref().clone();
         let txb = request_inner;
@@ -83,6 +84,32 @@ impl Node for NodeService {
         }
         Ok(Response::new(Confirmed {}))
     }
+
+    async fn handle_votes(
+        &self,
+        request: Request<VoteBatch>,
+    ) -> Result<Response<Confirmed>, Status> {
+        if let Some(validator) = &self.validator {
+            let vote_batch = request.into_inner();
+            let mut tower = validator.tower.lock().await;
+            for vote in vote_batch.votes {
+                let validator_id = vote.msg_validator_id;
+                let block_id = vote.msg_block_id;
+                let fingerprint = vote.msg_fingerprint;
+                let new_vote = sn_proto::messages::Vote {
+                    msg_validator_id: validator_id,
+                    msg_block_id: block_id,
+                    msg_fingerprint: fingerprint.clone(),
+                };
+                process_vote(&new_vote, &mut *tower);
+                info!("Processed vote from validator {}: block_id={}, fingerprint={:?}", validator_id, block_id, fingerprint);
+            }
+            Ok(Response::new(Confirmed {}))
+        } else {
+            error!("Node is not a validator, cannot handle votes");
+            Err(Status::internal("Node is not a validator, cannot handle votes"))
+        }
+    }
 }
 
 impl NodeService {
@@ -98,10 +125,12 @@ impl NodeService {
         };
         let mut arc_node_service = Arc::new(node_service);
         if arc_node_service.is_validator {
+            let tower = Arc::new(Mutex::new(Tower { locks: HashMap::new() })); // Initialize Tower
             let validator = Validator {
                 validator_id: 0,
                 poh_sequence: Arc::new(Mutex::new(Vec::<PoHEntry>::new())),
                 node_service: Arc::clone(&arc_node_service),
+                tower: Arc::clone(&tower),
             };
             if let Some(node_service_mut) = Arc::get_mut(&mut arc_node_service) {
                 node_service_mut.validator = Some(Arc::new(validator));
@@ -207,7 +236,7 @@ impl NodeService {
         }
     }
 
-    pub async fn broadcast_batch(&self, transactions_batches: Vec<TransactionsBatch>) -> Result<()> {
+    pub async fn broadcast_batch(&self, transaction_batches: Vec<TransactionBatch>) -> Result<()> {
         let peers_data = {
             let peers = self.peer_lock.read().await;
             peers
@@ -217,7 +246,7 @@ impl NodeService {
         };
         let mut tasks = Vec::new();
         for (addr, peer_client) in peers_data {
-            let transactions_batches_clone = transactions_batches.clone();
+            let transactions_batches_clone = transaction_batches.clone();
             let self_clone = self.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
@@ -226,7 +255,7 @@ impl NodeService {
                     let mut req = Request::new(txb_clone.clone());
                     req.metadata_mut().insert("peer", addr.parse().unwrap());
                     if addr != self_clone.server_config.cfg_addr {
-                        if let Err(err) = peer_client_lock.handle_transactions_batch(req).await {
+                        if let Err(err) = peer_client_lock.handle_transactions(req).await {
                             error!(
                                 "Failed to broadcast transactions batch to {}: {:?}",
                                 addr,
@@ -254,8 +283,8 @@ impl NodeService {
         &self,
         transactions: Vec<Transaction>,
     ) -> Result<()> {
-        let transactions_batch = TransactionsBatch { transactions };
-        self.broadcast_batch(vec![transactions_batch]).await
+        let transaction_batch = TransactionBatch { transactions };
+        self.broadcast_batch(vec![transaction_batch]).await
     }
     
     pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {

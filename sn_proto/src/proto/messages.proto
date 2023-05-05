@@ -6,7 +6,9 @@ service Node {
 
 	rpc Handshake(Version) returns (Version);
 
-	rpc HandleTransactionsBatch(TransactionsBatch) returns (Confirmed);
+	rpc HandleTransactions(TransactionBatch) returns (Confirmed);
+
+	rpc HandleVotes(VoteBatch) returns (Confirmed);
 
 }
 
@@ -70,7 +72,7 @@ message Transaction {
 	
 }
 
-message TransactionsBatch {
+message TransactionBatch {
 
     repeated Transaction transactions = 1;
 
@@ -86,4 +88,20 @@ message Version {
 
 	repeated string msg_peer_list = 4;
     
+}
+
+message Vote {
+
+	uint64 msg_validator_id = 1;
+
+    uint64 msg_block_id = 2;
+
+    bytes msg_fingerprint = 3;
+
+}
+
+message VoteBatch {
+
+	repeated Vote votes = 1;
+
 }
