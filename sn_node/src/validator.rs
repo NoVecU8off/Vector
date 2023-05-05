@@ -3,12 +3,12 @@ use sn_transaction::transaction::*;
 use std::time::{Duration};
 use tonic::codegen::Arc;
 use tokio::sync::Mutex;
-use log::{info};
+use log::{info, error};
 use std::collections::HashMap;
 use sha3::{Sha3_512, Digest};
 use sn_cryptography::cryptography::Keypair;
-use sn_cryptography::cryptography::Signature;
 use sn_proto::messages::*;
+use ed25519_dalek::{PublicKey, Verifier, Signature};
 
 #[derive(Clone, Debug)]
 pub struct PoHEntry {
@@ -76,19 +76,83 @@ impl Validator {
         };
         poh_sequence.push(entry);
     }
-}
 
-pub fn process_vote(vote: &Vote, tower: &mut Tower) {
-    // Update the validator's lock in the Tower based on the received vote
-    tower.update_lock(vote);
+    pub async fn propose_block(&self, block_id: u64) {
+        let vote = Vote {
+            msg_validator_id: self.validator_id as u64,
+            msg_block_id: block_id,
+            msg_fingerprint: Self::sign_vote(
+                self.validator_id as u64,
+                block_id,
+                &self.node_service.server_config.cfg_keypair,
+            ),
+        };
+        let mut tower = self.tower.lock().await;
+    
+        self.process_vote(&vote, &mut *tower).await;
+        let vote_batch = VoteBatch { votes: vec![vote] };
+        self.broadcast_vote_batch(&vote_batch).await;
+    }
+    
+    // Call this function when a new block is created by the validator
+    pub async fn on_block_created(&self, block_id: u64) {
+        self.propose_block(block_id).await;
+    }
 
-    // ... Add any other necessary code here to process the vote, for example:
-    // 1. Check if the vote is valid (e.g., the vote is for a block that the local validator is aware of).
-    // 2. If a threshold of votes for a specific block is reached, finalize the block and apply it to the local chain.
-    // 3. If a block is finalized, propagate the finalized block to other nodes in the network.
-    // 4. If the local validator's lock has changed, it should also cast a new vote for the updated lock/block.
+    // Add this to the NodeService struct
+    pub async fn broadcast_vote_batch(&self, vote_batch: &VoteBatch) {
+        let vote_batch = vote_batch.clone();
+        let peers = self.node_service.peer_lock.read().await;
+        for (_, (peer, _)) in peers.iter() {
+            let mut peer = peer.lock().await;
+            let _ = peer.handle_votes(vote_batch.clone()).await;
+        }
+    }
 
-    info!("Processed vote from validator {}: block_id={}", vote.msg_validator_id, vote.msg_block_id);
+    pub fn sign_vote(validator_id: u64, block_id: u64, keypair: &Keypair) -> Vec<u8> {
+        let mut hasher = Sha3_512::new();
+        hasher.update(validator_id.to_le_bytes());
+        hasher.update(block_id.to_le_bytes());
+        let message_hash = hasher.finalize();
+        keypair.sign(&message_hash).to_bytes().to_vec()
+    }
+    
+    pub fn verify_vote(validator_id: u64, block_id: u64, fingerprint: [u8; 64], public_key: &[u8]) -> bool {
+        let mut hasher = Sha3_512::new();
+        hasher.update(validator_id.to_le_bytes());
+        hasher.update(block_id.to_le_bytes());
+        let message_hash = hasher.finalize();
+        let signature = Signature::from_bytes(&fingerprint).unwrap();
+        let public_key = PublicKey::from_bytes(public_key).unwrap();
+        public_key.verify(&message_hash, &signature).is_ok()
+    }
+
+    pub async fn process_vote(&self, vote: &Vote, tower: &mut Tower) {
+        let validator_id = vote.msg_validator_id;
+        let block_id = vote.msg_block_id;
+        let fingerprint = &vote.msg_fingerprint;
+        let all_peers = self.node_service.peer_lock.read().await;
+        if let Some((_, version)) = all_peers.get(&validator_id.to_string()) {
+            let peer_public_key = &version.msg_public_key;
+            let fingerprint_array = match fingerprint.as_slice().try_into() {
+                Ok(array) => array,
+                Err(e) => {
+                    error!("Failed to convert fingerprint Vec<u8> to [u8; 64]: {:?}", e);
+                    return;
+                }
+            };
+            if Self::verify_vote(validator_id, block_id, fingerprint_array, &peer_public_key) {
+                tower.update_lock(vote);
+                info!("Processed vote from validator {}: block_id={}, fingerprint={:?}", validator_id, block_id, fingerprint);
+                let vote_batch = VoteBatch { votes: vec![vote.clone()] };
+                self.broadcast_vote_batch(&vote_batch).await;
+            } else {
+                error!("Failed to verify vote from validator {}: block_id={}, fingerprint={:?}", validator_id, block_id, fingerprint);
+            }
+        } else {
+            error!("Validator {} not found in the peer list", validator_id);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -97,10 +161,9 @@ pub struct Tower {
 }
 
 impl Tower {
-    fn update_lock(&mut self, vote: &Vote) {
+    pub fn update_lock(&mut self, vote: &Vote) {
         let validator_id = vote.msg_validator_id;
         let block_id = vote.msg_block_id;
-
         if let Some(current_lock) = self.locks.get_mut(&validator_id) {
             if *current_lock < block_id {
                 *current_lock = block_id;
@@ -109,21 +172,15 @@ impl Tower {
             self.locks.insert(validator_id, block_id);
         }
     }
+
+    pub fn get_finalized_blocks(&self) -> Vec<u64> {
+        self.locks.iter().filter_map(|(_, &lock_level)| {
+            if lock_level >= self.locks.len() as u64 - 1 {
+                Some(lock_level)
+            } else {
+                None
+            }
+        }).collect()
+    }
 }
 
-fn sign_vote(validator_id: u64, block_id: u64, keypair: &Keypair) -> Vec<u8> {
-    let mut hasher = Sha3_512::new();
-    hasher.update(validator_id.to_le_bytes());
-    hasher.update(block_id.to_le_bytes());
-    let message_hash = hasher.finalize();
-    keypair.sign(&message_hash).to_bytes().to_vec()
-}
-
-fn verify_vote(validator_id: u64, block_id: u64, fingerprint: [u8; 64], keypair: &Keypair) -> bool {
-    let mut hasher = Sha3_512::new();
-    hasher.update(validator_id.to_le_bytes());
-    hasher.update(block_id.to_le_bytes());
-    let message_hash = hasher.finalize();
-    let signature = Signature::from_bytes(fingerprint);
-    keypair.verify(&message_hash, &signature)
-}
