@@ -14,7 +14,7 @@ use crate::validator::*;
 #[derive(Clone)]
 pub enum Message {
     TransactionBatch(TransactionBatch),
-    Vote(Vote),
+    VoteBatch(VoteBatch),
 }
 
 #[derive(Clone, Debug)]
@@ -93,16 +93,7 @@ impl Node for NodeService {
             let vote_batch = request.into_inner();
             let mut tower = validator.tower.lock().await;
             for vote in vote_batch.votes {
-                let validator_id = vote.msg_validator_id;
-                let block_id = vote.msg_block_id;
-                let fingerprint = vote.msg_fingerprint;
-                let new_vote = sn_proto::messages::Vote {
-                    msg_validator_id: validator_id,
-                    msg_block_id: block_id,
-                    msg_fingerprint: fingerprint.clone(),
-                };
-                process_vote(&new_vote, &mut *tower);
-                info!("Processed vote from validator {}: block_id={}, fingerprint={:?}", validator_id, block_id, fingerprint);
+                validator.process_vote(&vote, &mut *tower).await;
             }
             Ok(Response::new(Confirmed {}))
         } else {
@@ -228,8 +219,11 @@ impl NodeService {
     }
 
     pub async fn get_version(&self) -> Version {
+        let keypair = &self.server_config.cfg_keypair;
+        let msg_public_key = keypair.public.to_bytes().to_vec();
         Version {
             msg_version: self.server_config.cfg_version.clone(),
+            msg_public_key,
             msg_height: 0,
             msg_listen_address: self.server_config.cfg_addr.clone(),
             msg_peer_list: self.get_peer_list().await,

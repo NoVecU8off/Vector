@@ -82,11 +82,13 @@ message Version {
 
 	string msg_version = 1;
 
-	int32 msg_height = 2;
+	bytes msg_public_key = 2;
 
-	string msg_listen_address = 3;
+	int32 msg_height = 3;
 
-	repeated string msg_peer_list = 4;
+	string msg_listen_address = 4;
+
+	repeated string msg_peer_list = 5;
     
 }
 
