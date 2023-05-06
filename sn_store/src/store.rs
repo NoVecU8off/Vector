@@ -16,12 +16,12 @@ pub struct UTXO {
     pub spent: bool,
 }
 
-// #[async_trait]
 pub trait UTXOStorer: Send + Sync {
     fn put(&mut self, utxo: UTXO) -> Result<(), Error>;
     fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>, Error>;
 }
 
+#[derive(Debug)]
 pub struct MemoryUTXOStore {
     data: Arc<RwLock<HashMap<String, UTXO>>>,
 }
@@ -50,7 +50,6 @@ impl Default for MemoryUTXOStore {
     }
 }
 
-// #[async_trait]
 impl UTXOStorer for MemoryUTXOStore {
     fn put(&mut self, utxo: UTXO) -> Result<()> {
         let key = format!("{}_{}", utxo.hash, utxo.out_index);
@@ -71,6 +70,7 @@ pub trait TXStorer: Send + Sync {
     async fn get(&self, hash: &str) -> Result<Option<Transaction>, Error>;
 }
 
+#[derive(Debug)]
 pub struct MemoryTXStore {
     lock: Arc<RwLock<HashMap<String, Transaction>>>,
 }
@@ -110,6 +110,7 @@ pub trait BlockStorer: Send + Sync {
     async fn get(&self, hash: &str) -> Result<Option<Block>, Error>;
 }
 
+#[derive(Debug)]
 pub struct MemoryBlockStore {
     blocks: Arc<RwLock<HashMap<String, Block>>>,
 }
