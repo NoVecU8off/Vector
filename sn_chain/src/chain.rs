@@ -11,6 +11,7 @@ use anyhow::{Error, Result};
 use std::sync::{Arc};
 use rayon::prelude::*;
 
+#[derive(Clone)]
 pub struct HeaderList {
     headers: Vec<Header>,
 }
@@ -86,7 +87,6 @@ impl Chain {
     }
 
     pub async fn add_block(&mut self, block: Block) -> Result<()> {
-        self.validate_block(&block).await.unwrap();
         let header = block
             .msg_header
             .as_ref()
@@ -279,7 +279,7 @@ pub async fn create_genesis_block() -> Result<Block> {
         msg_outputs: vec![output],
         msg_relative_timestamp: 0,
     };
-    let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
+    let merkle_tree = MerkleTree::new(&vec![transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let header = Header {
         msg_version: 1,

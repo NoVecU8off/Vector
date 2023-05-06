@@ -70,9 +70,9 @@ async fn test_verify() {
 async fn test_add_leaf() {
     let transactions = sample_transactions();
     let mut tree = if transactions.len() > 1 {
-        MerkleTree::new(&transactions[0..1]).unwrap()
+        MerkleTree::new(&transactions).unwrap()
     } else {
-        MerkleTree::new(&[]).unwrap()
+        MerkleTree::new(&Vec::new()).unwrap()
     };
 
     let original_root = tree.get_root().to_vec();

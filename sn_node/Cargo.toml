@@ -12,6 +12,8 @@ sn_transaction = { path = "../sn_transaction", version = "0.1.0"}
 sn_mempool = { path = "../sn_mempool", version = "0.1.0"}
 sn_server = { path = "../sn_server", version = "0.1.0"}
 sn_chain = { path = "../sn_chain", version = "0.1.0"}
+sn_merkle = { path = "../sn_merkle", version = "0.1.0"}
+sn_block = { path = "../sn_block", version = "0.1.0"}
 
 hex = "0.4.3"
 futures = "0.3.28"

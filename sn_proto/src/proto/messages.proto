@@ -12,6 +12,8 @@ service Node {
 
 }
 
+message Confirmed { }
+
 message Block {
 
 	Header msg_header = 1;
@@ -23,8 +25,6 @@ message Block {
 	bytes msg_signature = 4;
 
 }
-
-message Confirmed { }
 
 message Header {
 
@@ -96,7 +96,7 @@ message Vote {
 
 	uint64 msg_validator_id = 1;
 
-    uint64 msg_block_id = 2;
+    uint64 msg_block_height = 2;
 
     bytes msg_fingerprint = 3;
 

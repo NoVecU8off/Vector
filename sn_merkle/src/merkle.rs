@@ -19,7 +19,7 @@ pub struct TransactionWrapper {
 }
 
 impl MerkleTree {
-    pub fn new(transactions: &[Transaction]) -> Result<MerkleTree> {
+    pub fn new(transactions: &Vec<Transaction>) -> Result<MerkleTree> {
         let leaves: Vec<TransactionWrapper> = compute_hashes(transactions);
         let nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
         let (root, depth) = MerkleTree::build(&nodes).unwrap();  

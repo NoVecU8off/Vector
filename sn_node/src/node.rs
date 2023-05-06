@@ -11,12 +11,6 @@ use log::{info, error};
 use anyhow::{Context, Result};
 use crate::validator::*;
 
-#[derive(Clone)]
-pub enum Message {
-    TransactionBatch(TransactionBatch),
-    VoteBatch(VoteBatch),
-}
-
 #[derive(Clone, Debug)]
 pub struct NodeService {
     pub server_config: ServerConfig,
