@@ -14,7 +14,7 @@ use crate::validator::*;
 #[derive(Clone, Debug)]
 pub struct NodeService {
     pub server_config: ServerConfig,
-    pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
+    pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
     pub mempool: Arc<Mempool>,
     pub is_validator: bool,
     pub validator: Option<Arc<Validator>>,
@@ -35,7 +35,7 @@ impl Node for NodeService {
         match make_node_client(&addr).await {
             Ok(c) => {
                 info!("Created node client successfully");
-                self.add_peer(c, version_clone).await;
+                self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
                 let reply = self.get_version().await;
                 info!("Returning version: {:?}", reply);
                 Ok(Response::new(reply))
@@ -79,22 +79,25 @@ impl Node for NodeService {
         Ok(Response::new(Confirmed {}))
     }
 
-    async fn handle_votes(
-        &self,
-        request: Request<VoteBatch>,
-    ) -> Result<Response<Confirmed>, Status> {
+    async fn handle_agreement(&self, request: Request<HashAgreement>) -> Result<Response<Agreement>, Status> {
+        let hash_agreement = request.into_inner();
+        let hash = hash_agreement.msg_block_hash;
+        let agreement = hash_agreement.msg_agreement;
+        let is_response = hash_agreement.msg_is_responce;
         if let Some(validator) = &self.validator {
-            let vote_batch = request.into_inner();
-            let mut tower = validator.tower.lock().await;
-            for vote in vote_batch.votes {
-                validator.process_vote(&vote, &mut *tower).await;
+            if !is_response {
+                let agreed = validator.compare_block_hashes(&hash).await;
+                if agreed {
+                    let mut agreement_count = validator.agreement_count.lock().await;
+                    *agreement_count += 1;
+                }
             }
-            Ok(Response::new(Confirmed {}))
+            validator.broadcast_received_block_hash(&hash).await.unwrap();
+            Ok(Response::new(Agreement { agreed: agreement }))
         } else {
-            error!("Node is not a validator, cannot handle votes");
-            Err(Status::internal("Node is not a validator, cannot handle votes"))
+            Err(Status::internal("Node is not a validator"))
         }
-    }
+    }   
 }
 
 impl NodeService {
@@ -110,12 +113,12 @@ impl NodeService {
         };
         let mut arc_node_service = Arc::new(node_service);
         if arc_node_service.is_validator {
-            let tower = Arc::new(Mutex::new(Tower { locks: HashMap::new() })); // Initialize Tower
             let validator = Validator {
                 validator_id: 0,
                 poh_sequence: Arc::new(Mutex::new(Vec::<PoHEntry>::new())),
                 node_service: Arc::clone(&arc_node_service),
-                tower: Arc::clone(&tower),
+                created_block: Arc::new(Mutex::new(None)),
+                agreement_count: Arc::new(Mutex::new(0)),
             };
             if let Some(node_service_mut) = Arc::get_mut(&mut arc_node_service) {
                 node_service_mut.validator = Some(Arc::new(validator));
@@ -172,10 +175,10 @@ impl NodeService {
         Ok(())
     }
     
-    pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
+    pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version, is_validator: bool) {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
-        peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone()));
+        peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
         info!("\n{}: new peer added: {}", self.server_config.cfg_addr, remote_addr);
     }
     
@@ -188,7 +191,7 @@ impl NodeService {
 
     pub async fn get_peer_list(&self) -> Vec<String> {
         let peers = self.peer_lock.read().await;
-        peers.values().map(|(_, version)| version.msg_listen_address.clone()).collect()
+        peers.values().map(|(_, version, _)| version.msg_listen_address.clone()).collect()
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
@@ -216,6 +219,7 @@ impl NodeService {
         let keypair = &self.server_config.cfg_keypair;
         let msg_public_key = keypair.public.to_bytes().to_vec();
         Version {
+            msg_validator: self.is_validator,
             msg_version: self.server_config.cfg_version.clone(),
             msg_public_key,
             msg_height: 0,
@@ -229,7 +233,7 @@ impl NodeService {
             let peers = self.peer_lock.read().await;
             peers
                 .iter()
-                .map(|(addr, (peer_client, _))| (addr.clone(), Arc::clone(peer_client)))
+                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
                 .collect::<Vec<_>>()
         };
         let mut tasks = Vec::new();
@@ -286,7 +290,8 @@ impl NodeService {
             let task = tokio::spawn(async move {
                 match node_service_clone.dial_remote_node(&addr_clone).await {
                     Ok((c, v)) => {
-                        node_service_clone.add_peer(c, v).await;
+                        let is_validator = v.msg_validator;
+                        node_service_clone.add_peer(c, v, is_validator).await;
                         info!("\n{}: bootstrapped node: {}", node_service_clone.server_config.cfg_addr, addr_clone);
                     }
                     Err(e) => {
@@ -300,7 +305,7 @@ impl NodeService {
             task.await?;
         }
         Ok(())
-    }
+    }    
 
     pub async fn can_connect_with(&self, addr: &str) -> bool {
         if self.server_config.cfg_addr == addr {

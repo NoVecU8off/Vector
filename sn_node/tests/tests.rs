@@ -232,7 +232,8 @@ fn test_broadcast_pass() {
             .dial_remote_node(&node_service_2_clone_2.server_config.cfg_addr)
             .await
             .unwrap();
-        node_service_1_clone_2.add_peer(client, version).await;
+        let is_validator = version.msg_validator;
+        node_service_1_clone_2.add_peer(client, version, is_validator).await;
     });
     let random_tx1 = create_random_transaction();
     let random_tx2: Transaction = create_random_transaction();

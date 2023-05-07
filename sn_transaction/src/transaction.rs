@@ -85,9 +85,3 @@ pub async fn verify_transaction_one(transaction: &Transaction, keypairs: &[Keypa
     }
     true
 }
-
-pub async fn hash_poh_entering_transaction(extended_hash: &Vec<u8>) -> Vec<u8> {
-    let mut hasher = Sha3_512::new();
-    hasher.update(&extended_hash);
-    hasher.finalize().to_vec()
-}
