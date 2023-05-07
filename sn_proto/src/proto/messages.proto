@@ -30,6 +30,8 @@ message HashAgreement {
 
     bool msg_is_responce = 4;
 
+    string msg_sender_addr = 5;
+
 }
 
 message Block {

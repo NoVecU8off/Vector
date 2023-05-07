@@ -51,6 +51,9 @@ impl Node for NodeService {
         &self,
         request: Request<TransactionBatch>,
     ) -> Result<Response<Confirmed>, Status> {
+        if !self.is_validator {
+            return Err(Status::unimplemented("This node is not a validator and does not handle transactions."));
+        }
         let request_inner = request.get_ref().clone();
         let txb = request_inner;
         let transactions = txb.transactions.clone();
@@ -62,42 +65,47 @@ impl Node for NodeService {
             .join(", ");
         if self.mempool.add_batch(txb.clone()).await {
             info!("\n{}: received transactions: {}", self.server_config.cfg_addr, hashes_str);
-            let self_clone = self.self_ref.as_ref().unwrap().clone();
-            let transactions_clone = transactions.clone();
-            tokio::spawn(async move {
-                if let Err(_err) = self_clone.collect_and_broadcast_transactions(transactions_clone).await {
+            if let Some(validator) = &self.validator {
+                for hash in hashes {
+                    validator.generate_poh_entry(Some(hash)).await;
                 }
-            });
-            if self.is_validator {
-                if let Some(validator) = &self.validator {
-                    for hash in hashes {
-                        validator.generate_poh_entry(Some(hash)).await;
+                let validator_clone = Arc::clone(validator);
+                let transactions_clone = transactions.clone();
+                tokio::spawn(async move {
+                    if let Err(_err) = validator_clone.collect_and_broadcast_transactions(transactions_clone).await {
                     }
-                }
+                });
             }
         }
         Ok(Response::new(Confirmed {}))
-    }
+    }    
 
     async fn handle_agreement(&self, request: Request<HashAgreement>) -> Result<Response<Agreement>, Status> {
         let hash_agreement = request.into_inner();
         let hash = hash_agreement.msg_block_hash;
         let agreement = hash_agreement.msg_agreement;
         let is_response = hash_agreement.msg_is_responce;
+        let sender_addr = hash_agreement.msg_sender_addr;
         if let Some(validator) = &self.validator {
             if !is_response {
                 let agreed = validator.compare_block_hashes(&hash).await;
-                if agreed {
-                    let mut agreement_count = validator.agreement_count.lock().await;
-                    *agreement_count += 1;
-                }
+                // Send the response message to the sender
+                let msg = HashAgreement {
+                    msg_validator_id: validator.validator_id as u64,
+                    msg_block_hash: hash.clone(),
+                    msg_agreement: agreed,
+                    msg_is_responce: true,
+                    msg_sender_addr: self.server_config.cfg_addr.clone(),
+                };
+                validator.respond_to_received_block_hash(&msg, sender_addr).await.unwrap();
+            } else {
+                validator.update_agreement_count(agreement).await;
             }
-            validator.broadcast_received_block_hash(&hash).await.unwrap();
             Ok(Response::new(Agreement { agreed: agreement }))
         } else {
             Err(Status::internal("Node is not a validator"))
         }
-    }   
+    }
 }
 
 impl NodeService {
@@ -226,57 +234,6 @@ impl NodeService {
             msg_listen_address: self.server_config.cfg_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
         }
-    }
-
-    pub async fn broadcast_batch(&self, transaction_batches: Vec<TransactionBatch>) -> Result<()> {
-        let peers_data = {
-            let peers = self.peer_lock.read().await;
-            peers
-                .iter()
-                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
-                .collect::<Vec<_>>()
-        };
-        let mut tasks = Vec::new();
-        for (addr, peer_client) in peers_data {
-            let transactions_batches_clone = transaction_batches.clone();
-            let self_clone = self.clone();
-            let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
-                for txb in transactions_batches_clone {
-                    let txb_clone = txb.clone();
-                    let mut req = Request::new(txb_clone.clone());
-                    req.metadata_mut().insert("peer", addr.parse().unwrap());
-                    if addr != self_clone.server_config.cfg_addr {
-                        if let Err(err) = peer_client_lock.handle_transactions(req).await {
-                            error!(
-                                "Failed to broadcast transactions batch to {}: {:?}",
-                                addr,
-                                err
-                            );
-                        } else {
-                            info!(
-                                "\n{}: broadcasted transactions batch to \n {}",
-                                self_clone.server_config.cfg_addr,
-                                addr
-                            );
-                        }
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-        for task in tasks {
-            task.await?;
-        }
-        Ok(())
-    }    
-
-    pub async fn collect_and_broadcast_transactions(
-        &self,
-        transactions: Vec<Transaction>,
-    ) -> Result<()> {
-        let transaction_batch = TransactionBatch { transactions };
-        self.broadcast_batch(vec![transaction_batch]).await
     }
     
     pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {

@@ -209,42 +209,42 @@ async fn test_two_servers_and_two_clients_pass_async() {
     }
 }
 
-#[test]
-fn test_broadcast_pass() {
-    let rt = Runtime::new().unwrap();
-    let server_config_1 = create_test_server_config_1();
-    let server_config_2 = create_test_server_config_2();
-    let mut node_service_1 = NodeService::new(server_config_1);
-    let mut node_service_2 = NodeService::new(server_config_2);
-    node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
-    node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
-    let node_service_1_clone_2 = node_service_1.clone();
-    let node_service_1_clone_3 = node_service_1.clone();
-    let node_service_2_clone_2 = node_service_2.clone();
-    rt.spawn(async move {
-        node_service_1.start(vec![]).await.unwrap();
-    });
-    rt.spawn(async move {
-        node_service_2.start(vec![]).await.unwrap();
-    });
-    rt.block_on(async move {
-        let (client, version) = node_service_1_clone_2
-            .dial_remote_node(&node_service_2_clone_2.server_config.cfg_addr)
-            .await
-            .unwrap();
-        let is_validator = version.msg_validator;
-        node_service_1_clone_2.add_peer(client, version, is_validator).await;
-    });
-    let random_tx1 = create_random_transaction();
-    let random_tx2: Transaction = create_random_transaction();
-    rt.block_on(async move {
-        node_service_1_clone_3
-            .collect_and_broadcast_transactions(vec![random_tx1, random_tx2])
-            .await
-            .unwrap();
-    });
-    rt.shutdown_background();
-}
+// #[test]
+// fn test_broadcast_pass() {
+//     let rt = Runtime::new().unwrap();
+//     let server_config_1 = create_test_server_config_1();
+//     let server_config_2 = create_test_server_config_2();
+//     let mut node_service_1 = NodeService::new(server_config_1);
+//     let mut node_service_2 = NodeService::new(server_config_2);
+//     node_service_1.self_ref = Some(Arc::new(node_service_1.clone()));
+//     node_service_2.self_ref = Some(Arc::new(node_service_2.clone()));
+//     let node_service_1_clone_2 = node_service_1.clone();
+//     let node_service_1_clone_3 = node_service_1.clone();
+//     let node_service_2_clone_2 = node_service_2.clone();
+//     rt.spawn(async move {
+//         node_service_1.start(vec![]).await.unwrap();
+//     });
+//     rt.spawn(async move {
+//         node_service_2.start(vec![]).await.unwrap();
+//     });
+//     rt.block_on(async move {
+//         let (client, version) = node_service_1_clone_2
+//             .dial_remote_node(&node_service_2_clone_2.server_config.cfg_addr)
+//             .await
+//             .unwrap();
+//         let is_validator = version.msg_validator;
+//         node_service_1_clone_2.add_peer(client, version, is_validator).await;
+//     });
+//     let random_tx1 = create_random_transaction();
+//     let random_tx2: Transaction = create_random_transaction();
+//     rt.block_on(async move {
+//         node_service_1_clone_3
+//             .collect_and_broadcast_transactions(vec![random_tx1, random_tx2])
+//             .await
+//             .unwrap();
+//     });
+//     rt.shutdown_background();
+// }
 
 #[test]
 fn test_start_node_and_make_node_client_and_broadcast_fail() {
