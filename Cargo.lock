@@ -1826,42 +1826,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sn_consensus"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bincode",
- "env_logger",
- "futures",
- "hex",
- "log",
- "native-tls",
- "openssl",
- "pem 2.0.1",
- "rand 0.8.5",
- "rcgen",
- "rustls",
- "serde",
- "slog",
- "slog-async",
- "slog-term",
- "sn_chain",
- "sn_cryptography",
- "sn_mempool",
- "sn_node",
- "sn_proto",
- "sn_server",
- "sn_transaction",
- "tokio",
- "tokio-rustls",
- "tokio-stream",
- "tonic",
- "url",
- "webpki",
- "webpki-roots",
-]
-
-[[package]]
 name = "sn_cryptography"
 version = "0.1.0"
 dependencies = [

@@ -6,13 +6,25 @@ service Node {
 
     rpc Handshake(Version) returns (Version);
 
-    rpc HandleTransactions(TransactionBatch) returns (Confirmed);
+    rpc HandleTransaction(Transaction) returns (Confirmed);
 
     rpc HandleAgreement(HashAgreement) returns (Agreement);
 
 }
 
 message Confirmed { }
+
+message Transaction {
+
+    int32 msg_version = 1;
+
+    repeated TransactionInput msg_inputs = 2;
+
+    repeated TransactionOutput msg_outputs = 3;
+
+    int64 msg_relative_timestamp = 4;
+    
+}
 
 message Agreement {
 
@@ -77,24 +89,6 @@ message TransactionOutput {
     int64 msg_amount = 1;
 
     bytes msg_address = 2;
-
-}
-
-message Transaction {
-
-    int32 msg_version = 1;
-
-    repeated TransactionInput msg_inputs = 2;
-
-    repeated TransactionOutput msg_outputs = 3;
-
-    int64 msg_relative_timestamp = 4;
-    
-}
-
-message TransactionBatch {
-
-    repeated Transaction transactions = 1;
 
 }
 
