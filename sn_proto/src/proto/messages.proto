@@ -4,59 +4,77 @@ package messages;
 
 service Node {
 
-	rpc Handshake(Version) returns (Version);
+    rpc Handshake(Version) returns (Version);
 
-	rpc HandleTransactions(TransactionBatch) returns (Confirmed);
+    rpc HandleTransactions(TransactionBatch) returns (Confirmed);
 
-	rpc HandleVotes(VoteBatch) returns (Confirmed);
+    rpc HandleAgreement(HashAgreement) returns (Agreement);
 
 }
 
 message Confirmed { }
 
+message Agreement {
+
+    bool agreed = 1;
+
+}
+
+message HashAgreement {
+
+    uint64 msg_validator_id = 1;
+
+    bytes msg_block_hash = 2;
+
+    bool msg_agreement = 3;
+
+    bool msg_is_responce = 4;
+
+}
+
 message Block {
 
-	Header msg_header = 1;
+    Header msg_header = 1;
 
-	repeated Transaction msg_transactions = 2; 
+    repeated Transaction msg_transactions = 2; 
 
-	bytes msg_public_key = 3;
+    bytes msg_public_key = 3;
 
-	bytes msg_signature = 4;
+    bytes msg_signature = 4;
 
 }
 
 message Header {
 
-	int32 msg_version = 1;
+    int32 msg_version = 1;
 
-	int32 msg_height = 2;
+    int32 msg_height = 2;
 
-	bytes msg_previous_hash = 3;
+    bytes msg_previous_hash = 3;
 
-	bytes msg_root_hash = 4;
+    bytes msg_root_hash = 4;
     
-	int64 msg_timestamp = 5;
+    int64 msg_timestamp = 5;
 
 }
 
 message TransactionInput {
 
-	bytes msg_previous_tx_hash = 1;
+    bytes msg_previous_tx_hash = 1;
 
-	uint32 msg_previous_out_index = 2;
+    uint32 msg_previous_out_index = 2;
 
-	bytes msg_public_key = 3;
+    bytes msg_public_key = 3;
 
-	bytes msg_signature = 4;
+    bytes msg_signature = 4;
 
 }
 
 message TransactionOutput {
 
-	int64 msg_amount = 1;
+    int64 msg_amount = 1;
 
-	bytes msg_address = 2;
+    bytes msg_address = 2;
 
 }
 
@@ -69,7 +87,7 @@ message Transaction {
     repeated TransactionOutput msg_outputs = 3;
 
     int64 msg_relative_timestamp = 4;
-	
+    
 }
 
 message TransactionBatch {
@@ -80,30 +98,16 @@ message TransactionBatch {
 
 message Version {
 
-	string msg_version = 1;
+    bool msg_validator = 1;
 
-	bytes msg_public_key = 2;
+    string msg_version = 2;
 
-	int32 msg_height = 3;
+    bytes msg_public_key = 3;
 
-	string msg_listen_address = 4;
+    int32 msg_height = 4;
 
-	repeated string msg_peer_list = 5;
+    string msg_listen_address = 5;
+
+    repeated string msg_peer_list = 6;
     
-}
-
-message Vote {
-
-	uint64 msg_validator_id = 1;
-
-    uint64 msg_block_height = 2;
-
-    bytes msg_fingerprint = 3;
-
-}
-
-message VoteBatch {
-
-	repeated Vote votes = 1;
-
 }
