@@ -11,6 +11,9 @@ use sn_chain::chain::Chain;
 use tonic::Request;
 use std::collections::HashMap;
 use crate::node::*;
+use tonic::Response;
+use tonic::Status;
+use sn_transaction::transaction::*;
 
 #[derive(Clone, Debug)]
 pub struct PoHEntry {
@@ -19,7 +22,7 @@ pub struct PoHEntry {
 }
 
 #[derive(Clone, Debug)]
-pub struct Validator {
+pub struct ValidatorService {
     pub validator_id: i32,
     pub poh_sequence: Arc<Mutex<Vec<PoHEntry>>>,
     pub node_service: Arc<NodeService>,
@@ -27,7 +30,67 @@ pub struct Validator {
     pub agreement_count: Arc<Mutex<usize>>,
 }
 
-impl Validator {
+#[tonic::async_trait]
+pub trait Validator: Sync + Send {
+    async fn handle_transaction(
+        &self,
+        request: Request<Transaction>,
+    ) -> Result<Response<Confirmed>, Status>;
+
+    async fn handle_agreement(
+        &self,
+        request: Request<HashAgreement>,
+    ) -> Result<Response<Agreement>, Status>;
+}
+
+#[tonic::async_trait]
+impl Validator for ValidatorService {
+    async fn handle_transaction(
+        &self,
+        request: Request<Transaction>,
+    ) -> Result<Response<Confirmed>, Status> {
+        let transaction = request.get_ref().clone();
+        let hash = hash_transaction(&transaction).await;
+        let hash_str = hex::encode(&hash);
+        if self.node_service.mempool.add(transaction.clone()).await {
+            info!("\n{}: received transaction: {}", self.node_service.server_config.cfg_addr, hash_str);
+            self.generate_poh_entry(Some(hash)).await;
+            let self_clone = self.clone();
+            tokio::spawn(async move {
+                if let Err(_err) = self_clone.broadcast_transaction(transaction).await {
+                }
+            });
+        }
+        Ok(Response::new(Confirmed {}))
+    }
+
+    async fn handle_agreement(
+        &self,
+        request: Request<HashAgreement>,
+    ) -> Result<Response<Agreement>, Status> {
+        let hash_agreement = request.into_inner();
+        let hash = hash_agreement.msg_block_hash;
+        let agreement = hash_agreement.msg_agreement;
+        let is_response = hash_agreement.msg_is_responce;
+        let sender_addr = hash_agreement.msg_sender_addr;
+        if !is_response {
+            let agreed = self.compare_block_hashes(&hash).await;
+            let msg = HashAgreement {
+                msg_validator_id: self.validator_id as u64,
+                msg_block_hash: hash.clone(),
+                msg_agreement: agreed,
+                msg_is_responce: true,
+                msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
+            };
+            self.respond_to_received_block_hash(&msg, sender_addr).await.unwrap();
+        } else {
+            self.update_agreement_count(agreement).await;
+        }
+        Ok(Response::new(Agreement { agreed: agreement }))
+    }
+}
+
+impl ValidatorService {
     pub async fn broadcast_unsigned_block_hash(&self, block_hash: &Vec<u8>) -> Result<()> {
         let my_addr = &self.node_service.server_config.cfg_addr;
         let msg = HashAgreement {
@@ -107,6 +170,47 @@ impl Validator {
             }
         } else {
             error!("Target address not found in the list of peers: {}", target);
+        }
+        Ok(())
+    }
+
+    pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<()> {
+        let peers_data = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .filter(|(_, (_, _, is_validator))| *is_validator)
+                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
+                .collect::<Vec<_>>()
+        };
+        let mut tasks = Vec::new();
+        for (addr, peer_client) in peers_data {
+            let transaction_clone = transaction.clone();
+            let self_clone = self.clone();
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                let mut req = Request::new(transaction_clone.clone());
+                req.metadata_mut().insert("peer", addr.parse().unwrap());
+                if addr != self_clone.node_service.server_config.cfg_addr {
+                    if let Err(err) = peer_client_lock.handle_transaction(req).await {
+                        error!(
+                            "Failed to broadcast transaction to {}: {:?}",
+                            addr,
+                            err
+                        );
+                    } else {
+                        info!(
+                            "\n{}: broadcasted transaction to \n {}",
+                            self_clone.node_service.server_config.cfg_addr,
+                            addr
+                        );
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        for task in tasks {
+            task.await?;
         }
         Ok(())
     }
@@ -234,58 +338,6 @@ impl Validator {
             .max_by_key(|(_, votes)| *votes)
             .map(|(winning_hash, _)| winning_hash)
             .unwrap_or_else(|| vec![])
-    }
-
-    pub async fn broadcast_transactions_batch(&self, transaction_batches: Vec<TransactionBatch>) -> Result<()> {
-        let peers_data = {
-            let peers = self.node_service.peer_lock.read().await;
-            peers
-                .iter()
-                .filter(|(_, (_, _, is_validator))| *is_validator)
-                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
-                .collect::<Vec<_>>()
-        };
-        let mut tasks = Vec::new();
-        for (addr, peer_client) in peers_data {
-            let transactions_batches_clone = transaction_batches.clone();
-            let self_clone = self.clone();
-            let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
-                for txb in transactions_batches_clone {
-                    let txb_clone = txb.clone();
-                    let mut req = Request::new(txb_clone.clone());
-                    req.metadata_mut().insert("peer", addr.parse().unwrap());
-                    if addr != self_clone.node_service.server_config.cfg_addr {
-                        if let Err(err) = peer_client_lock.handle_transactions(req).await {
-                            error!(
-                                "Failed to broadcast transactions batch to {}: {:?}",
-                                addr,
-                                err
-                            );
-                        } else {
-                            info!(
-                                "\n{}: broadcasted transactions batch to \n {}",
-                                self_clone.node_service.server_config.cfg_addr,
-                                addr
-                            );
-                        }
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-        for task in tasks {
-            task.await?;
-        }
-        Ok(())
-    }    
-
-    pub async fn collect_and_broadcast_transactions(
-        &self,
-        transactions: Vec<Transaction>,
-    ) -> Result<()> {
-        let transaction_batch = TransactionBatch { transactions };
-        self.broadcast_transactions_batch(vec![transaction_batch]).await
     }
 }
 

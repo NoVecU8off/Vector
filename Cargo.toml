@@ -10,7 +10,6 @@ members = [
     "sn_transaction",
     "sn_merkle",
     "sn_cli",
-    "sn_consensus",
     "sn_mempool",
     "sn_server",
 ]
