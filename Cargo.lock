@@ -1892,6 +1892,7 @@ dependencies = [
  "sn_merkle",
  "sn_proto",
  "sn_server",
+ "sn_store",
  "sn_transaction",
  "tokio",
  "tokio-rustls",
