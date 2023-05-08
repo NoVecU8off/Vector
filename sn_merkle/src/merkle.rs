@@ -1,4 +1,4 @@
-use sha3::{Digest, Sha3_512};
+use sha3::{Digest, Sha3_256};
 use sn_proto::messages::{Transaction};
 use prost::Message;
 use anyhow::Result;
@@ -48,7 +48,7 @@ impl MerkleTree {
                     .into_par_iter()
                     .step_by(2)
                     .map(|i| {
-                        let mut hasher = Sha3_512::new();
+                        let mut hasher = Sha3_256::new();
     
                         hasher.update(&level[i]);
                         hasher.update(&level[i + 1]);
@@ -64,7 +64,7 @@ impl MerkleTree {
     
     
     pub async fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> Result<bool> {
-        let mut hasher = Sha3_512::new();
+        let mut hasher = Sha3_256::new();
         let mut bytes = Vec::new();
         leaf.encode(&mut bytes).unwrap();
         hasher.update(&bytes);
@@ -75,7 +75,7 @@ impl MerkleTree {
         }
         println!("Initial hash: {:?}", current_hash);
         for sibling in proof {
-            let mut new_hasher = Sha3_512::new();
+            let mut new_hasher = Sha3_256::new();
             if current_index % 2 == 0 {
                 new_hasher.update(&current_hash);
                 new_hasher.update(sibling);
@@ -129,7 +129,7 @@ impl MerkleTree {
             if sibling_index >= self.nodes.len() {
                 break;
             }
-            let mut hasher = Sha3_512::new();
+            let mut hasher = Sha3_256::new();
             if index % 2 == 0 {
                 hasher.update(&self.nodes[sibling_index]);
                 hasher.update(&current_hash);
@@ -153,7 +153,7 @@ impl MerkleTree {
             while parent_index > 0 {
                 let sibling_index = if parent_index % 2 == 0 { parent_index - 1 } else { parent_index + 1 };
                 parent_index = (parent_index - 1) / 2;
-                let mut hasher = Sha3_512::new();
+                let mut hasher = Sha3_256::new();
                 if parent_index % 2 == 0 {
                     hasher.update(&self.nodes[sibling_index]);
                     hasher.update(&current_hash);
@@ -198,7 +198,7 @@ pub fn compute_hashes(transactions: &[Transaction]) -> Vec<TransactionWrapper> {
         .map(|transaction| {
             let mut bytes = Vec::new();
             transaction.encode(&mut bytes).unwrap();
-            let mut hasher = Sha3_512::new();
+            let mut hasher = Sha3_256::new();
             hasher.update(&bytes);
             let hash = hasher.finalize().to_vec();
             TransactionWrapper {

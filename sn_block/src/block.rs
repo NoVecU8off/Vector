@@ -2,7 +2,7 @@ use sn_proto::messages::{Block, Header};
 use sn_merkle::merkle::MerkleTree;
 use sn_cryptography::cryptography::{Keypair, Signature};
 use std::error::Error;
-use sha3::{Digest, Sha3_512};
+use sha3::{Digest, Sha3_256};
 use anyhow::Result;
 
 pub async fn sign_block(block: &Block, keypair: &Keypair) -> Result<Signature> {
@@ -31,8 +31,8 @@ pub async fn verify_root_hash(block: &Block) -> Result<bool> {
     }
 }
 
-pub fn hash_header_by_block(block: &Block) -> Result<[u8; 64]> {
-    let mut hasher = Sha3_512::new();
+pub fn hash_header_by_block(block: &Block) -> Result<[u8; 32]> {
+    let mut hasher = Sha3_256::new();
     if let Some(header) = block.msg_header.as_ref() {
         hasher.update(header.msg_version.to_be_bytes());
         hasher.update(header.msg_height.to_be_bytes());
@@ -43,18 +43,18 @@ pub fn hash_header_by_block(block: &Block) -> Result<[u8; 64]> {
         return Err(anyhow::anyhow!("Block header is missing"));
     }
     let hash = hasher.finalize();
-    let hash_bytes: [u8; 64] = hash.into();
+    let hash_bytes: [u8; 32] = hash.into();
     Ok(hash_bytes)
 }
 
-pub async fn hash_header(header: &Header) -> Result<[u8; 64], Box<dyn Error>> {
-    let mut hasher = Sha3_512::new();
+pub async fn hash_header(header: &Header) -> Result<[u8; 32], Box<dyn Error>> {
+    let mut hasher = Sha3_256::new();
     hasher.update(header.msg_version.to_be_bytes());
     hasher.update(header.msg_height.to_be_bytes());
     hasher.update(&header.msg_previous_hash);
     hasher.update(&header.msg_root_hash);
     hasher.update(header.msg_timestamp.to_be_bytes());
     let hash = hasher.finalize();
-    let hash_bytes: [u8; 64] = hash.into();
+    let hash_bytes: [u8; 32] = hash.into();
     Ok(hash_bytes)
 }

@@ -8,7 +8,6 @@ use hex::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{PublicKey, SecretKey, ExpandedSecretKey};
 use anyhow::{Error, Result};
-use std::sync::{Arc};
 use rayon::prelude::*;
 
 #[derive(Clone)]
@@ -81,8 +80,7 @@ impl Chain {
     pub async fn validate_block(&self, incoming_block: &Block) -> Result<()> {
         self.check_block_signature(incoming_block).await?;
         self.check_previous_block_hash(incoming_block).await?;
-        let keypair = self.get_keypair_for_block(incoming_block).await?;
-        self.check_transactions_in_block(incoming_block, &keypair)?;
+        self.check_transactions_in_block(incoming_block)?;
         Ok(())
     }
 
@@ -93,6 +91,7 @@ impl Chain {
             .ok_or("missing block header")
             .unwrap()
             .clone();
+        self.validate_block(&block).await?;
         self.headers.add_header(header);
         self.add_transactions(&block).await?;
         self.block_store.put(&block).await?;
@@ -202,46 +201,42 @@ impl Chain {
         }
         Ok(())
     }
-    
-    async fn get_keypair_for_block(&self, incoming_block: &Block) -> Result<Vec<Keypair>> {
-        let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
-            .map_err(|_| "Invalid public key in block").unwrap();
-        let keypair = Keypair {
-            private: SecretKey::from_bytes(&[0u8; 32]).unwrap(),
-            optional_private: None,
-            expanded_private_key: ExpandedSecretKey::from(&SecretKey::from_bytes(&[0u8; 32]).unwrap()),
-            public: public_key,
-        };
-        Ok(vec![keypair])
-    }
 
-    fn check_transactions_in_block(&self, incoming_block: &Block, keypair: &[Keypair]) -> Result<()> {
-        let keypair_arc = Arc::new(keypair.to_vec());
+    fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<()> {
         incoming_block
             .msg_transactions
             .par_iter()
             .for_each(|tx| {
                 let chain = self.clone();
-                let keypair = keypair_arc.clone();
-                chain.validate_transaction(tx, &keypair).unwrap();
+                chain.validate_transaction(tx).unwrap();
             });
         Ok(())
     }
 
-    pub fn validate_transaction(&self, transaction: &Transaction, keypair: &[Keypair]) -> Result<()> {
-        self.check_transaction_signature(transaction, keypair).unwrap();
+    pub fn validate_transaction(&self, transaction: &Transaction) -> Result<()> {
+        let public_keys = self.extract_public_keys_from_transaction(transaction)?;
+        self.check_transaction_signature(transaction, &public_keys)?;
         let sum_inputs = self.check_transaction_inputs(transaction)?;
-        let sum_outputs: i32 = transaction.msg_outputs.iter().map(|o| o.msg_amount as i32).sum();
-        if sum_inputs < sum_outputs {
+        let sum_outputs: i64 = transaction.msg_outputs.iter().map(|o| o.msg_amount as i64).sum();
+        if i64::from(sum_inputs) < sum_outputs {
             Err(anyhow::anyhow!("insufficient balance got ({}) spending ({})", sum_inputs, sum_outputs).into())
         } else {
             Ok(())
         }
     }
     
-    fn check_transaction_signature(&self, transaction: &Transaction, keypair: &[Keypair]) -> Result<()> {
-        let public_keys: Vec<PublicKey> = keypair.iter().map(|keypair| keypair.public).collect(); 
-        if !verify_transaction(transaction, &public_keys) {
+    fn extract_public_keys_from_transaction(&self, transaction: &Transaction) -> Result<Vec<PublicKey>> {
+        let mut public_keys = Vec::new();
+        for input in &transaction.msg_inputs {
+            let public_key = PublicKey::from_bytes(&input.msg_public_key)
+                .map_err(|_| anyhow::anyhow!("Invalid public key in transaction input"))?;
+            public_keys.push(public_key);
+        }
+        Ok(public_keys)
+    }
+
+    fn check_transaction_signature(&self, transaction: &Transaction, public_keys: &[PublicKey]) -> Result<()> {
+        if !verify_transaction(transaction, public_keys) {
             Err(anyhow::anyhow!("invalid transaction signature"))
         } else {
             Ok(())
@@ -268,7 +263,7 @@ impl Chain {
 
 pub async fn create_genesis_block() -> Result<Block> {
     let genesis_keypair = Keypair::generate_keypair();
-    let address = Keypair::derive_address(&genesis_keypair);
+    let address = genesis_keypair.public;
     let output = TransactionOutput {
         msg_amount: 0,
         msg_address: address.to_bytes().to_vec(),

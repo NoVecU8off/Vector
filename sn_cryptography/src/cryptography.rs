@@ -64,14 +64,6 @@ impl Keypair {
         self.public.verify(message, &sig.signature).is_ok()
     }
 
-    pub fn derive_address(&self) -> Address {
-        let bytes = self.public.as_bytes();
-        let (_, public_tail) = bytes.split_at(bytes.len() - 20);
-        Address {
-            address: public_tail.try_into().unwrap(),
-        }
-    }
-
     pub fn public_to_vec(&self) -> Vec<u8> {
         let vec_public = self.public.as_bytes().to_vec();
         vec_public
@@ -94,27 +86,6 @@ impl Clone for Keypair {
             expanded_private_key,
             public,
         }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Address {
-    pub address: [u8; 20],
-}
-
-impl Address {
-    pub fn to_bytes(&self) -> [u8; 20] {
-        self.address
-    }
-
-    pub fn from_bytes(bytes: [u8; 20]) -> Self {
-        Address {
-            address: bytes
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<u8> {
-        self.address.to_vec()
     }
 }
 
@@ -175,18 +146,6 @@ pub fn vec_to_bytes(vec: &Vec<u8>) -> [u8; 64] {
 impl std::fmt::Display for Keypair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}, {:?}, {:?}", self.private, self.optional_private, self.public)
-    }
-}
-
-impl std::fmt::Display for Address {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.address)
-    }
-}
-
-impl std::convert::From<[u8; 20]> for Address {
-    fn from(bytes: [u8; 20]) -> Self {
-        Self::from_bytes(bytes)    
     }
 }
 

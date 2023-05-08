@@ -49,34 +49,6 @@ fn test_sign_and_verify_different_way() {
     assert!(keypair.verify(&message, &signature));
 }
 
-#[test]
-fn test_derive_address() {
-    let keypair = Keypair::generate_keypair();
-    let address = keypair.derive_address();
-    assert_eq!(address.address.len(), 20);
-}
-
-#[test]
-fn test_address_to_string() {
-    let address = Address::from_bytes([
-        119, 2, 129, 224, 245, 161, 44, 24, 46, 93, 89, 87, 144, 63, 53, 63, 33, 64, 92, 127,
-    ]);
-    println!("{}", address.to_string());
-    assert_eq!(
-        address.to_string(),
-        "770281e0f5a12c182e5d5957903f353f21405c7f"
-    );
-}
-
-#[test]
-fn test_address_from_bytes() {
-    let bytes = [
-        119, 2, 129, 224, 245, 161, 44, 24, 46, 93, 89, 87, 144, 63, 53, 63, 33, 64, 92, 127,
-    ];
-    let address = Address::from_bytes(bytes);
-    assert_eq!(address.address, bytes);
-}
-
 fn create_random_transaction() -> Transaction {
     let input = TransactionInput {
         msg_previous_tx_hash: (0..64).map(|_| rand::random::<u8>()).collect(),
