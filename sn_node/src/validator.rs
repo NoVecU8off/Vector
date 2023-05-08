@@ -1,24 +1,22 @@
-use sn_merkle::merkle::MerkleTree;
-use sn_block::block::*;
-use std::time::{Duration};
-use tonic::codegen::Arc;
-use log::{info, error};
-use sn_proto::messages::*;
-use anyhow::Result;
-use sn_chain::chain::Chain;
-use tonic::Request;
 use crate::node::*;
-use tonic::Response;
-use tonic::Status;
+use sn_proto::messages::*;
 use sn_transaction::transaction::*;
-use futures::future::try_join_all;
-use std::time::SystemTime;
+use sn_mempool::mempool::*;
+use sn_merkle::merkle::MerkleTree;
+use sn_chain::chain::Chain;
+use sn_block::block::*;
 use tokio::sync::{Mutex, RwLock, oneshot};
+use std::time::{Duration, SystemTime};
+use tonic::{Request, Response, Status, codegen::Arc};
+use anyhow::Result;
+use futures::future::try_join_all;
+use log::{info, error};
 
 #[derive(Clone)]
 pub struct ValidatorService {
     pub validator_id: i32,
     pub node_service: Arc<NodeService>,
+    pub mempool: Arc<Mempool>,
     pub created_block: Arc<Mutex<Option<(Block, Vec<u8>)>>>,
     pub agreement_count: Arc<Mutex<usize>>,
     pub chain: Arc<RwLock<Chain>>,
@@ -47,8 +45,8 @@ impl Validator for ValidatorService {
         let transaction = request.into_inner();
         let hash = hash_transaction(&transaction).await;
         let hash_str = hex::encode(&hash);
-        if !self.node_service.mempool.contains_transaction(&transaction).await {
-            if self.node_service.mempool.add(transaction.clone()).await {
+        if !self.mempool.contains_transaction(&transaction).await {
+            if self.mempool.add(transaction.clone()).await {
                 info!("\n{}: received transaction: {}", self.node_service.server_config.cfg_addr, hash_str);
                 let self_clone = self.clone();
                 tokio::spawn(async move {
@@ -89,10 +87,10 @@ impl Validator for ValidatorService {
 impl ValidatorService {
     pub async fn start_validator_tick(&self) {
         let node_clone = self.clone();
-        let mut interval = tokio::time::interval(Duration::from_secs(1));
+        let mut interval = tokio::time::interval(Duration::from_millis(10));
         loop {
             interval.tick().await;
-            let num_transactions = node_clone.node_service.mempool.len().await;
+            let num_transactions = node_clone.mempool.len().await;
             if num_transactions == 100 {
                 node_clone.initialize_consensus().await;
             }
@@ -115,7 +113,7 @@ impl ValidatorService {
         let (sender, receiver) = oneshot::channel();
         *self.trigger_sender.lock().await = Some(sender);
         if let Err(_) = receiver.await {
-            // Handle error if sender is dropped, for example if the sender is dropped due to a task failure
+            error!("Failed to get agreements");
         }
         let mut chain_write_lock = self.chain.write().await;
         self.finalize_block(&mut chain_write_lock).await;
@@ -125,11 +123,11 @@ impl ValidatorService {
     pub async fn create_unsigned_block(&self) -> Result<Block> {
         let chain = &self.chain;
         let chain_read_lock = chain.read().await;
-        let msg_previous_hash = Chain::get_previous_hash_in_chain(&chain_read_lock).await?;
+        let msg_previous_hash = Chain::get_previous_hash_in_chain(&chain_read_lock).await.unwrap();
         let height = Chain::chain_height(&chain_read_lock) as i32;
         let keypair = &self.node_service.server_config.cfg_keypair;
         let public_key = keypair.public.to_bytes().to_vec();
-        let transactions = self.node_service.mempool.clear().await;
+        let transactions = self.mempool.clear().await;
         let merkle_tree = MerkleTree::new(&transactions).unwrap();
         let merkle_root = merkle_tree.root.to_vec();
         let header = Header {
@@ -145,9 +143,9 @@ impl ValidatorService {
             msg_public_key: public_key,
             msg_signature: vec![],
         };
-        let hash = self.hash_unsigned_block(&block).await?; // Calculate hash
+        let hash = self.hash_unsigned_block(&block).await.unwrap();
         let mut created_block_lock = self.created_block.lock().await;
-        *created_block_lock = Some((block.clone(), hash)); // Store block and its hash as a tuple
+        *created_block_lock = Some((block.clone(), hash));
         Ok(block)
     }    
 
@@ -198,7 +196,7 @@ impl ValidatorService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await?;
+        try_join_all(tasks).await.unwrap();
         Ok(())
     }
 
@@ -317,7 +315,7 @@ impl ValidatorService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await?;
+        try_join_all(tasks).await.unwrap();
         Ok(())
     }
 }

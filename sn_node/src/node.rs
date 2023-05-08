@@ -1,22 +1,21 @@
+use crate::validator::*;
 use sn_proto::messages::*;
 use sn_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
-use sn_mempool::mempool::*;
-use sn_server::server::*;
-use std::{collections::{HashMap}, sync::{Arc}};
-use std::net::SocketAddr;
-use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
-use tokio::sync::{Mutex, RwLock};
-use log::{info, error};
-use anyhow::{Context, Result};
-use crate::validator::*;
 use sn_chain::chain::Chain;
 use sn_store::store::{MemoryBlockStore, BlockStorer, MemoryTXStore, TXStorer};
+use sn_mempool::mempool::*;
+use sn_server::server::*;
+use std::{collections::HashMap, sync::Arc, net::SocketAddr};
+use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
+use tokio::sync::{Mutex, RwLock};
+use anyhow::{Context, Result};
+use futures::future::try_join_all;
+use log::{info, error};
 
 #[derive(Clone)]
 pub struct NodeService {
     pub server_config: ServerConfig,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
-    pub mempool: Arc<Mempool>,
     pub is_validator: bool,
     pub validator: Option<Arc<ValidatorService>>,
 }
@@ -35,7 +34,6 @@ impl Node for NodeService {
         match make_node_client(&addr).await {
             Ok(c) => {
                 info!("Created node client successfully");
-                // Only add peer if it's a validator
                 if version_clone.msg_validator {
                     self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
                 }
@@ -79,7 +77,6 @@ impl NodeService {
         let node_service = NodeService {
             server_config: cfg,
             peer_lock: Arc::new(RwLock::new(HashMap::new())),
-            mempool: Arc::new(Mempool::new()),
             is_validator: true,
             validator: None,
         };
@@ -94,6 +91,7 @@ impl NodeService {
             let validator = ValidatorService {
                 validator_id: 0,
                 node_service: Arc::clone(&arc_node_service),
+                mempool: Arc::new(Mempool::new()),
                 created_block: Arc::new(Mutex::new(None)),
                 agreement_count: Arc::new(Mutex::new(0)),
                 chain,
@@ -112,9 +110,9 @@ impl NodeService {
             .parse()
             .unwrap();
         info!("\nNodeServer {} starting listening", self.server_config.cfg_addr);
-        self.setup_server(node_service, addr).await?;
+        self.setup_server(node_service, addr).await.unwrap();
         if !nodes_to_bootstrap.is_empty() {
-            self.bootstrap(nodes_to_bootstrap).await?;
+            self.bootstrap(nodes_to_bootstrap).await.unwrap();
         }
         if self.is_validator {
             if let Some(validator) = &self.validator {
@@ -140,7 +138,7 @@ impl NodeService {
             .map_err(|err| {
                 error!("Error listening for incoming connections: {:?}", err);
                 err
-            })?)
+            }).unwrap())
     }
 
     pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<()> {
@@ -177,9 +175,7 @@ impl NodeService {
             });
             tasks.push(task);
         }
-        for task in tasks {
-            task.await?;
-        }
+        try_join_all(tasks).await.unwrap();
         Ok(())
     }
     
@@ -223,7 +219,7 @@ impl NodeService {
                 error!("Failed to create node client: {:?}", err);
                 err
             })
-            .context("Failed to create node for dial")?;
+            .context("Failed to create node for dial").unwrap();
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
@@ -272,9 +268,7 @@ impl NodeService {
             });
             tasks.push(task);
         }
-        for task in tasks {
-            task.await?;
-        }
+        try_join_all(tasks).await.unwrap();
         Ok(())
     }    
 
