@@ -39,7 +39,7 @@ async fn test_add_block() {
     let input_tx_hash = hash_transaction(input_tx).await;
     let input_amount = input_tx.msg_outputs[0].msg_amount;
     let keypair = Keypair::generate_keypair();
-    let address = Keypair::derive_address(&keypair);
+    let address = keypair.public;
     let mut input = TransactionInput {
         msg_previous_tx_hash: input_tx_hash,
         msg_previous_out_index: 0,
@@ -112,7 +112,7 @@ async fn test_validate_block_another() {
     let genesis_block = chain.get_block_by_height(0).await.unwrap();
     let genesis_block_hash = hash_header_by_block(&genesis_block).unwrap().to_vec();
     let keypair = Keypair::generate_keypair();
-    let address = Keypair::derive_address(&keypair);
+    let address = keypair.public;
     let output = TransactionOutput {
         msg_amount: 0,
         msg_address: address.to_bytes().to_vec(),
@@ -155,8 +155,7 @@ async fn test_validate_transaction() {
     let chain = create_test_chain().await.unwrap();
     let genesis_block = chain.get_block_by_height(0).await.unwrap();
     let transaction = &genesis_block.msg_transactions[0];
-    let keypair = Keypair::generate_keypair();
-    assert!(chain.validate_transaction(transaction, &[keypair]).is_ok());
+    assert!(chain.validate_transaction(transaction).is_ok());
 }
 
 #[test]
@@ -166,8 +165,7 @@ fn test_rt_validate_transaction() {
         let chain = create_test_chain().await.unwrap();
         let genesis_block = chain.get_block_by_height(0).await.unwrap();
         let transaction = &genesis_block.msg_transactions[0];
-        let keypair = Keypair::generate_keypair();
-        assert!(chain.validate_transaction(transaction, &[keypair]).is_ok());
+        assert!(chain.validate_transaction(transaction).is_ok());
     });
 }
 
@@ -180,7 +178,7 @@ async fn test_add_block_two() {
     let input_tx_hash = hash_transaction(input_tx).await;
     let input_amount = input_tx.msg_outputs[0].msg_amount;
     let keypair = Keypair::generate_keypair();
-    let address = Keypair::derive_address(&keypair);
+    let address = keypair.public;
 
     let mut input = TransactionInput {
         msg_previous_tx_hash: input_tx_hash,

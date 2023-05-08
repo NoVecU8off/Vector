@@ -4,7 +4,7 @@ use std::time::{Duration};
 use tonic::codegen::Arc;
 use tokio::sync::Mutex;
 use log::{info, error};
-use sha3::{Sha3_512, Digest};
+use sha3::{Sha3_256, Digest};
 use sn_proto::messages::*;
 use anyhow::Result;
 use sn_chain::chain::Chain;
@@ -114,8 +114,7 @@ impl ValidatorService {
             let self_clone = self.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
-                let mut req = Request::new(msg_clone);
-                req.metadata_mut().insert("peer", addr.parse().unwrap());
+                let req = Request::new(msg_clone);
                 if addr != self_clone.node_service.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_agreement(req).await {
                         error!(
@@ -151,8 +150,7 @@ impl ValidatorService {
             let msg_clone = msg.clone();
             let self_clone = self.clone();
             let mut peer_client_lock = peer_client.lock().await;
-            let mut req = Request::new(msg_clone);
-            req.metadata_mut().insert("peer", addr.parse().unwrap());
+            let req = Request::new(msg_clone);
             if addr != self_clone.node_service.server_config.cfg_addr {
                 if let Err(err) = peer_client_lock.handle_agreement(req).await {
                     error!(
@@ -189,8 +187,7 @@ impl ValidatorService {
             let self_clone = self.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
-                let mut req = Request::new(transaction_clone.clone());
-                req.metadata_mut().insert("peer", addr.parse().unwrap());
+                let req = Request::new(transaction_clone.clone());
                 if addr != self_clone.node_service.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
                         error!(
@@ -226,7 +223,7 @@ impl ValidatorService {
             let peers = self.node_service.peer_lock.read().await;
             peers.iter().filter(|(_, (_, _, is_validator))| *is_validator).count()
         };
-        if *agreement_count == num_validators - 1 {
+        if *agreement_count >= (num_validators * (2 / 3)) {
             // Do something when all validators agree
         }
     }
@@ -342,7 +339,7 @@ impl ValidatorService {
 }
 
 pub async fn hash_poh_entering_transaction(extended_hash: &Vec<u8>) -> Vec<u8> {
-    let mut hasher = Sha3_512::new();
+    let mut hasher = Sha3_256::new();
     hasher.update(&extended_hash);
     hasher.finalize().to_vec()
 }

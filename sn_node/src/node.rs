@@ -149,8 +149,7 @@ impl NodeService {
             let self_clone = self.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
-                let mut req = Request::new(transaction_clone.clone());
-                req.metadata_mut().insert("peer", addr.parse().unwrap());
+                let req = Request::new(transaction_clone.clone());
                 if addr != self_clone.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
                         error!(

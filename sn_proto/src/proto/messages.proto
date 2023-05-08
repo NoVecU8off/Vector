@@ -14,18 +14,6 @@ service Node {
 
 message Confirmed { }
 
-message Transaction {
-
-    int32 msg_version = 1;
-
-    repeated TransactionInput msg_inputs = 2;
-
-    repeated TransactionOutput msg_outputs = 3;
-
-    int64 msg_relative_timestamp = 4;
-    
-}
-
 message Agreement {
 
     bool agreed = 1;
@@ -70,6 +58,18 @@ message Header {
     
     int64 msg_timestamp = 5;
 
+}
+
+message Transaction {
+
+    int32 msg_version = 1;
+
+    repeated TransactionInput msg_inputs = 2;
+
+    repeated TransactionOutput msg_outputs = 3;
+
+    int64 msg_relative_timestamp = 4;
+    
 }
 
 message TransactionInput {
