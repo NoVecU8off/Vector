@@ -202,6 +202,12 @@ impl Chain {
         Ok(())
     }
 
+    pub async fn get_previous_hash_in_chain(&self) -> Result<Vec<u8>> {
+        let last_block = self.get_block_by_height(self.chain_height()).await.unwrap();
+        let last_block_hash = hash_header_by_block(&last_block).unwrap().to_vec();
+        Ok(last_block_hash)
+    }
+
     fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<()> {
         incoming_block
             .msg_transactions

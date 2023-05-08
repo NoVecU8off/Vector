@@ -9,8 +9,10 @@ use tokio::sync::{Mutex, RwLock};
 use log::{info, error};
 use anyhow::{Context, Result};
 use crate::validator::*;
+use sn_chain::chain::Chain;
+use sn_store::store::{MemoryBlockStore, BlockStorer, MemoryTXStore, TXStorer};
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct NodeService {
     pub server_config: ServerConfig,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
@@ -72,7 +74,7 @@ impl Node for NodeService {
 }
 
 impl NodeService {
-    pub fn new(cfg: ServerConfig) -> Self {
+    pub async fn new(cfg: ServerConfig) -> Self {
         info!("\nNodeService {} created", cfg.cfg_addr);
         let node_service = NodeService {
             server_config: cfg,
@@ -82,13 +84,20 @@ impl NodeService {
             validator: None,
         };
         let mut arc_node_service = Arc::new(node_service);
+        let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
+        let tx_storer: Box<dyn TXStorer> = Box::new(MemoryTXStore::new());
+        let chain = match Chain::new_chain(block_storer, tx_storer).await {
+            Ok(chain) => Arc::new(RwLock::new(chain)),
+            Err(e) => panic!("Failed to create chain: {:?}", e),
+        };
         if arc_node_service.is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
-                poh_sequence: Arc::new(Mutex::new(Vec::<PoHEntry>::new())),
                 node_service: Arc::clone(&arc_node_service),
                 created_block: Arc::new(Mutex::new(None)),
                 agreement_count: Arc::new(Mutex::new(0)),
+                chain,
+                trigger_sender: Arc::new(Mutex::new(None)),
             };
             if let Some(node_service_mut) = Arc::get_mut(&mut arc_node_service) {
                 node_service_mut.validator = Some(Arc::new(validator));
@@ -109,7 +118,7 @@ impl NodeService {
         }
         if self.is_validator {
             if let Some(validator) = &self.validator {
-                validator.start_poh_tick().await;
+                // validator.start_poh_tick().await;
                 validator.start_validator_tick().await;
             }
         }

@@ -60,17 +60,6 @@ impl Mempool {
     pub async fn contains_transaction(&self, transaction: &Transaction) -> bool {
         self.has(transaction).await
     }
-    
-
-    // pub async fn add_batch(&self, txb: TransactionBatch) -> bool {
-    //     let mut added_any = false;
-    //     for tx in txb.transactions.into_iter() {
-    //         if self.add(tx).await {
-    //             added_any = true;
-    //         }
-    //     }
-    //     added_any
-    // }
 }
 
 impl Default for Mempool {
