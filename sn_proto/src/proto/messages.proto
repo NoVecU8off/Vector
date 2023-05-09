@@ -10,9 +10,39 @@ service Node {
 
     rpc HandleAgreement(HashAgreement) returns (Agreement);
 
+    rpc HandleVote (Vote) returns (Confirmed);
+
 }
 
 message Confirmed { }
+
+message Vote {
+
+    uint64 msg_validator_id = 1;
+
+    string msg_voter_addr = 2;
+
+    uint64 msg_target_validator_id = 3;
+
+}
+
+message Version {
+
+    bool msg_validator = 1;
+
+    int32 msg_validator_id = 2;
+
+    string msg_version = 3;
+
+    bytes msg_public_key = 4;
+
+    int32 msg_height = 5;
+
+    string msg_listen_address = 6;
+
+    repeated string msg_peer_list = 7;
+    
+}
 
 message Agreement {
 
@@ -90,20 +120,4 @@ message TransactionOutput {
 
     bytes msg_address = 2;
 
-}
-
-message Version {
-
-    bool msg_validator = 1;
-
-    string msg_version = 2;
-
-    bytes msg_public_key = 3;
-
-    int32 msg_height = 4;
-
-    string msg_listen_address = 5;
-
-    repeated string msg_peer_list = 6;
-    
 }
