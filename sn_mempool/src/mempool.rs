@@ -27,12 +27,15 @@ impl Mempool {
         }
     }
 
-    pub async fn clear(&self) -> Vec<Transaction> {
+    pub async fn get_transactions(&self) -> Vec<Transaction> {
+        let lock = self.lock.read().await;
+        lock.values().cloned().collect::<Vec<_>>()
+    }
+
+    pub async fn clear(&self) {
         let mut lock = self.lock.write().await;
-        let txx = lock.values().cloned().collect::<Vec<_>>();
         lock.clear();
-        info!(self.logger, "\nMempool cleared, {} transactions removed", txx.len());
-        txx
+        info!(self.logger, "\nMempool cleared");
     }
 
     pub async fn len(&self) -> usize {

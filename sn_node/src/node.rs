@@ -103,6 +103,7 @@ impl NodeService {
                 validator_id: 0,
                 node_service: Arc::clone(&arc_node_service),
                 mempool: Arc::new(Mempool::new()),
+                round_transactions: Arc::new(Mutex::new(Vec::new())),
                 created_block: Arc::new(Mutex::new(None)),
                 agreement_count: Arc::new(Mutex::new(0)),
                 vote_count: Arc::new(Mutex::new(HashMap::new())),

@@ -18,6 +18,7 @@ pub struct ValidatorService {
     pub validator_id: i32,
     pub node_service: Arc<NodeService>,
     pub mempool: Arc<Mempool>,
+    pub round_transactions: Arc<Mutex<Vec<Transaction>>>,
     pub created_block: Arc<Mutex<Option<(Block, Vec<u8>)>>>,
     pub agreement_count: Arc<Mutex<usize>>,
     pub vote_count: Arc<Mutex<HashMap<u64, usize>>>,
@@ -67,41 +68,53 @@ impl Validator for ValidatorService {
         Ok(Response::new(Confirmed {}))
     }
 // ____________________________________________________________________________________________________________________STAGE_TWO //
-    async fn handle_agreement(
-        &self,
-        request: Request<HashAgreement>,
-    ) -> Result<Response<Agreement>, Status> {
-        let hash_agreement = request.into_inner();
-        let hash = hash_agreement.msg_block_hash;
-        let agreement = hash_agreement.msg_agreement;
-        let is_response = hash_agreement.msg_is_responce;
-        let sender_addr = hash_agreement.msg_sender_addr;
-        if !is_response {
-            let agreed = self.compare_block_hashes(&hash).await;
-            let msg = HashAgreement {
-                msg_validator_id: self.validator_id as u64,
-                msg_block_hash: hash.clone(),
-                msg_agreement: agreed,
-                msg_is_responce: true,
-                msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
-            };
-            self.respond_to_received_block_hash(&msg, sender_addr).await.unwrap();
-        } else {
-            let num_validators = {
-                let peers = self.node_service.peer_lock.read().await;
-                peers
-                    .iter()
-                    .filter(|(_, (_, _, is_validator))| *is_validator)
-                    .count()
-            };
-            let mut received_responses_count = self.received_responses_count.lock().await;
-            *received_responses_count += 1;
-            if *received_responses_count == num_validators - 1 {
+async fn handle_agreement(
+    &self,
+    request: Request<HashAgreement>,
+) -> Result<Response<Agreement>, Status> {
+    let hash_agreement = request.into_inner();
+    let hash = hash_agreement.msg_block_hash;
+    let agreement = hash_agreement.msg_agreement;
+    let is_response = hash_agreement.msg_is_responce;
+    let sender_addr = hash_agreement.msg_sender_addr;
+    if !is_response {
+        let agreed = self.compare_block_hashes(&hash).await;
+        let msg = HashAgreement {
+            msg_validator_id: self.validator_id as u64,
+            msg_block_hash: hash.clone(),
+            msg_agreement: agreed,
+            msg_is_responce: true,
+            msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
+        };
+        self.respond_to_received_block_hash(&msg, sender_addr).await.unwrap();
+    } else {
+        let num_validators = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .filter(|(_, (_, _, is_validator))| *is_validator)
+                .count()
+        };
+        if agreement {
+            self.update_agreement_count().await;
+        }
+        let mut received_responses_count = self.received_responses_count.lock().await;
+        *received_responses_count += 1;
+        if *received_responses_count == num_validators - 1 {
+            let mut agreement_count = self.agreement_count.lock().await;
+            let required_agreements = (2 * num_validators) / 3 + 1;
+            if *agreement_count >= required_agreements {
                 self.initiate_voting().await.unwrap();
+            } else {
+                *agreement_count = 0;
+                *received_responses_count = 0;
+                self.initialize_consensus().await;
             }
         }
-        Ok(Response::new(Agreement { agreed: agreement }))
     }
+    Ok(Response::new(Agreement { agreed: agreement }))
+}
+
 // ____________________________________________________________________________________________________________________STAGE_THREE //
     async fn handle_vote(
         &self,
@@ -168,6 +181,10 @@ impl ValidatorService {
     }
 // ____________________________________________________________________________________________________________________STAGE_TWO //
     pub async fn initialize_consensus(&self) {
+        let mut created_block_lock = self.created_block.lock().await;
+            { *created_block_lock = None; }
+        self.accept_round_transactions().await.unwrap();
+        self.mempool.clear().await;
         self.create_unsigned_block().await.unwrap();
         let (_, block_hash) = {
             let created_block_lock = self.created_block.lock().await;
@@ -177,6 +194,17 @@ impl ValidatorService {
         self.broadcast_unsigned_block_hash(&block_hash).await.unwrap();
     }
 
+    pub async fn accept_round_transactions(&self) -> Result<()> {
+        let transactions = self.mempool.get_transactions().await;
+        {
+            let mut round_transactions = self.round_transactions.lock().await;
+            for transaction in transactions {
+                round_transactions.push(transaction);
+            }
+        }
+        Ok(())
+    }
+
     pub async fn create_unsigned_block(&self) -> Result<Block> {
         let chain = &self.chain;
         let chain_read_lock = chain.read().await;
@@ -184,7 +212,10 @@ impl ValidatorService {
         let height = Chain::chain_height(&chain_read_lock) as i32;
         let keypair = &self.node_service.server_config.cfg_keypair;
         let public_key = keypair.public.to_bytes().to_vec();
-        let transactions = self.mempool.clear().await;
+        let transactions = {
+            let round_transactions = self.round_transactions.lock().await;
+            round_transactions.clone()
+        };
         let merkle_tree = MerkleTree::new(&transactions).unwrap();
         let merkle_root = merkle_tree.root.to_vec();
         let header = Header {
@@ -302,10 +333,7 @@ impl ValidatorService {
     }
 // ____________________________________________________________________________________________________________________STAGE_THREE //
     async fn initiate_voting(&self) -> Result<(), Box<dyn std::error::Error>> {
-        {
-            let mut received_responses_count = self.received_responses_count.lock().await;
-            *received_responses_count = 0;
-        }
+        self.clear_round_transactions().await.unwrap();
         if let Some(random_validator_id) = self.select_random_validator().await {
             let vote = Vote {
                 msg_validator_id: self.validator_id as u64,
@@ -314,6 +342,12 @@ impl ValidatorService {
             };
             self.broadcast_vote(vote).await?;
         }
+        Ok(())
+    }
+
+    pub async fn clear_round_transactions(&self) -> Result<()> {
+        let mut round_transactions = self.round_transactions.lock().await;
+        round_transactions.clear();
         Ok(())
     }
 
