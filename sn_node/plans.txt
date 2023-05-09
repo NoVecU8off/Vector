@@ -1,20 +1,6 @@
-Parallelize transaction validation: Instead of validating each transaction sequentially in the handle_transaction method, 
-you could spawn multiple worker tasks to validate incoming transactions in parallel. This could be achieved using a thread
-or task pool, where each worker task validates a transaction and stores it in the mempool if it's valid. You could use a 
-tokio::sync::mpsc channel to send incoming transactions to the worker tasks.
-
 Parallelize block creation: In the validator_tick method, you could also parallelize the process of creating a new block 
 from the mempool transactions. For instance, you can divide the transactions into smaller groups and assign them to 
 different tasks for processing. Once all tasks are completed, you can merge the results to create the final block.
-
-Parallelize network communication: You can modify the broadcast method to send messages to peers in parallel. 
-Instead of waiting for each message to be sent sequentially, you could use tokio::spawn or futures::join_all 
-to send messages to all connected peers concurrently. This can significantly improve the performance of the 
-network communication.
-
-Parallelize bootstrapping: In the bootstrap_network method, you can connect to multiple bootstrap nodes concurrently. 
-Instead of connecting to each node sequentially, you could use tokio::spawn or futures::join_all to initiate connections 
-to all bootstrap nodes in parallel. This can improve the speed of bootstrapping your node.
 
 _______________________________________________________________________________________________________________________________
 

@@ -55,7 +55,7 @@ impl Node for NodeService {
         if let Some(validator) = &self.validator {
             validator.handle_transaction(request).await
         } else {
-            Err(Status::unimplemented("This node is not a validator and does not handle transactions."))
+            Err(Status::unimplemented("Node is not a validator (transaction-handling process)"))
         }
     }
 
@@ -66,7 +66,18 @@ impl Node for NodeService {
         if let Some(validator) = &self.validator {
             validator.handle_agreement(request).await
         } else {
-            Err(Status::internal("Node is not a validator"))
+            Err(Status::internal("Node is not a validator (agreement process)"))
+        }
+    }
+
+    async fn handle_vote(
+        &self,
+        request: Request<Vote>,
+    ) -> Result<Response<Confirmed>, Status> {
+        if let Some(validator) = &self.validator {
+            validator.handle_vote(request).await
+        } else {
+            Err(Status::internal("Node is not a validator (voting process)"))
         }
     }
 }
@@ -94,6 +105,8 @@ impl NodeService {
                 mempool: Arc::new(Mempool::new()),
                 created_block: Arc::new(Mutex::new(None)),
                 agreement_count: Arc::new(Mutex::new(0)),
+                vote_count: Arc::new(Mutex::new(HashMap::new())),
+                received_responses_count: Arc::new(Mutex::new(0)),
                 chain,
                 trigger_sender: Arc::new(Mutex::new(None)),
             };
@@ -236,6 +249,10 @@ impl NodeService {
     pub async fn get_version(&self) -> Version {
         let keypair = &self.server_config.cfg_keypair;
         let msg_public_key = keypair.public.to_bytes().to_vec();
+        let msg_validator_id = match &self.validator {
+            Some(validator_service) => validator_service.validator_id,
+            None => 10101010,
+        };
         Version {
             msg_validator: self.is_validator,
             msg_version: self.server_config.cfg_version.clone(),
@@ -243,6 +260,7 @@ impl NodeService {
             msg_height: 0,
             msg_listen_address: self.server_config.cfg_addr.clone(),
             msg_peer_list: self.get_peer_list().await,
+            msg_validator_id,
         }
     }
     
