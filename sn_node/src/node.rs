@@ -16,7 +16,6 @@ use log::{info, error};
 pub struct NodeService {
     pub server_config: ServerConfig,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
-    pub is_validator: bool,
     pub validator: Option<Arc<ValidatorService>>,
 }
 
@@ -88,7 +87,6 @@ impl NodeService {
         let node_service = NodeService {
             server_config: cfg,
             peer_lock: Arc::new(RwLock::new(HashMap::new())),
-            is_validator: true,
             validator: None,
         };
         let mut arc_node_service = Arc::new(node_service);
@@ -98,7 +96,7 @@ impl NodeService {
             Ok(chain) => Arc::new(RwLock::new(chain)),
             Err(e) => panic!("Failed to create chain: {:?}", e),
         };
-        if arc_node_service.is_validator {
+        if arc_node_service.server_config.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
                 node_service: Arc::clone(&arc_node_service),
@@ -128,9 +126,8 @@ impl NodeService {
         if !nodes_to_bootstrap.is_empty() {
             self.bootstrap(nodes_to_bootstrap).await.unwrap();
         }
-        if self.is_validator {
+        if self.server_config.cfg_is_validator {
             if let Some(validator) = &self.validator {
-                // validator.start_poh_tick().await;
                 validator.start_validator_tick().await;
             }
         }
@@ -255,7 +252,7 @@ impl NodeService {
             None => 10101010,
         };
         Version {
-            msg_validator: self.is_validator,
+            msg_validator: self.server_config.cfg_is_validator,
             msg_version: self.server_config.cfg_version.clone(),
             msg_public_key,
             msg_height: 0,

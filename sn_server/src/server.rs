@@ -9,6 +9,7 @@ use std::fs;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
+    pub cfg_is_validator: bool,
     pub cfg_version: String,
     pub cfg_addr: String,
     pub cfg_keypair: Keypair,
@@ -21,8 +22,9 @@ impl ServerConfig {
     pub async fn default() -> Self {
         let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
+            cfg_is_validator: true,
             cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8000".to_string(),
+            cfg_addr: "127.0.0.1:8080".to_string(),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
@@ -33,8 +35,9 @@ impl ServerConfig {
     pub async fn default_b() -> Self {
         let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
+            cfg_is_validator: true,
             cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8080".to_string(),
+            cfg_addr: "127.0.0.1:8081".to_string(),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
@@ -43,6 +46,7 @@ impl ServerConfig {
     }
 
     pub async fn new(
+        is_validator: bool,
         version: &str,
         address: &str,
         keypair: Keypair,
@@ -51,6 +55,7 @@ impl ServerConfig {
         root_pem: Vec<u8>,
     ) -> Self {
         ServerConfig {
+            cfg_is_validator: is_validator,
             cfg_version: version.to_string(),
             cfg_addr: address.to_string(),
             cfg_keypair: keypair,
