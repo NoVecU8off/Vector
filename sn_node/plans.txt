@@ -36,3 +36,63 @@ maintain an updated list of active peers and discover new nodes as they join the
     Modify your gRPC communication protocol to include peer exchange messages so that nodes can share information about other 
     known nodes with each other.
 }}}}}}
+
+I want to break this function to two functions:
+first fill create common nodeService and if node_service.server_config.cfg_is_validator is set to true initiate validator and place it to the vlidator field of the node service
+#[derive(Clone)]
+pub struct NodeService {
+    pub server_config: ServerConfig,
+    pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
+    pub validator: Option<Arc<ValidatorService>>,
+}
+impl NodeService {
+    pub async fn new(cfg: ServerConfig) -> Self {
+        info!("NodeService {} created", cfg.cfg_addr);
+        let peer_lock = Arc::new(RwLock::new(HashMap::new()));
+        let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
+        let tx_storer: Box<dyn TXStorer> = Box::new(MemoryTXStore::new());
+        let chain = match Chain::new_chain(block_storer, tx_storer).await {
+            Ok(chain) => Arc::new(RwLock::new(chain)),
+            Err(e) => panic!("Failed to create chain: {:?}", e),
+        };
+        let node_service = NodeService {
+            server_config: cfg.clone(),
+            peer_lock: Arc::clone(&peer_lock),
+            validator: None,
+        };
+        let validator = if cfg.cfg_is_validator {
+            let validator = ValidatorService {
+                validator_id: 0,
+                node_service: Arc::new(node_service.clone()),
+                mempool: Arc::new(Mempool::new()),
+                round_transactions: Arc::new(Mutex::new(Vec::new())),
+                created_block: Arc::new(Mutex::new(None)),
+                agreement_count: Arc::new(Mutex::new(0)),
+                vote_count: Arc::new(Mutex::new(HashMap::new())),
+                received_responses_count: Arc::new(Mutex::new(0)),
+                chain: Arc::clone(&chain),
+                trigger_sender: Arc::new(Mutex::new(None)),
+            };
+            Some(Arc::new(validator))
+        } else {
+            None
+        };
+        NodeService {
+            server_config: cfg,
+            peer_lock,
+            validator,
+        }
+    }    
+#[derive(Clone)]
+pub struct ValidatorService {
+    pub validator_id: i32,
+    pub node_service: Arc<NodeService>,
+    pub mempool: Arc<Mempool>,
+    pub round_transactions: Arc<Mutex<Vec<Transaction>>>,
+    pub created_block: Arc<Mutex<Option<(Block, Vec<u8>)>>>,
+    pub agreement_count: Arc<Mutex<usize>>,
+    pub vote_count: Arc<Mutex<HashMap<u64, usize>>>,
+    pub received_responses_count: Arc<Mutex<usize>>,
+    pub chain: Arc<RwLock<Chain>>,
+    pub trigger_sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+}

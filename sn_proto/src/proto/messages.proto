@@ -12,6 +12,8 @@ service Node {
 
     rpc HandleVote (Vote) returns (Confirmed);
 
+    rpc HandleBlock(Block) returns (Confirmed);
+
 }
 
 message Confirmed { }

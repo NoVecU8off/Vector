@@ -10,13 +10,14 @@ use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Ident
 use tokio::sync::{Mutex, RwLock};
 use anyhow::{Context, Result};
 use futures::future::try_join_all;
-use log::{info, error};
+use slog::{o, Logger, info, Drain, error};
 
 #[derive(Clone)]
 pub struct NodeService {
     pub server_config: ServerConfig,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
     pub validator: Option<Arc<ValidatorService>>,
+    pub logger: Logger,
 }
 
 #[tonic::async_trait]
@@ -25,23 +26,23 @@ impl Node for NodeService {
         &self,
         request: Request<Version>,
     ) -> Result<Response<Version>, Status> {
-        info!("\nStarting handshaking");
+        info!(self.logger, "Starting handshaking");
         let version = request.into_inner();
         let version_clone = version.clone();
         let addr = version.msg_listen_address;
-        info!("\nRecieved version, address: {}", addr);
+        info!(self.logger, "Recieved version, address: {}", addr);
         match make_node_client(&addr).await {
             Ok(c) => {
-                info!("Created node client successfully");
+                info!(self.logger, "Created node client successfully");
                 if version_clone.msg_validator {
                     self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
                 }
                 let reply = self.get_version().await;
-                info!("Returning version: {:?}", reply);
+                info!(self.logger, "Returning version: {:?}", reply);
                 Ok(Response::new(reply))
             }
             Err(e) => {
-                error!("Failed to create node client: {:?}", e);
+                error!(self.logger, "Failed to create node client: {:?}", e);
                 Err(Status::internal("Failed to create node client"))
             }
         }
@@ -79,56 +80,79 @@ impl Node for NodeService {
             Err(Status::internal("Node is not a validator (voting process)"))
         }
     }
+
+    async fn handle_block(
+        &self,
+        request: Request<Block>,
+    ) -> Result<Response<Confirmed>, Status> {
+        if let Some(validator) = &self.validator {
+            validator.handle_block(request).await
+        } else {
+            Err(Status::internal("Node is not a validator (synchronisation process)"))
+        }
+    }
 }
 
 impl NodeService {
     pub async fn new(cfg: ServerConfig) -> Self {
-        info!("\nNodeService {} created", cfg.cfg_addr);
-        let node_service = NodeService {
-            server_config: cfg,
-            peer_lock: Arc::new(RwLock::new(HashMap::new())),
-            validator: None,
+        let logger = {
+            let decorator = slog_term::TermDecorator::new().build();
+            let drain = slog_term::FullFormat::new(decorator).build().fuse();
+            let drain = slog_async::Async::new(drain).build().fuse();
+            Logger::root(drain, o!())
         };
-        let mut arc_node_service = Arc::new(node_service);
+        info!(logger, "NodeService {} created", cfg.cfg_addr);
+        let peer_lock = Arc::new(RwLock::new(HashMap::new()));
         let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
         let tx_storer: Box<dyn TXStorer> = Box::new(MemoryTXStore::new());
         let chain = match Chain::new_chain(block_storer, tx_storer).await {
             Ok(chain) => Arc::new(RwLock::new(chain)),
             Err(e) => panic!("Failed to create chain: {:?}", e),
         };
-        if arc_node_service.server_config.cfg_is_validator {
+        let node_service = NodeService {
+            server_config: cfg.clone(),
+            peer_lock: Arc::clone(&peer_lock),
+            validator: None,
+            logger: logger.clone(),
+        };
+        let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
-                node_service: Arc::clone(&arc_node_service),
+                node_service: Arc::new(node_service.clone()),
                 mempool: Arc::new(Mempool::new()),
                 round_transactions: Arc::new(Mutex::new(Vec::new())),
                 created_block: Arc::new(Mutex::new(None)),
                 agreement_count: Arc::new(Mutex::new(0)),
                 vote_count: Arc::new(Mutex::new(HashMap::new())),
                 received_responses_count: Arc::new(Mutex::new(0)),
-                chain,
+                chain: Arc::clone(&chain),
                 trigger_sender: Arc::new(Mutex::new(None)),
             };
-            if let Some(node_service_mut) = Arc::get_mut(&mut arc_node_service) {
-                node_service_mut.validator = Some(Arc::new(validator));
-            }
+            Some(Arc::new(validator))
+        } else {
+            None
+        };
+        NodeService {
+            server_config: cfg,
+            peer_lock,
+            validator,
+            logger,
         }
-        Arc::try_unwrap(arc_node_service).unwrap_or_else(|_| panic!("NodeService creation failed"))
-    }
+    }    
 
     pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<()> {
         let node_service = self.clone();
         let addr = format!("{}", self.server_config.cfg_addr)
             .parse()
             .unwrap();
-        info!("\nNodeServer {} starting listening", self.server_config.cfg_addr);
+        info!(self.logger, "NodeServer {} starting listening", self.server_config.cfg_addr);
         self.setup_server(node_service, addr).await.unwrap();
         if !nodes_to_bootstrap.is_empty() {
             self.bootstrap(nodes_to_bootstrap).await.unwrap();
         }
         if self.server_config.cfg_is_validator {
             if let Some(validator) = &self.validator {
-                validator.start_validator_tick().await;
+                validator.initialize_validating().await;
             }
         }
         Ok(())
@@ -147,7 +171,7 @@ impl NodeService {
             .serve(addr)
             .await
             .map_err(|err| {
-                error!("Error listening for incoming connections: {:?}", err);
+                error!(self.logger, "Error listening for incoming connections: {:?}", err);
                 err
             }).unwrap())
     }
@@ -169,18 +193,10 @@ impl NodeService {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(transaction_clone.clone());
                 if addr != self_clone.server_config.cfg_addr {
-                    if let Err(err) = peer_client_lock.handle_transaction(req).await {
-                        error!(
-                            "Failed to broadcast transaction to {}: {:?}",
-                            addr,
-                            err
-                        );
+                    if let Err(e) = peer_client_lock.handle_transaction(req).await {
+                        error!(self_clone.logger, "{}: Broadcast error: {:?}", self_clone.server_config.cfg_addr, e)
                     } else {
-                        info!(
-                            "\n{}: broadcasted transaction to \n {}",
-                            self_clone.server_config.cfg_addr,
-                            addr
-                        );
+                        info!(self_clone.logger, "{}: Broadcasted tx to: {:?}", self_clone.server_config.cfg_addr, addr)
                     }
                 }
             });
@@ -192,10 +208,10 @@ impl NodeService {
     
     pub async fn bootstrap(&self, unbootstraped_nodes: Vec<String>) -> Result<()> {
         let node_clone = self.clone();
-        info!("\n{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, unbootstraped_nodes);
+        info!(self.logger, "{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, unbootstraped_nodes);
         tokio::spawn(async move {
             if let Err(e) = node_clone.bootstrap_network(unbootstraped_nodes).await {
-                error!("Error bootstrapping network: {:?}", e);
+                error!(node_clone.logger, "{}: Failed to bootstrap: {:?}", node_clone.server_config.cfg_addr, e);
             }
         });
         Ok(())
@@ -208,13 +224,13 @@ impl NodeService {
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
         peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
-        info!("\n{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
+        info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
     }
     
     pub async fn delete_peer(&self, addr: &str) {
         let mut peers = self.peer_lock.write().await;
         if peers.remove(addr).is_some() {
-            info!("\n{}: peer removed: {}", self.server_config.cfg_addr, addr);
+            info!(self.logger, "{}: peer removed: {}", self.server_config.cfg_addr, addr);
         }
     }
 
@@ -227,7 +243,7 @@ impl NodeService {
         let mut c = make_node_client(addr)
             .await
             .map_err(|err| {
-                error!("Failed to create node client: {:?}", err);
+                error!(self.logger, "{}: Failed to make node client: {:?}", self.server_config.cfg_addr, err);
                 err
             })
             .context("Failed to create node for dial").unwrap();
@@ -235,12 +251,12 @@ impl NodeService {
             .handshake(Request::new(self.get_version().await))
             .await
             .map_err(|err| {
-                error!("Failed to perform handshake with remote node: {:?}", err);
+                error!(self.logger, "{}: Failed to perform handshake with remote node: {:?}", self.server_config.cfg_addr, err);
                 err
             })
             .unwrap()
             .into_inner();
-        info!("\n{}: dialed remote node: {}", self.server_config.cfg_addr, addr);
+        info!(self.logger, "{}: Dialed remote node: {}", self.server_config.cfg_addr, addr);
         Ok((c, v))
     }
 
@@ -275,10 +291,9 @@ impl NodeService {
                     Ok((c, v)) => {
                         let is_validator = v.msg_validator;
                         node_service_clone.add_peer(c, v, is_validator).await;
-                        info!("\n{}: bootstrapped node: {}", node_service_clone.server_config.cfg_addr, addr_clone);
                     }
                     Err(e) => {
-                        error!("\n{}: Error dialing remote node {}: {:?}", node_service_clone.server_config.cfg_addr, addr_clone, e);
+                        error!(node_service_clone.logger, "{}: Failed bootstrap and dial: {:?}", node_service_clone.server_config.cfg_addr, e);
                     }
                 }
             });

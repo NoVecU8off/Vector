@@ -1843,6 +1843,7 @@ name = "sn_mempool"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "log",
  "slog",
  "slog-async",
  "slog-term",
@@ -1873,10 +1874,8 @@ dependencies = [
  "anyhow",
  "bincode",
  "ed25519-dalek",
- "env_logger",
  "futures",
  "hex",
- "log",
  "native-tls",
  "openssl",
  "pem 2.0.1",
@@ -1885,6 +1884,9 @@ dependencies = [
  "rustls",
  "serde",
  "sha3",
+ "slog",
+ "slog-async",
+ "slog-term",
  "sn_block",
  "sn_chain",
  "sn_cryptography",
@@ -1897,6 +1899,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tokio-stream",
+ "tokio-test",
  "tonic",
  "url",
  "webpki",
@@ -2213,6 +2216,19 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tokio-test"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53474327ae5e166530d17f2d956afcb4f8a004de581b3cae10f12006bc8163e3"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "futures-core",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]
