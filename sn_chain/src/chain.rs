@@ -97,6 +97,19 @@ impl Chain {
         self.block_store.put(&block).await?;
         Ok(())
     }
+
+    pub async fn add_leader_block(&mut self, block: Block) -> Result<()> {
+        let header = block
+            .msg_header
+            .as_ref()
+            .ok_or("missing block header")
+            .unwrap()
+            .clone();
+        self.headers.add_header(header);
+        self.add_transactions(&block).await?;
+        self.block_store.put(&block).await?;
+        Ok(())
+    }
     
     async fn add_transactions(&mut self, block: &Block) -> Result<()> {
         for tx in &block.msg_transactions {

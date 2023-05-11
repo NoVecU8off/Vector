@@ -37,7 +37,20 @@ impl ServerConfig {
         ServerConfig {
             cfg_is_validator: true,
             cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8081".to_string(),
+            cfg_addr: "127.0.0.1:8084".to_string(),
+            cfg_keypair: Keypair::generate_keypair(),
+            cfg_pem_certificate,
+            cfg_pem_key,
+            cfg_root_crt,
+        }
+    }
+
+    pub async fn default_c() -> Self {
+        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
+        ServerConfig {
+            cfg_is_validator: true,
+            cfg_version: "1".to_string(),
+            cfg_addr: "127.0.0.1:8088".to_string(),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,

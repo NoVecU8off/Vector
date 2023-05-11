@@ -20,7 +20,7 @@ impl Mempool {
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-        info!(logger, "\nMempool created");
+        info!(logger, "Mempool created");
         Mempool {
             lock: RwLock::new(HashMap::new()),
             logger,
@@ -35,7 +35,7 @@ impl Mempool {
     pub async fn clear(&self) {
         let mut lock = self.lock.write().await;
         lock.clear();
-        info!(self.logger, "\nMempool cleared");
+        info!(self.logger, "Mempool cleared");
     }
 
     pub async fn len(&self) -> usize {
@@ -56,7 +56,7 @@ impl Mempool {
         let mut lock = self.lock.write().await;
         let hash = hex::encode(hash_transaction(&tx).await);
         lock.insert(hash.clone(), tx);
-        info!(self.logger, "\nTransaction added to mempool: {}", hash);
+        info!(self.logger, "Transaction added to mempool: {}", hash);
         true
     }
 
