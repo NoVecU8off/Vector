@@ -311,4 +311,3 @@ pub async fn create_genesis_block() -> Result<Block> {
     block.msg_signature = signature.to_vec();
     Ok(block)
 }
-
