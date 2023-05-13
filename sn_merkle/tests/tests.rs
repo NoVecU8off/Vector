@@ -16,7 +16,7 @@ fn sample_transactions() -> Vec<Transaction> {
             msg_outputs: vec![
                 TransactionOutput {
                     msg_amount: 100,
-                    msg_to: vec![10, 11, 12],
+                    msg_address: vec![10, 11, 12],
                 },
             ],
             msg_relative_timestamp: 583,
@@ -34,7 +34,7 @@ fn sample_transactions() -> Vec<Transaction> {
             msg_outputs: vec![
                 TransactionOutput {
                     msg_amount: 1100,
-                    msg_to: vec![101, 11, 12],
+                    msg_address: vec![101, 11, 12],
                 },
             ],
             msg_relative_timestamp: 8646,
@@ -92,7 +92,7 @@ async fn test_add_leaf() {
         msg_outputs: vec![
             TransactionOutput {
                 msg_amount: 1100,
-                msg_to: vec![101, 11, 12],
+                msg_address: vec![101, 11, 12],
             },
         ],
         msg_relative_timestamp: 327,

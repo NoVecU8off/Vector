@@ -5,14 +5,12 @@ use sn_chain::chain::Chain;
 use sn_store::store::{MemoryBlockStore, BlockStorer, MemoryTXStore, TXStorer};
 use sn_mempool::mempool::*;
 use sn_server::server::*;
-use sn_transaction::transaction::*;
 use std::{collections::HashMap, sync::Arc, net::SocketAddr};
 use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
 use anyhow::{Context, Result};
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -321,35 +319,6 @@ impl NodeService {
         let results = futures::future::join_all(check_tasks).await;
         !results.into_iter().any(|res| res.unwrap_or(false))
     }
-
-    pub async fn create_transaction_request(
-        &self,
-        amount: i64, 
-        destination_public_key: Vec<u8>,
-    ) -> Result<Transaction> {
-        let keypair = &self.server_config.cfg_keypair;
-        let public_key_vec = keypair.public.to_bytes().to_vec();
-        let transaction_output = TransactionOutput {
-            msg_amount: amount,
-            msg_to: destination_public_key,
-        };
-        let transaction_input = TransactionInput {
-            msg_previous_tx_hash: vec![],
-            msg_previous_out_index: 0,
-            msg_public_key: public_key_vec.clone(),
-            msg_signature: vec![],
-        };
-        let mut transaction = Transaction {
-            msg_version: 1,
-            msg_inputs: vec![transaction_input],
-            msg_outputs: vec![transaction_output],
-            msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
-        };
-        let signature = sign_transaction(keypair, &transaction).await;
-        transaction.msg_inputs[0].msg_signature = signature.to_bytes().to_vec();
-        Ok(transaction)
-    }
-
 }
 
 pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>> {
