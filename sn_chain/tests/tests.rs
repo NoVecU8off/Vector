@@ -54,7 +54,7 @@ async fn test_add_block() {
     };
     let output = TransactionOutput {
         msg_amount: input_amount,
-        msg_address: address.to_bytes().to_vec(),
+        msg_to: address.to_bytes().to_vec(),
     };
     let mut new_transaction = Transaction {
         msg_version: 1,
@@ -115,7 +115,7 @@ async fn test_validate_block_another() {
     let address = keypair.public;
     let output = TransactionOutput {
         msg_amount: 0,
-        msg_address: address.to_bytes().to_vec(),
+        msg_to: address.to_bytes().to_vec(),
     };
     let transaction = Transaction {
         msg_version: 1,
@@ -196,7 +196,7 @@ async fn test_add_block_two() {
 
     let output = TransactionOutput {
         msg_amount: input_amount,
-        msg_address: address.to_bytes().to_vec(),
+        msg_to: address.to_bytes().to_vec(),
     };
 
     let mut new_transaction = Transaction {

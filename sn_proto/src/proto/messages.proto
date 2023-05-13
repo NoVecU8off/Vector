@@ -120,6 +120,6 @@ message TransactionOutput {
 
     int64 msg_amount = 1;
 
-    bytes msg_address = 2;
+    bytes msg_to = 2;
 
 }

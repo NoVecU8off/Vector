@@ -19,7 +19,7 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub async fn default() -> Self {
+    pub async fn default_v() -> Self {
         let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
             cfg_is_validator: true,
@@ -32,7 +32,7 @@ impl ServerConfig {
         }
     }
 
-    pub async fn default_b() -> Self {
+    pub async fn default_v2() -> Self {
         let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
             cfg_is_validator: true,
@@ -45,10 +45,10 @@ impl ServerConfig {
         }
     }
 
-    pub async fn default_c() -> Self {
+    pub async fn default_n() -> Self {
         let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
-            cfg_is_validator: true,
+            cfg_is_validator: false,
             cfg_version: "1".to_string(),
             cfg_addr: "127.0.0.1:8088".to_string(),
             cfg_keypair: Keypair::generate_keypair(),
@@ -97,9 +97,9 @@ async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error
 }
 
 pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
-    let cert_file_path = "./certs/server.crt";
-    let key_file_path = "./certs/server.key";
-    let root_file_path = "./certs/root.crt";
+    let cert_file_path = "./sn_server/certs/server.crt";
+    let key_file_path = "./sn_server/certs/server.key";
+    let root_file_path = "./sn_server/certs/root.crt";
     let cert_pem = fs::read(cert_file_path)?;
     let key_pem = fs::read(key_file_path)?;
     let root_pem = fs::read(root_file_path)?;
@@ -107,9 +107,9 @@ pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyho
 }
 
 pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
-    let cert_file_path = "./certs/client.crt";
-    let key_file_path = "./certs/client.key";
-    let root_file_path = "./certs/root.crt";
+    let cert_file_path = "./sn_server/certs/client.crt";
+    let key_file_path = "./sn_server/certs/client.key";
+    let root_file_path = "./sn_server/certs/root.crt";
     let cert_pem = fs::read(cert_file_path)?;
     let key_pem = fs::read(key_file_path)?;
     let root_pem = fs::read(root_file_path)?;
