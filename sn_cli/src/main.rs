@@ -12,13 +12,13 @@ enum UserType {
 async fn main() {
     let mut rl = DefaultEditor::new().unwrap();
     let user_type: UserType = loop {
-        let readline = rl.readline("Какой ты сегодня смешарик? (крош/чмо): ");
+        let readline = rl.readline("Choose your role  ('user'/'validator'): ");
         match readline {
             Ok(line) => {
                 match line.trim() {
-                    "крош" => break UserType::Validator,
-                    "чмо" => break UserType::User,
-                    _ => println!("Такого смешарика не существует, выбери 'крош' или 'чмо'."),
+                    "validator" => break UserType::Validator,
+                    "user" => break UserType::User,
+                    _ => println!("This role doesen't exist, choose 'validator' or 'user'."),
                 }
             },
             Err(ReadlineError::Interrupted) => {
@@ -41,11 +41,11 @@ async fn main() {
             let mut rl = DefaultEditor::new().unwrap();
             let mut nodes_to_bootstrap = Vec::new();
             loop {
-                let readline = rl.readline("Вводи адресс гниды (или 'пошел нахуй' чтобы продолжить): ");
+                let readline = rl.readline("Type in ip address to pre-connect (or 'done' to proceed): ");
                 match readline {
                     Ok(line) => {
                         let line = line.trim();
-                        if line == "пошел нахуй" {
+                        if line == "done" {
                             break;
                         } else {
                             nodes_to_bootstrap.push(line.to_string());
@@ -91,11 +91,11 @@ async fn main() {
             let mut rl = DefaultEditor::new().unwrap();
             let mut nodes_to_bootstrap = Vec::new();
             loop {
-                let readline = rl.readline("Вводи адресс гниды (или 'иди нахуй' чтобы продолжить): ");
+                let readline = rl.readline("Type in ip address to pre-connect (or 'done' to proceed): ");
                 match readline {
                     Ok(line) => {
                         let line = line.trim();
-                        if line == "пошел нахуй" {
+                        if line == "done" {
                             break;
                         } else {
                             nodes_to_bootstrap.push(line.to_string());
