@@ -17,7 +17,7 @@ pub fn create_sample_transaction() -> Transaction {
     };
     let output = TransactionOutput {
         msg_amount: rand::random::<i64>(),
-        msg_address: (0..32).map(|_| rand::random::<u8>()).collect(),
+        msg_to: (0..32).map(|_| rand::random::<u8>()).collect(),
     };
     Transaction {
         msg_version: rand::random::<i32>(),
