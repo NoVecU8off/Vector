@@ -148,7 +148,7 @@ impl ValidatorService {
         loop {
             interval.tick().await;
             let num_transactions = node_clone.mempool.len().await;
-            if num_transactions == 100 {
+            if num_transactions == 5 {
                 node_clone.initialize_consensus().await;
             }
         }
@@ -306,8 +306,10 @@ impl ValidatorService {
 
     pub async fn compare_block_hashes(&self, received_block_hash: &Vec<u8>) -> bool {
         info!(self.node_service.logger, "{}: hashes are being compared", self.node_service.server_config.cfg_addr);
-        let unsigned_block = self.create_unsigned_block().await.unwrap();
-        let local_block_hash = self.hash_unsigned_block(&unsigned_block).await.unwrap();
+        let (_, local_block_hash) = {
+            let local_block_hash = self.created_block.lock().await;
+            local_block_hash.as_ref().unwrap().clone()
+        };
         received_block_hash == &local_block_hash
     }
 
@@ -423,7 +425,7 @@ impl ValidatorService {
                 self.finalize_block_if_winner(&mut chain_write_lock).await;
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::sleep(Duration::from_millis(10)).await;
         }
     }    
 

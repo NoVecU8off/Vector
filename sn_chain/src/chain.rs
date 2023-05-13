@@ -65,7 +65,7 @@ impl Chain {
             utxo_store: Box::new(MemoryUTXOStore::new()),
             headers: HeaderList::new(),
         };
-        chain.add_block(create_genesis_block().await.map_err(|e| anyhow::anyhow!("Failed to create genesis block: {}", e))?).await?;
+        chain.add_leader_block(create_genesis_block().await.map_err(|e| anyhow::anyhow!("Failed to create genesis block: {}", e))?).await?;
         Ok(chain)
     }
 
@@ -106,7 +106,6 @@ impl Chain {
             .unwrap()
             .clone();
         self.headers.add_header(header);
-        self.add_transactions(&block).await?;
         self.block_store.put(&block).await?;
         Ok(())
     }
@@ -284,8 +283,8 @@ pub async fn create_genesis_block() -> Result<Block> {
     let genesis_keypair = Keypair::generate_keypair();
     let address = genesis_keypair.public;
     let output = TransactionOutput {
-        msg_amount: 0,
-        msg_address: address.to_bytes().to_vec(),
+        msg_amount: 1000,
+        msg_to: address.to_bytes().to_vec(),
     };
     let transaction = Transaction {
         msg_version: 1,
