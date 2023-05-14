@@ -11,7 +11,7 @@ use async_trait::async_trait;
 #[derive(Clone, PartialEq, Debug)]
 pub struct UTXO {
     pub hash: String,
-    pub out_index: u32, // Changed from i32 to u32
+    pub out_index: u32, 
     pub amount: i64,
     pub spent: bool,
 }
@@ -60,7 +60,7 @@ impl UTXOStorer for MemoryUTXOStore {
     fn get(&self, hash: &str, out_index: u32) -> Result<Option<UTXO>> {
         let key = format!("{}_{}", hash, out_index);
         let data = self.data.read().unwrap();
-        Ok(data.get(&key).cloned()) // Cloning the UTXO
+        Ok(data.get(&key).cloned())
     }
 }
 

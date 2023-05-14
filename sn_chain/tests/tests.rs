@@ -8,7 +8,6 @@ use sn_merkle::merkle::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use hex::encode;
 use anyhow::Result;
-use tokio::runtime::Runtime;
 
 async fn create_test_chain() -> Result<Chain> {
     let block_store = Box::new(MemoryBlockStore::new());
@@ -151,34 +150,17 @@ async fn test_validate_block_another() {
 }
 
 #[tokio::test]
-async fn test_validate_transaction() {
-    let chain = create_test_chain().await.unwrap();
-    let genesis_block = chain.get_block_by_height(0).await.unwrap();
-    let transaction = &genesis_block.msg_transactions[0];
-    assert!(chain.validate_transaction(transaction).is_ok());
-}
-
-#[test]
-fn test_rt_validate_transaction() {
-    let rt = Runtime::new().unwrap();
-    rt.block_on(async {
-        let chain = create_test_chain().await.unwrap();
-        let genesis_block = chain.get_block_by_height(0).await.unwrap();
-        let transaction = &genesis_block.msg_transactions[0];
-        assert!(chain.validate_transaction(transaction).is_ok());
-    });
-}
-
-#[tokio::test]
 async fn test_add_block_two() {
+    let keypair = Keypair::generate_keypair();
     let mut chain = create_test_chain().await.unwrap();
     let genesis_block = chain.get_block_by_height(0).await.unwrap();
     let genesis_hash = hash_header_by_block(&genesis_block).unwrap().to_vec();
+
     let input_tx = &genesis_block.msg_transactions[0];
     let input_tx_hash = hash_transaction(input_tx).await;
     let input_amount = input_tx.msg_outputs[0].msg_amount;
-    let keypair = Keypair::generate_keypair();
-    let address = keypair.public;
+    
+    let public_key = keypair.public;
 
     let mut input = TransactionInput {
         msg_previous_tx_hash: input_tx_hash,
@@ -187,21 +169,14 @@ async fn test_add_block_two() {
         msg_signature: vec![],
     };
 
-    let unsigned_input = TransactionInput {
-        msg_previous_tx_hash: input.msg_previous_tx_hash.clone(),
-        msg_previous_out_index: input.msg_previous_out_index,
-        msg_public_key: input.msg_public_key.clone(),
-        msg_signature: vec![],
-    };
-
     let output = TransactionOutput {
         msg_amount: input_amount,
-        msg_to: address.to_bytes().to_vec(),
+        msg_to: public_key.to_bytes().to_vec(),
     };
 
     let mut new_transaction = Transaction {
         msg_version: 1,
-        msg_inputs: vec![unsigned_input],
+        msg_inputs: vec![input.clone()],
         msg_outputs: vec![output],
         msg_relative_timestamp: 12,
     };
@@ -209,6 +184,7 @@ async fn test_add_block_two() {
     let signature = sign_transaction(&keypair, &new_transaction).await;
     input.msg_signature = signature.to_vec();
     new_transaction.msg_inputs[0] = input;
+
     let merkle_tree = MerkleTree::new(&vec![new_transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let prev_header = genesis_block.msg_header.as_ref().unwrap();
@@ -231,18 +207,14 @@ async fn test_add_block_two() {
     let signature = sign_block(&new_block, &keypair).await.unwrap();
     new_block.msg_signature = signature.to_vec();
 
-    // Test adding the new block to the chain
-    assert!(chain.add_block(new_block).await.is_ok());
+    chain.add_block(new_block).await.unwrap();
 
-    // Test getting the block by height and checking its height
     let retrieved_block = chain.get_block_by_height(1).await.unwrap();
     assert_eq!(retrieved_block.msg_header.as_ref().unwrap().msg_height, 1);
 
-    // Test getting the block by hash and checking its height
     let retrieved_block = chain.get_block_by_hash(&genesis_hash).await.unwrap();
     assert_eq!(retrieved_block.msg_header.as_ref().unwrap().msg_height, 0);
 
-    // Test getting the block by hash and checking its previous hash
     let retrieved_block = chain.get_block_by_height(1).await.unwrap();
     assert_eq!(retrieved_block.msg_header.as_ref().unwrap().msg_previous_hash, genesis_hash);
 }

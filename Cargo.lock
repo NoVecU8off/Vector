@@ -2019,6 +2019,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "ed25519-dalek",
  "hex",
  "rand 0.8.5",
  "sn_block",

@@ -28,13 +28,13 @@ mod tests {
         let header = Header {
             msg_version: 1,
             msg_height: 0,
-            msg_previous_hash: vec![0; 64],
+            msg_previous_hash: vec![0; 32],
             msg_root_hash: merkle_root,
             msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
     
         let public_key = vec![0; 32];
-        let signature = vec![0; 64];
+        let signature = vec![0; 32];
     
         Block {
             msg_header: Some(header),
@@ -64,14 +64,14 @@ mod tests {
     async fn test_hash_block() {
         let block = create_sample_block().await;
         let hash = hash_header_by_block(&block).unwrap();
-        assert_eq!(hash.len(), 64);
+        assert_eq!(hash.len(), 32);
     }
 
     #[tokio::test]
     async fn test_hash_header_by_block() {
         let block = create_sample_block().await;
         let hash = hash_header_by_block(&block).unwrap();
-        assert_eq!(hash.len(), 64);
+        assert_eq!(hash.len(), 32);
     }
 
     #[tokio::test]
@@ -79,6 +79,6 @@ mod tests {
         let block = create_sample_block().await;
         let header = block.msg_header.unwrap();
         let hash = hash_header(&header).await.unwrap();
-        assert_eq!(hash.len(), 64);
+        assert_eq!(hash.len(), 32);
     }
 }

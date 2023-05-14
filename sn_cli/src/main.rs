@@ -75,7 +75,8 @@ async fn main() {
                 match readline {
                     Ok(line) => {
                         let command = line.trim();
-                        // process validator commands
+                        if command == "send ... to ..." {
+                        }
                     },
                     Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
                         break;

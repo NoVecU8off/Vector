@@ -106,6 +106,7 @@ impl Chain {
             .unwrap()
             .clone();
         self.headers.add_header(header);
+        self.add_transactions(&block).await?;
         self.block_store.put(&block).await?;
         Ok(())
     }
@@ -231,7 +232,7 @@ impl Chain {
         Ok(())
     }
 
-    pub fn validate_transaction(&self, transaction: &Transaction) -> Result<()> {
+    fn validate_transaction(&self, transaction: &Transaction) -> Result<()> {
         let public_keys = self.extract_public_keys_from_transaction(transaction)?;
         self.check_transaction_signature(transaction, &public_keys)?;
         let sum_inputs = self.check_transaction_inputs(transaction)?;

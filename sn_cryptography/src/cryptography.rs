@@ -2,7 +2,7 @@ use ed25519_dalek::{SecretKey, ExpandedSecretKey, PublicKey, Signature as Ed2551
 use ed25519_dalek::{Verifier};
 use rand::{Rng, thread_rng};
 use rand::{rngs::OsRng, RngCore};
-use sha3::{Sha3_512, Digest};
+use sha3::{Sha3_256, Digest};
 use arrayref::{array_ref};
 use std::fmt;
 use serde::{Serializer, Deserializer, Serialize, Deserialize, de::Error as DeError};
@@ -24,7 +24,7 @@ pub fn generate_seed_os() -> [u8; 32] {
 pub fn inherit_seed() -> [u8; 32] {
     let t_seed = generate_seed_thread();
     let o_seed = generate_seed_os();
-    let mut hasher = Sha3_512::new();
+    let mut hasher = Sha3_256::new();
     hasher.update(array_ref![t_seed, 0, 32]);
     hasher.update(array_ref![o_seed, 0, 32]);
     let hash = hasher.finalize();
