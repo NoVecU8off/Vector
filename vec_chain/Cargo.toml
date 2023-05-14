@@ -1,0 +1,23 @@
+[package]
+name = "vec_chain"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+vec_block = { path = "../vec_block", version = "0.1.0"}
+vec_cryptography = { path = "../vec_cryptography", version = "0.1.0"}
+vec_proto = { path = "../vec_proto", version = "0.1.0"}
+vec_store = { path = "../vec_store", version = "0.1.0"}
+vec_transaction = { path = "../vec_transaction", version = "0.1.0"}
+vec_merkle = { path = "../vec_merkle", version = "0.1.0"}
+
+protobuf = "3.2.0"
+hex = "0.4.3"
+ed25519-dalek = "1.0.1"
+rayon = "1.7.0"
+anyhow = "1.0.71"
+tokio = "1.28.0"
+futures = "0.3.28"
+async-std = "1.12.0"

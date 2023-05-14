@@ -1,1 +1,0 @@
-openssl x509 -in sn_node/certs/<filename> -text -noout

@@ -1,0 +1,21 @@
+[package]
+name = "vec_cli"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+vec_cryptography = { path = "../vec_cryptography", version = "0.1.0"}
+vec_proto = { path = "../vec_proto", version = "0.1.0"}
+vec_transaction = { path = "../vec_transaction", version = "0.1.0"}
+vec_mempool = { path = "../vec_mempool", version = "0.1.0"}
+vec_server = { path = "../vec_server", version = "0.1.0"}
+vec_chain = { path = "../vec_chain", version = "0.1.0"}
+vec_store = { path = "../vec_store", version = "0.1.0"}
+vec_merkle = { path = "../vec_merkle", version = "0.1.0"}
+vec_block = { path = "../vec_block", version = "0.1.0"}
+vec_node = { path = "../vec_node", version = "0.1.0"}
+
+rustyline = "11.0.0"
+tokio = "1.28.1"

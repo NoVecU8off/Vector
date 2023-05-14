@@ -1,15 +1,15 @@
 [workspace]
 
 members = [
-    "sn_cryptography",
-    "sn_node",
-    "sn_chain",
-    "sn_store",
-    "sn_proto",
-    "sn_block",
-    "sn_transaction",
-    "sn_merkle",
-    "sn_cli",
-    "sn_mempool",
-    "sn_server",
+    "vec_cryptography",
+    "vec_node",
+    "vec_chain",
+    "vec_store",
+    "vec_proto",
+    "vec_block",
+    "vec_transaction",
+    "vec_merkle",
+    "vec_cli",
+    "vec_mempool",
+    "vec_server",
 ]
