@@ -11,36 +11,7 @@ use tokio::sync::{Mutex, RwLock};
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use std::time::{SystemTime, UNIX_EPOCH};
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum NodeServiceError {
-    #[error("Failed to create chain: {0}")]
-    ChainCreationError(String),
-    #[error("Failed to setup server: {0}")]
-    ServerSetupError(#[from] tonic::transport::Error),
-    #[error("Failed to bootstrap node: {0}")]
-    NodeBootstrapError(String),
-    #[error("Address parsing error: {0}")]
-    AddrParseError(#[from] std::net::AddrParseError),
-    #[error("Failed to broadcast transaction: {0}")]
-    BroadcastTransactionError(String),
-    #[error("Failed to bootstrap: {0}")]
-    BootstrapError(String),
-    #[error("Failed to make node client: {0}")]
-    MakeNodeClientError(#[from] tonic::transport::Error),
-    #[error("Failed to perform handshake: {0}")]
-    HandshakeError(#[from] tonic::Status),
-    #[error("Error encountered in bootstrap_network: {0}")]
-    BootstrapNetworkError(String),
-    #[error("Failed to create transaction: {0}")]
-    CreateTransactionError(String),
-    #[error("Failed to parse URI: {0}")]
-    UriParseError(#[from] http::uri::InvalidUri),
-    #[error("Failed to send shutdown signal")]
-    ShutdownError,
-}
-
+use vec_errors::errors::*;
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -135,7 +106,7 @@ impl NodeService {
         info!(logger, "NodeService {} created", cfg.cfg_addr);
         let peer_lock = Arc::new(RwLock::new(HashMap::new()));
         let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
-        let utxo_storer: Arc<Mutex<dyn UTXOStorer>> = Arc::new(Mutex::new(MemoryUTXOStore::new())); // add this line
+        let utxo_storer: Arc<Mutex<dyn UTXOStorer>> = Arc::new(Mutex::new(MemoryUTXOStore::new()));
         let chain = Chain::new_chain(block_storer)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
@@ -156,20 +127,20 @@ impl NodeService {
                 agreement_count: Arc::new(Mutex::new(0)),
                 vote_count: Arc::new(Mutex::new(HashMap::new())),
                 received_responses_count: Arc::new(Mutex::new(0)),
-                chain: Arc::clone(&chain),
+                chain: Arc::new(RwLock::new(chain)),
                 trigger_sender: Arc::new(Mutex::new(None)),
             };
             Some(Arc::new(validator))
         } else {
             None
         };
-        NodeService {
+        Ok(NodeService {
             server_config: cfg,
             peer_lock,
             validator,
             logger,
-            utxo_store: utxo_storer, // add this line
-        }
+            utxo_store: utxo_storer,
+        })
     }
 
     pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<(), NodeServiceError> {
@@ -201,7 +172,7 @@ impl NodeService {
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await
-            .map_err(NodeServiceError::ServerSetupError)
+            .map_err(NodeServiceError::TonicTransportError)
     }
 
     pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
@@ -270,8 +241,7 @@ impl NodeService {
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
         let mut c = make_node_client(addr)
-            .await
-            .map_err(NodeServiceError::MakeNodeClientError)?;
+            .await?;
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
@@ -389,18 +359,18 @@ impl NodeService {
 }
 
 pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>, NodeServiceError> {
-    let (cli_pem_certificate, cli_pem_key, cli_root) = read_client_certs_and_keys().await.map_err(|_| NodeServiceError::MakeNodeClientError(tonic::transport::Error::from(std::io::Error::new(std::io::ErrorKind::Other, "Failed to read client certs and keys"))))?;
-    let uri = format!("https://{}", addr).parse::<http::Uri>().map_err(NodeServiceError::UriParseError)?;
+    let (cli_pem_certificate, cli_pem_key, cli_root) = read_client_certs_and_keys().await.map_err(|_| NodeServiceError::FailedToReadCertificates)?;
+    let uri = format!("https://{}", addr).parse().map_err(NodeServiceError::UriParseError)?;
     let client_tls_config = ClientTlsConfig::new()
         .domain_name("cryptotron.test.com")
         .ca_certificate(Certificate::from_pem(cli_root))
         .identity(Identity::from_pem(cli_pem_certificate, cli_pem_key));
     let channel = Channel::builder(uri)
         .tls_config(client_tls_config)
-        .map_err(NodeServiceError::MakeNodeClientError)?
+        .map_err(NodeServiceError::TonicTransportError)?
         .connect()
         .await
-        .map_err(NodeServiceError::MakeNodeClientError)?;
+        .map_err(NodeServiceError::TonicTransportError)?;
     let node_client = NodeClient::new(channel);
     Ok(node_client)
 }

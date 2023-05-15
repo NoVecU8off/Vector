@@ -9,6 +9,7 @@ edition = "2021"
 vec_cryptography = { path = "../vec_cryptography", version = "0.1.0"}
 vec_proto = { path = "../vec_proto", version = "0.1.0"}
 vec_merkle = { path = "../vec_merkle", version = "0.1.0" }
+vec_errors = { path = "../vec_errors", version = "0.1.0" }
 
 sha3 = "0.10.6"
 prost = "0.11.8"

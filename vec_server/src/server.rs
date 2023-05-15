@@ -1,6 +1,6 @@
 use tokio::fs::{File};
 use vec_cryptography::cryptography::Keypair;
-use anyhow::{Result};
+use vec_errors::errors::*;
 use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
@@ -80,38 +80,38 @@ impl ServerConfig {
 }
 
 #[allow(dead_code)]
-async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), anyhow::Error> {
-    let serialized_data = serialize(config)?;
-    let mut file = File::create(config_path).await?;
-    file.write_all(&serialized_data).await?;
+async fn save_config(config: &ServerConfig, config_path: PathBuf) -> Result<(), ServerConfigError> {
+    let serialized_data = serialize(config).map_err(ServerConfigError::FailedToSerializeConfig)?;
+    let mut file = File::create(config_path).await.map_err(ServerConfigError::FailedToCreateConfigFile)?;
+    file.write_all(&serialized_data).await.map_err(ServerConfigError::FailedToWriteToConfigFile)?;
     Ok(())
 }
 
 #[allow(dead_code)]
-async fn load_config(config_path: PathBuf) -> Result<ServerConfig, anyhow::Error> {
-    let mut file = File::open(config_path).await?;
+async fn load_config(config_path: PathBuf) -> Result<ServerConfig, ServerConfigError> {
+    let mut file = File::open(config_path).await.map_err(ServerConfigError::FailedToOpenConfigFile)?;
     let mut serialized_data = Vec::new();
-    file.read_to_end(&mut serialized_data).await?;
-    let config: ServerConfig = deserialize(&serialized_data)?;
+    file.read_to_end(&mut serialized_data).await.map_err(ServerConfigError::FailedToReadFromConfigFile)?;
+    let config: ServerConfig = deserialize(&serialized_data).map_err(ServerConfigError::FailedToDeserializeConfig)?;
     Ok(config)
 }
 
-pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
+pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), ServerConfigError> {
     let cert_file_path = "./vec_server/certs/server.crt";
     let key_file_path = "./vec_server/certs/server.key";
     let root_file_path = "./vec_server/certs/root.crt";
-    let cert_pem = fs::read(cert_file_path)?;
-    let key_pem = fs::read(key_file_path)?;
-    let root_pem = fs::read(root_file_path)?;
+    let cert_pem = fs::read(cert_file_path).map_err(ServerConfigError::FailedToReadServerCert)?;
+    let key_pem = fs::read(key_file_path).map_err(ServerConfigError::FailedToReadServerKey)?;
+    let root_pem = fs::read(root_file_path).map_err(ServerConfigError::FailedToReadServerRootCert)?;
     Ok((cert_pem, key_pem, root_pem))
 }
 
-pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), anyhow::Error> {
+pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), ServerConfigError> {
     let cert_file_path = "./vec_server/certs/client.crt";
     let key_file_path = "./vec_server/certs/client.key";
     let root_file_path = "./vec_server/certs/root.crt";
-    let cert_pem = fs::read(cert_file_path)?;
-    let key_pem = fs::read(key_file_path)?;
-    let root_pem = fs::read(root_file_path)?;
+    let cert_pem = fs::read(cert_file_path).map_err(ServerConfigError::FailedToReadClientCert)?;
+    let key_pem = fs::read(key_file_path).map_err(ServerConfigError::FailedToReadClientKey)?;
+    let root_pem = fs::read(root_file_path).map_err(ServerConfigError::FailedToReadClientRootCert)?;
     Ok((cert_pem, key_pem, root_pem))
 }

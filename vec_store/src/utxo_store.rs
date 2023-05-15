@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::sync::Arc;
-use thiserror::Error;
 use async_trait::async_trait;
+use vec_errors::errors::*;
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct UTXO {
@@ -12,19 +12,11 @@ pub struct UTXO {
     pub address: Vec<u8>,
 }
 
-#[derive(Error, Debug)]
-pub enum StoreError {
-    #[error("Couldn't find required UTXOs")]
-    UtxosNotFound,
-    #[error("UTXO not found")]
-    UtxoNotFound,
-}
-
 pub trait UTXOStorer: Send + Sync {
-    fn put(&mut self, utxo: UTXO) -> Result<(), StoreError>;
-    fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, StoreError>;
-    fn find_utxos(&self, address: &Vec<u8>, amount_needed: i64) -> Result<Vec<UTXO>, StoreError>;
-    fn remove_utxo(&mut self, key: &(String, u32)) -> Result<(), StoreError>;
+    fn put(&mut self, utxo: UTXO) -> Result<(), UTXOStorageError>;
+    fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, UTXOStorageError>;
+    fn find_utxos(&self, address: &Vec<u8>, amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError>;
+    fn remove_utxo(&mut self, key: &(String, u32)) -> Result<(), UTXOStorageError>;
 }
 
 #[derive(Debug)]
@@ -60,24 +52,23 @@ impl Default for MemoryUTXOStore {
 }
 
 impl UTXOStorer for MemoryUTXOStore {
-    fn put(&mut self, utxo: UTXO) -> Result<(), StoreError> {
+    fn put(&mut self, utxo: UTXO) -> Result<(), UTXOStorageError> {
         let key = (utxo.transaction_hash.clone(), utxo.output_index);
-        let mut data = self.data.write().map_err(|_| StoreError::UtxosNotFound)?;
+        let mut data = self.data.write().map_err(|_| UTXOStorageError::WriteLockError)?;
         data.insert(key.clone(), utxo.clone());
-        let mut user_utxos = self.user_utxos.write().map_err(|_| StoreError::UtxosNotFound)?;
+        let mut user_utxos = self.user_utxos.write().map_err(|_| UTXOStorageError::WriteLockError)?;
         user_utxos.entry(utxo.address.clone()).or_insert_with(Vec::new).push(utxo);
         Ok(())
     }
-    fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, StoreError> {
+    fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, UTXOStorageError> {
         let key = (transaction_hash.to_string(), output_index);
-        let data = self.data.read().map_err(|_| StoreError::UtxosNotFound)?;
+        let data = self.data.read().map_err(|_| UTXOStorageError::ReadLockError)?;
         Ok(data.get(&key).cloned())
     }
-    fn find_utxos(&self, address: &Vec<u8>, amount_needed: i64) -> Result<Vec<UTXO>, StoreError> {
-        let user_utxos = self.user_utxos.read().map_err(|_| StoreError::UtxosNotFound)?;
-        if let Some(utxos) = user_utxos.get(address) {
+    fn find_utxos(&self, address: &Vec<u8>, amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError> {
+        let user_utxos = self.user_utxos.read().map_err(|_| UTXOStorageError::ReadLockError)?;        if let Some(utxos) = user_utxos.get(address) {
             let mut sorted_utxos = utxos.clone();
-            sorted_utxos.sort_by(|a, b| b.amount.cmp(&a.amount));  // sort in descending order
+            sorted_utxos.sort_by(|a, b| b.amount.cmp(&a.amount));
             let mut total = 0;
             let mut selected_utxos = Vec::new();
             for utxo in sorted_utxos {
@@ -88,18 +79,19 @@ impl UTXOStorer for MemoryUTXOStore {
                 }
             }
         }
-        Err(StoreError::UtxosNotFound)
+        Err(UTXOStorageError::InsufficientUtxos)
     }
-    fn remove_utxo(&mut self, key: &(String, u32)) -> Result<(), StoreError> {
-        let mut data = self.data.write().map_err(|_| StoreError::UtxosNotFound)?;
+    fn remove_utxo(&mut self, key: &(String, u32)) -> Result<(), UTXOStorageError> {
+        let mut data = self.data.write().map_err(|_| UTXOStorageError::WriteLockError)?;
         if let Some(utxo) = data.remove(key) {
-            let mut user_utxos = self.user_utxos.write().map_err(|_| StoreError::UtxosNotFound)?;
+            let mut user_utxos = self.user_utxos.write().map_err(|_| UTXOStorageError::WriteLockError)?;
             if let Some(utxos) = user_utxos.get_mut(&utxo.address) {
                 utxos.retain(|u| u.transaction_hash != utxo.transaction_hash || u.output_index != utxo.output_index);
             }
             Ok(())
         } else {
-            Err(StoreError::UtxoNotFound)
+            Err(UTXOStorageError::UtxoNotFound)
         }
     }
+    
 }

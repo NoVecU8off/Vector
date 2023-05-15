@@ -3,13 +3,7 @@ use vec_proto::messages::{Transaction};
 use vec_transaction::transaction::*;
 use prost::Message;
 use rayon::prelude::*;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum MerkleTreeError {
-    #[error("Failed to compute hashes")]
-    HashingError,
-}
+use vec_errors::errors::*;
 
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
@@ -27,9 +21,9 @@ pub struct TransactionWrapper {
 
 impl MerkleTree {
     pub fn new(transactions: &Vec<Transaction>) -> Result<MerkleTree, MerkleTreeError> {
-        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions)?; // Added ?
+        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions)?;
         let nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
-        let (root, depth) = MerkleTree::build(&nodes)?;  // Added ?
+        let (root, depth) = MerkleTree::build(&nodes)?;
         let merkle = MerkleTree {
             root,
             depth,

@@ -2,6 +2,7 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_node::{node::*};
 use vec_server::server::*;
+use vec_errors::errors::*;
 
 enum UserType {
     Validator,
@@ -70,10 +71,17 @@ async fn main() {
                 }
             }
             let scv = ServerConfig::default_v().await;
-            let mut nsv = NodeService::new(scv).await;
-            tokio::spawn(async move {
-                nsv.start(Vec::new()).await.unwrap();
-            });
+            let nsv_result = NodeService::new(scv).await;
+            match nsv_result {
+                Ok(mut nsv) => {
+                    tokio::spawn(async move {
+                        nsv.start(Vec::new()).await.unwrap();
+                    });
+                }
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
+            }
             let operation_type: OperationType = loop {
                 let readline = rl.readline("validator> (available: tx)");
                 match readline {
@@ -121,11 +129,18 @@ async fn main() {
                     },
                 }
             }
-            let scn = ServerConfig::default_n().await;
-            let mut nsn = NodeService::new(scn).await;
-            tokio::spawn(async move {
-                nsn.start(Vec::new()).await.unwrap();
-            });
+            let scn = ServerConfig::default_v().await;
+            let nsn_result = NodeService::new(scn).await;
+            match nsn_result {
+                Ok(mut nsn) => {
+                    tokio::spawn(async move {
+                        nsn.start(Vec::new()).await.unwrap();
+                    });
+                }
+                Err(e) => {
+                    println!("Error: {:?}", e);
+                }
+            }
             loop {
                 let readline = rl.readline("user> ");
                 match readline {

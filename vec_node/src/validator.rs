@@ -5,10 +5,10 @@ use vec_mempool::mempool::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_chain::chain::Chain;
 use vec_block::block::*;
+use vec_errors::errors::*;
 use tokio::sync::{Mutex, RwLock, oneshot};
 use std::{collections::HashMap, time::{Duration, SystemTime}};
 use tonic::{Request, Response, Status, codegen::Arc};
-use anyhow::Result;
 use futures::future::try_join_all;
 use rand::{Rng};
 use slog::{info, error};
@@ -154,7 +154,7 @@ impl ValidatorService {
         }
     }
 
-    pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<()> {
+    pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<(), ValidatorServiceError> {
         let peers_data = {
             let peers = self.node_service.peer_lock.read().await;
             peers
@@ -207,7 +207,7 @@ impl ValidatorService {
         self.broadcast_unsigned_block_hash(&block_hash).await.unwrap();
     }
 
-    pub async fn accept_round_transactions(&self) -> Result<()> {
+    pub async fn accept_round_transactions(&self) -> Result<(), ValidatorServiceError> {
         let transactions = self.mempool.get_transactions().await;
         {
             let mut round_transactions = self.round_transactions.lock().await;
@@ -219,7 +219,7 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn create_unsigned_block(&self) -> Result<Block> {
+    pub async fn create_unsigned_block(&self) -> Result<Block, ValidatorServiceError> {
         info!(self.node_service.logger, "{}: unsigned block creation", self.node_service.server_config.cfg_addr);
         let chain = &self.chain;
         let chain_read_lock = chain.read().await;
@@ -252,12 +252,12 @@ impl ValidatorService {
         Ok(block)
     }    
 
-    pub async fn hash_unsigned_block(&self, block: &Block) -> Result<Vec<u8>> {
+    pub async fn hash_unsigned_block(&self, block: &Block) -> Result<Vec<u8>, ValidatorServiceError> {
         let hash = hash_header_by_block(block).unwrap().to_vec();
         Ok(hash)
     }
 
-    pub async fn broadcast_unsigned_block_hash(&self, block_hash: &Vec<u8>) -> Result<()> {
+    pub async fn broadcast_unsigned_block_hash(&self, block_hash: &Vec<u8>) -> Result<(), ValidatorServiceError> {
         info!(self.node_service.logger, "{}: broadcasting block", self.node_service.server_config.cfg_addr);
         let my_addr = &self.node_service.server_config.cfg_addr;
         let msg = HashAgreement {
@@ -313,7 +313,7 @@ impl ValidatorService {
         received_block_hash == &local_block_hash
     }
 
-    pub async fn respond_to_received_block_hash(&self, msg: &HashAgreement, target: String) -> Result<()> {
+    pub async fn respond_to_received_block_hash(&self, msg: &HashAgreement, target: String) -> Result<(), ValidatorServiceError> {
         let peers_data = {
             let peers = self.node_service.peer_lock.read().await;
             peers
@@ -365,13 +365,13 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn clear_round_transactions(&self) -> Result<()> {
+    pub async fn clear_round_transactions(&self) -> Result<(), ValidatorServiceError> {
         let mut round_transactions = self.round_transactions.lock().await;
         round_transactions.clear();
         Ok(())
     }
 
-    pub async fn broadcast_vote(&self, vote: Vote) -> Result<()> {
+    pub async fn broadcast_vote(&self, vote: Vote) -> Result<(), ValidatorServiceError> {
         let peers_data = {
             let peers = self.node_service.peer_lock.read().await;
             peers
@@ -479,7 +479,7 @@ impl ValidatorService {
         }
     }
 
-    pub async fn broadcast_block(&self, block: Block) -> Result<()> {
+    pub async fn broadcast_block(&self, block: Block) -> Result<(), ValidatorServiceError> {
         let peers_data = {
             let peers = self.node_service.peer_lock.read().await;
             peers

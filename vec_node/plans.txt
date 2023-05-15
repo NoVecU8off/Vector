@@ -1,9 +1,3 @@
-Parallelize block creation: In the validator_tick method, you could also parallelize the process of creating a new block 
-from the mempool transactions. For instance, you can divide the transactions into smaller groups and assign them to 
-different tasks for processing. Once all tasks are completed, you can merge the results to create the final block.
-
-_______________________________________________________________________________________________________________________________
-
 Distributed Hash Table (DHT): You can use a DHT like Kademlia to store information about active nodes in the network. 
 In Kademlia, nodes are assigned a unique identifier based on their IP addresses. When a node wants to discover other 
 nodes, it sends a lookup request to the closest nodes it knows about, which in turn forward the request to their closest 
@@ -37,62 +31,108 @@ maintain an updated list of active peers and discover new nodes as they join the
     known nodes with each other.
 }}}}}}
 
-I want to break this function to two functions:
-first fill create common nodeService and if node_service.server_config.cfg_is_validator is set to true initiate validator and place it to the vlidator field of the node service
-#[derive(Clone)]
-pub struct NodeService {
-    pub server_config: ServerConfig,
-    pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
-    pub validator: Option<Arc<ValidatorService>>,
+error[E0277]: `?` couldn't convert the error to `vec_errors::errors::ChainError`
+  --> vec_chain\src\chain.rs:90:43
+   |
+90 |         self.block_store.put(&block).await?;
+   |                                           ^ the trait `From<vec_store::block_store::StoreError>` is not implemented for `vec_errors::errors::ChainError`
+error[E0277]: `?` couldn't convert the error to `vec_errors::errors::ChainError`
+   --> vec_chain\src\chain.rs:100:43
+    |
+100 |         self.block_store.put(&block).await?;
+    |                                           ^ the trait `From<vec_store::block_store::StoreError>` is not implemented for `vec_errors::errors::ChainError`
+error[E0277]: the trait bound `vec_errors::errors::ChainError: From<vec_store::block_store::StoreError>` is not satisfied
+   --> vec_chain\src\chain.rs:109:33
+    |
+109 |             Err(err) => Err(err.into()),
+    |                                 ^^^^ the trait `From<vec_store::block_store::StoreError>` is not implemented for `vec_errors::errors::ChainError`
+error[E0277]: `?` couldn't convert the error to `vec_errors::errors::ChainError`
+   --> vec_chain\src\chain.rs:121:45
+    |
+121 |         let hash = hash_header(header).await?;
+    |                                             ^ the trait `From<vec_block::block::BlockError>` is not implemented for `vec_errors::errors::ChainError`
+error[E0277]: `?` couldn't convert the error to `vec_errors::errors::ChainError`
+   --> vec_chain\src\chain.rs:132:59
+    |
+132 |         let message = hash_header_by_block(incoming_block)?;
+    |                                                           ^ the trait `From<vec_block::block::BlockError>` is not implemented for `vec_errors::errors::ChainError`
+error[E0277]: `?` couldn't convert the error to `vec_errors::errors::ChainError`
+   --> vec_chain\src\chain.rs:133:58
+    |
+133 |         public_key.verify(&message, &signature.signature)?;
+    |                                                          ^ the trait `From<ed25519_dalek::ed25519::Error>` is not implemented for `vec_errors::errors::ChainError`
+error[E0277]: `?` couldn't convert the error to `vec_errors::errors::ChainError`
+   --> vec_chain\src\chain.rs:157:64
+    |
+157 |         let last_block_hash = hash_header_by_block(&last_block)?.to_vec();
+    |                                                                ^ the trait `From<vec_block::block::BlockError>` is not implemented for `vec_errors::errors::ChainError`
+My errors.rs:
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum BlockError {
+    #[error("Block header is missing")]
+    MissingHeader,
+    #[error(transparent)]
+    MerkleTreeError(#[from] MerkleTreeError),
 }
-impl NodeService {
-    pub async fn new(cfg: ServerConfig) -> Self {
-        info!("NodeService {} created", cfg.cfg_addr);
-        let peer_lock = Arc::new(RwLock::new(HashMap::new()));
-        let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
-        let tx_storer: Box<dyn TXStorer> = Box::new(MemoryTXStore::new());
-        let chain = match Chain::new_chain(block_storer, tx_storer).await {
-            Ok(chain) => Arc::new(RwLock::new(chain)),
-            Err(e) => panic!("Failed to create chain: {:?}", e),
-        };
-        let node_service = NodeService {
-            server_config: cfg.clone(),
-            peer_lock: Arc::clone(&peer_lock),
-            validator: None,
-        };
-        let validator = if cfg.cfg_is_validator {
-            let validator = ValidatorService {
-                validator_id: 0,
-                node_service: Arc::new(node_service.clone()),
-                mempool: Arc::new(Mempool::new()),
-                round_transactions: Arc::new(Mutex::new(Vec::new())),
-                created_block: Arc::new(Mutex::new(None)),
-                agreement_count: Arc::new(Mutex::new(0)),
-                vote_count: Arc::new(Mutex::new(HashMap::new())),
-                received_responses_count: Arc::new(Mutex::new(0)),
-                chain: Arc::clone(&chain),
-                trigger_sender: Arc::new(Mutex::new(None)),
-            };
-            Some(Arc::new(validator))
-        } else {
-            None
-        };
-        NodeService {
-            server_config: cfg,
-            peer_lock,
-            validator,
-        }
-    }    
-#[derive(Clone)]
-pub struct ValidatorService {
-    pub validator_id: i32,
-    pub node_service: Arc<NodeService>,
-    pub mempool: Arc<Mempool>,
-    pub round_transactions: Arc<Mutex<Vec<Transaction>>>,
-    pub created_block: Arc<Mutex<Option<(Block, Vec<u8>)>>>,
-    pub agreement_count: Arc<Mutex<usize>>,
-    pub vote_count: Arc<Mutex<HashMap<u64, usize>>>,
-    pub received_responses_count: Arc<Mutex<usize>>,
-    pub chain: Arc<RwLock<Chain>>,
-    pub trigger_sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
+
+#[derive(Error, Debug)]
+pub enum ChainError {
+    #[error("Invalid public key in block")]
+    InvalidPublicKey,
+    #[error("Invalid transaction signature")]
+    InvalidTransactionSignature,
+    #[error("Index too high")]
+    IndexTooHigh,
+    #[error("Failed to create genesis block: {0}")]
+    GenesisBlockCreationFailed(#[from] Box<dyn std::error::Error>),
+    #[error("Block with hash {0} not found")]
+    BlockNotFound(String),
+    #[error("Chain is empty")]
+    ChainIsEmpty,
+    #[error("Given height ({0}) too high - height ({1})")]
+    HeightTooHigh(usize, usize),
+    #[error("Invalid previous block hash: expected ({0}), got ({1})")]
+    InvalidPreviousBlockHash(String, String),
+    #[error("Block header is missing")]
+    BlockHeaderMissing,
+    #[error("Invalid public key in transaction input")]
+    InvalidPublicKeyInTransactionInput,
+    #[error("Missing block header")]
+    MissingBlockHeader,
+}
+
+#[derive(Error, Debug)]
+pub enum MerkleTreeError {
+    #[error("Failed to compute hashes")]
+    HashingError,
+}
+
+#[derive(Debug, Error)]
+pub enum NodeServiceError {
+    #[error("Failed to create chain: {0}")]
+    ChainCreationError(String),
+    #[error("Failed to setup server: {0}")]
+    ServerSetupError(#[from] tonic::transport::Error),
+    #[error("Failed to bootstrap node: {0}")]
+    NodeBootstrapError(String),
+    #[error("Address parsing error: {0}")]
+    AddrParseError(#[from] std::net::AddrParseError),
+    #[error("Failed to broadcast transaction: {0}")]
+    BroadcastTransactionError(String),
+    #[error("Failed to bootstrap: {0}")]
+    BootstrapError(String),
+    #[error("Failed to make node client: {0}")]
+    MakeNodeClientError(#[from] tonic::transport::Error),
+    #[error("Failed to perform handshake: {0}")]
+    HandshakeError(#[from] tonic::Status),
+    #[error("Error encountered in bootstrap_network: {0}")]
+    BootstrapNetworkError(String),
+    #[error("Failed to create transaction: {0}")]
+    CreateTransactionError(String),
+    #[error("Failed to parse URI: {0}")]
+    UriParseError(#[from] http::uri::InvalidUri),
+    #[error("Failed to send shutdown signal")]
+    ShutdownError,
 }

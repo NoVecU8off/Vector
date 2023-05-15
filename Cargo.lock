@@ -2300,6 +2300,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "vec_cryptography",
+ "vec_errors",
  "vec_merkle",
  "vec_proto",
 ]
@@ -2335,6 +2336,7 @@ dependencies = [
  "vec_block",
  "vec_chain",
  "vec_cryptography",
+ "vec_errors",
  "vec_mempool",
  "vec_merkle",
  "vec_node",
@@ -2361,7 +2363,11 @@ dependencies = [
 name = "vec_errors"
 version = "0.1.0"
 dependencies = [
+ "bincode",
+ "ed25519-dalek",
+ "http",
  "thiserror",
+ "tonic",
 ]
 
 [[package]]
@@ -2388,8 +2394,8 @@ dependencies = [
  "protobuf",
  "rayon",
  "sha3",
- "thiserror",
  "tokio",
+ "vec_errors",
  "vec_proto",
  "vec_transaction",
 ]
@@ -2423,6 +2429,7 @@ dependencies = [
  "vec_block",
  "vec_chain",
  "vec_cryptography",
+ "vec_errors",
  "vec_mempool",
  "vec_merkle",
  "vec_proto",
@@ -2449,7 +2456,6 @@ dependencies = [
 name = "vec_server"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bincode",
  "env_logger",
  "futures",
@@ -2471,6 +2477,7 @@ dependencies = [
  "tonic",
  "url",
  "vec_cryptography",
+ "vec_errors",
  "vec_mempool",
  "vec_proto",
  "vec_transaction",
@@ -2490,6 +2497,7 @@ dependencies = [
  "tokio",
  "vec_block",
  "vec_cryptography",
+ "vec_errors",
  "vec_merkle",
  "vec_proto",
  "vec_transaction",
