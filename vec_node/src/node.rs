@@ -155,7 +155,7 @@ impl NodeService {
         }
         if self.server_config.cfg_is_validator {
             if let Some(validator) = &self.validator {
-                validator.initialize_validating().await;
+                validator.initialize_validating().await?;
             }
         }
         Ok(())

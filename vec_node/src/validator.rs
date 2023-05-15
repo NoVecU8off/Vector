@@ -64,7 +64,8 @@ impl Validator for ValidatorService {
                 info!(self.node_service.logger, "{}: received transaction: {}", self.node_service.server_config.cfg_addr, hash_str);
                 let self_clone = self.clone();
                 tokio::spawn(async move {
-                    if let Err(_err) = self_clone.broadcast_transaction(transaction).await {
+                    if let Err(e) = self_clone.broadcast_transaction(transaction).await {
+                        error!(self_clone.node_service.logger, "Error broadcasting transaction: {}", e);
                     }
                 });
             }
@@ -82,7 +83,13 @@ impl Validator for ValidatorService {
         let is_response = hash_agreement.msg_is_responce;
         let sender_addr = hash_agreement.msg_sender_addr;
         if !is_response {
-            let agreed = self.compare_block_hashes(&hash).await;
+            let agreed = match self.compare_block_hashes(&hash).await {
+                Ok(result) => result,
+                Err(e) => {
+                    error!(self.node_service.logger, "Error comparing block hashes: {}", e);
+                    return Err(Status::internal("Failed to compare block hashes"));
+                }
+            };
             let msg = HashAgreement {
                 msg_validator_id: self.validator_id as u64,
                 msg_block_hash: hash.clone(),
@@ -90,7 +97,9 @@ impl Validator for ValidatorService {
                 msg_is_responce: true,
                 msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
             };
-            self.respond_to_received_block_hash(&msg, sender_addr).await.unwrap();
+            if let Err(e) = self.respond_to_received_block_hash(&msg, sender_addr).await {
+                error!(self.node_service.logger, "Error responding to hash agreement message: {}", e);
+            }
         } else {
             let num_validators = {
                 let peers = self.node_service.peer_lock.read().await;
@@ -108,11 +117,15 @@ impl Validator for ValidatorService {
                 let mut agreement_count = self.agreement_count.lock().await;
                 let required_agreements = (2 * num_validators) / 3 + 1;
                 if *agreement_count >= required_agreements {
-                    self.initialize_voting().await.unwrap();
+                    if let Err(e) = self.initialize_voting().await {
+                        error!(self.node_service.logger, "Failed to initialize voting during hash agreement: {}", e);
+                    }
                 } else {
                     *agreement_count = 0;
                     *received_responses_count = 0;
-                    self.initialize_consensus().await;
+                    if let Err(e) = self.initialize_consensus().await {
+                        error!(self.node_service.logger, "Failed to reinitialize consensus after hash agreement failure: {}", e);
+                    }
                 }
             }
         }
@@ -126,7 +139,9 @@ impl Validator for ValidatorService {
         let vote = request.into_inner();
         let target_validator_id = vote.msg_target_validator_id;
         self.update_vote_count(target_validator_id).await;
-        self.wait_for_voting_completion().await;
+        if let Err(e) = self.wait_for_voting_completion().await {
+            error!(self.node_service.logger, "Failed to wait for voting completion: {}", e);
+        }
         Ok(Response::new(Confirmed {}))
     }
 
@@ -136,20 +151,22 @@ impl Validator for ValidatorService {
     ) -> Result<Response<Confirmed>, Status> {
         let new_block = request.into_inner();
         let mut chain_lock = self.chain.write().await;
-        chain_lock.add_leader_block(new_block).await.unwrap();
+        if let Err(e) = chain_lock.add_leader_block(new_block).await {
+            error!(self.node_service.logger, "Failed to add leaders block: {}", e);
+        }
         Ok(Response::new(Confirmed {}))
     }
 }
 
 impl ValidatorService {
-    pub async fn initialize_validating(&self) {
+    pub async fn initialize_validating(&self) -> Result<(), ValidatorServiceError> {
         let node_clone = self.clone();
         let mut interval = tokio::time::interval(Duration::from_millis(10));
         loop {
             interval.tick().await;
             let num_transactions = node_clone.mempool.len().await;
             if num_transactions == 5 {
-                node_clone.initialize_consensus().await;
+                node_clone.initialize_consensus().await?;
             }
         }
     }
@@ -172,13 +189,15 @@ impl ValidatorService {
                 let req = Request::new(transaction_clone.clone());
                 if addr != self_clone.node_service.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_transaction(req).await {
-                        eprintln!(
+                        info!(
+                            self_clone.node_service.logger,
                             "Failed to broadcast transaction to {}: {:?}",
                             addr,
                             err
                         );
                     } else {
-                        println!(
+                        error!(
+                            self_clone.node_service.logger,
                             "{}: broadcasted transaction to  {}",
                             self_clone.node_service.server_config.cfg_addr,
                             addr
@@ -188,23 +207,24 @@ impl ValidatorService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await.unwrap();
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::TransactionBroadcastFailed)?;
         Ok(())
     }
 
-    pub async fn initialize_consensus(&self) {
+    pub async fn initialize_consensus(&self) -> Result<(), ValidatorServiceError> {
         info!(self.node_service.logger, "{}: Consensus initialized", self.node_service.server_config.cfg_addr);
         let mut created_block_lock = self.created_block.lock().await;
-            { *created_block_lock = None; }
-        self.accept_round_transactions().await.unwrap();
+        *created_block_lock = None;
+        self.accept_round_transactions().await?;
         self.mempool.clear().await;
-        self.create_unsigned_block().await.unwrap();
+        self.create_unsigned_block().await?;
         let (_, block_hash) = {
             let created_block_lock = self.created_block.lock().await;
-            created_block_lock.as_ref().unwrap().clone()
+            created_block_lock.as_ref().ok_or(ValidatorServiceError::NoCreatedBlockFound)?.clone()
         };
         self.update_agreement_count().await;
-        self.broadcast_unsigned_block_hash(&block_hash).await.unwrap();
+        self.broadcast_unsigned_block_hash(&block_hash).await?;
+        Ok(())
     }
 
     pub async fn accept_round_transactions(&self) -> Result<(), ValidatorServiceError> {
@@ -223,7 +243,7 @@ impl ValidatorService {
         info!(self.node_service.logger, "{}: unsigned block creation", self.node_service.server_config.cfg_addr);
         let chain = &self.chain;
         let chain_read_lock = chain.read().await;
-        let msg_previous_hash = Chain::get_previous_hash_in_chain(&chain_read_lock).await.unwrap();
+        let msg_previous_hash = Chain::get_previous_hash_in_chain(&chain_read_lock).await?;
         let height = Chain::chain_height(&chain_read_lock) as i32;
         let keypair = &self.node_service.server_config.cfg_keypair;
         let public_key = keypair.public.to_bytes().to_vec();
@@ -231,7 +251,7 @@ impl ValidatorService {
             let round_transactions = self.round_transactions.lock().await;
             round_transactions.clone()
         };
-        let merkle_tree = MerkleTree::new(&transactions).unwrap();
+        let merkle_tree = MerkleTree::new(&transactions)?;
         let merkle_root = merkle_tree.root.to_vec();
         let header = Header {
             msg_version: 1,
@@ -246,14 +266,14 @@ impl ValidatorService {
             msg_public_key: public_key,
             msg_signature: vec![],
         };
-        let hash = self.hash_unsigned_block(&block).await.unwrap();
+        let hash = self.hash_unsigned_block(&block).await?;
         let mut created_block_lock = self.created_block.lock().await;
         *created_block_lock = Some((block.clone(), hash));
         Ok(block)
     }    
 
     pub async fn hash_unsigned_block(&self, block: &Block) -> Result<Vec<u8>, ValidatorServiceError> {
-        let hash = hash_header_by_block(block).unwrap().to_vec();
+        let hash = hash_header_by_block(block)?.to_vec();
         Ok(hash)
     }
 
@@ -284,13 +304,15 @@ impl ValidatorService {
                 let req = Request::new(msg_clone);
                 if addr != self_clone.node_service.server_config.cfg_addr {
                     if let Err(err) = peer_client_lock.handle_agreement(req).await {
-                        eprintln!(
+                        error!(
+                            self_clone.node_service.logger,
                             "Failed to broadcast unsigned block hash to {}: {:?}",
                             addr,
                             err
                         );
                     } else {
-                        println!(
+                        info!(
+                            self_clone.node_service.logger,
                             "{}: broadcasted unsigned block hash to  {}",
                             self_clone.node_service.server_config.cfg_addr,
                             addr
@@ -300,17 +322,17 @@ impl ValidatorService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await.unwrap();
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::HashBroadcastFailed)?;
         Ok(())
     }
 
-    pub async fn compare_block_hashes(&self, received_block_hash: &Vec<u8>) -> bool {
+    pub async fn compare_block_hashes(&self, received_block_hash: &Vec<u8>) -> Result<bool, ValidatorServiceError> {
         info!(self.node_service.logger, "{}: hashes are being compared", self.node_service.server_config.cfg_addr);
         let (_, local_block_hash) = {
             let local_block_hash = self.created_block.lock().await;
-            local_block_hash.as_ref().unwrap().clone()
+            local_block_hash.as_ref().ok_or(ValidatorServiceError::NoCreatedBlockFound)?.clone()
         };
-        received_block_hash == &local_block_hash
+        Ok(received_block_hash == &local_block_hash)
     }
 
     pub async fn respond_to_received_block_hash(&self, msg: &HashAgreement, target: String) -> Result<(), ValidatorServiceError> {
@@ -327,13 +349,15 @@ impl ValidatorService {
             let req = Request::new(msg_clone);
             if addr != self_clone.node_service.server_config.cfg_addr {
                 if let Err(err) = peer_client_lock.handle_agreement(req).await {
-                    eprintln!(
+                    error!(
+                        self_clone.node_service.logger,
                         "Failed to send response to {}: {:?}",
                         addr,
                         err
                     );
                 } else {
-                    println!(
+                    info!(
+                        self_clone.node_service.logger,
                         "{}: sent response to  {}",
                         self_clone.node_service.server_config.cfg_addr,
                         addr
@@ -352,8 +376,8 @@ impl ValidatorService {
         *agreement_count += 1;
     }
 
-    async fn initialize_voting(&self) -> Result<(), Box<dyn std::error::Error>> {
-        self.clear_round_transactions().await.unwrap();
+    async fn initialize_voting(&self) -> Result<(), ValidatorServiceError> {
+        self.clear_round_transactions().await?;
         if let Some(random_validator_id) = self.select_random_validator().await {
             let vote = Vote {
                 msg_validator_id: self.validator_id as u64,
@@ -390,10 +414,15 @@ impl ValidatorService {
                 let res = peer_client_lock.handle_vote(req).await;
                 match res {
                     Ok(_) => {
+                        info!(
+                            self_clone.node_service.logger,
+                            "Vote counter updated"
+                        );
                         self_clone.update_vote_count(vote.msg_target_validator_id).await;
                     }
                     Err(e) => {
-                        eprintln!(
+                        error!(
+                            self_clone.node_service.logger,
                             "Failed to broadcast vote to validator {}: {:?}",
                             addr, e
                         );
@@ -402,7 +431,7 @@ impl ValidatorService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await.unwrap();
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::VoteBroadcastFailed)?;
         Ok(())
     }
 
@@ -413,7 +442,7 @@ impl ValidatorService {
         *count
     }
 
-    async fn wait_for_voting_completion(&self) {
+    pub async fn wait_for_voting_completion(&self) -> Result<(), ValidatorServiceError> {
         let validators_count = {
             let peers = self.node_service.peer_lock.read().await;
             peers.iter().filter(|(_, (_, _, is_validator))| *is_validator).count()
@@ -422,11 +451,12 @@ impl ValidatorService {
             let total_votes: usize = self.vote_count.lock().await.values().sum();
             if total_votes == validators_count - 1 {
                 let mut chain_write_lock = self.chain.write().await;
-                self.finalize_block_if_winner(&mut chain_write_lock).await;
+                self.finalize_block_if_winner(&mut chain_write_lock).await?;
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        Ok(())
     }    
 
     pub async fn select_random_validator(&self) -> Option<u64> {
@@ -446,17 +476,18 @@ impl ValidatorService {
         }
     }    
 
-    async fn finalize_block_if_winner(&self, chain: &mut Chain) {
+    async fn finalize_block_if_winner(&self, chain: &mut Chain) -> Result<(), ValidatorServiceError> {
         let vote_count = self.vote_count.lock().await;
         let highest_vote_count = vote_count.values().max().unwrap_or(&0);
         if let Some(own_vote_count) = vote_count.get(&(self.validator_id as u64)) {
             if own_vote_count == highest_vote_count {
-                self.finalize_block(chain).await;
+                self.finalize_block(chain).await?;
             }
         }
+        Ok(())
     }
 
-    pub async fn finalize_block(&self, chain: &mut Chain) {
+    pub async fn finalize_block(&self, chain: &mut Chain) -> Result<(), ValidatorServiceError> {
         let created_block_tuple = {
             let created_block_lock = self.created_block.lock().await;
             created_block_lock.clone()
@@ -470,13 +501,14 @@ impl ValidatorService {
                 header.msg_timestamp = timestamp as i64;
             }
             let keypair = &self.node_service.server_config.cfg_keypair;
-            let signature = sign_block(&block, keypair).await.unwrap();
+            let signature = sign_block(&block, keypair).await?;
             block.msg_signature = signature.to_vec();
-            chain.add_block(block.clone()).await.unwrap();
-            self.broadcast_block(block).await.unwrap();
+            chain.add_block(block.clone()).await?;
+            self.broadcast_block(block).await?;
             let mut created_block_lock = self.created_block.lock().await;
             *created_block_lock = None;
         }
+        Ok(())
     }
 
     pub async fn broadcast_block(&self, block: Block) -> Result<(), ValidatorServiceError> {
@@ -511,7 +543,7 @@ impl ValidatorService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await.unwrap();
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::LeaderBlockBroadcastFailed)?;
         Ok(())
     }
 }

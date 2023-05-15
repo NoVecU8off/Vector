@@ -117,12 +117,30 @@ pub enum NodeServiceError {
     FailedToReadCertificates,
     #[error(transparent)]
     ServerConfigError(#[from] ServerConfigError),
+    #[error(transparent)]
+    ValidatorServiceError(#[from] ValidatorServiceError),
 }
 
 #[derive(Debug, Error)]
 pub enum ValidatorServiceError {
-    #[error("Failed to broadcast transaction")]
+    #[error(transparent)]
+    MerkleTreeError(#[from] MerkleTreeError),
+    #[error("Failed to join broadcast transaction")]
     TransactionBroadcastFailed,
+    #[error("Failed to join broadcast hash")]
+    HashBroadcastFailed,
+    #[error("Failed to join broadcast leader block")]
+    LeaderBlockBroadcastFailed,
+    #[error("Failed to join broadcast vote")]
+    VoteBroadcastFailed,
+    #[error("No created block found")]
+    NoCreatedBlockFound,
+    #[error(transparent)]
+    ChainOpsError(#[from] ChainOpsError),
+    #[error(transparent)]
+    BlockOpsError(#[from] BlockOpsError),
+    #[error(transparent)]
+    BlockStorageError(#[from] BlockStorageError),
 }
 
 #[derive(Debug, Error)]

@@ -2,15 +2,17 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_node::{node::*};
 use vec_server::server::*;
-use vec_errors::errors::*;
 
+#[derive(Debug)]
 enum UserType {
     Validator,
     User,
 }
 
-enum OperationType {
-    Transaction,
+enum Command {
+    SendTransaction { to: Vec<u8>, amount: i64 },
+    GetBalance,
+    Stop,
 }
 
 #[tokio::main]
@@ -23,7 +25,7 @@ async fn main() {
                 match line.trim() {
                     "validator" => break UserType::Validator,
                     "user" => break UserType::User,
-                    _ => println!("This role doesen't exist, choose 'validator' or 'user'."),
+                    _ => println!("This role doesn't exist, choose 'validator' or 'user'."),
                 }
             },
             Err(ReadlineError::Interrupted) => {
@@ -71,35 +73,78 @@ async fn main() {
                 }
             }
             let scv = ServerConfig::default_v().await;
-            let nsv_result = NodeService::new(scv).await;
-            match nsv_result {
-                Ok(mut nsv) => {
-                    tokio::spawn(async move {
-                        nsv.start(Vec::new()).await.unwrap();
-                    });
+            let nsv = NodeService::new(scv).await.unwrap();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+
+            let server_future = tokio::spawn(async move {
+                loop {
+                    match rx.recv().await {
+                        Some(Command::SendTransaction { to, amount }) => {
+                            match nsv.create_transaction(&to, amount).await {
+                                Ok(transaction) => {
+                                    // broadcast the transaction
+                                    if let Err(e) = nsv.broadcast_transaction(transaction).await {
+                                        println!("Error broadcasting transaction: {:?}", e);
+                                    }
+                                }
+                                Err(e) => {
+                                    println!("Error creating transaction: {:?}", e);
+                                }
+                            }
+                        },
+                        Some(Command::GetBalance) => {
+                            // handle balance command
+                        },
+                        Some(Command::Stop) => {
+                            // handle stop command
+                            break;
+                        },
+                        None => {
+                            // channel closed
+                            break;
+                        },
+                    }
                 }
-                Err(e) => {
-                    println!("Error: {:?}", e);
-                }
-            }
-            let operation_type: OperationType = loop {
-                let readline = rl.readline("validator> (available: tx)");
+            });
+
+            loop {
+                let readline = rl.readline("validator> ");
                 match readline {
                     Ok(line) => {
-                        match line.trim() {
-                            "tx" => break OperationType::Transaction,
-                            _ => println!("This operation doesen't exist, choose 'tx'."),
+                        let command = line.trim();
+                        match command {
+                            cmd if cmd.starts_with("send") => {
+                                let parts: Vec<&str> = cmd.split_whitespace().collect();
+                                if parts.len() == 4 {
+                                    let recipient = parts[1].as_bytes().to_vec();
+                                    let amount = parts[3].parse::<i64>().unwrap_or(0);
+                                    let _ = tx.send(Command::SendTransaction { to: recipient, amount: amount }).await;
+                                } else {
+                                    println!("Invalid 'send' command format. It should be 'send <recipient> to <amount>'");
+                                }
+                            },
+                            "get balance" => {
+                                let _ = tx.send(Command::GetBalance).await;
+                            },
+                            "stop" => {
+                                let _ = tx.send(Command::Stop).await;
+                                break;
+                            },
+                            _ => {
+                                println!("Invalid command");
+                            },
                         }
                     },
                     Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
-                        return;
+                        break;
                     },
                     Err(err) => {
                         println!("Error: {:?}", err);
-                        return;
+                        break;
                     },
                 }
-            };
+            }
+            server_future.await.unwrap();
         },
         UserType::User => {
             let mut rl = DefaultEditor::new().unwrap();
