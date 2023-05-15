@@ -2295,9 +2295,9 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 name = "vec_block"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "prost",
  "sha3",
+ "thiserror",
  "tokio",
  "vec_cryptography",
  "vec_merkle",
@@ -2315,9 +2315,11 @@ dependencies = [
  "hex",
  "protobuf",
  "rayon",
+ "thiserror",
  "tokio",
  "vec_block",
  "vec_cryptography",
+ "vec_errors",
  "vec_merkle",
  "vec_proto",
  "vec_store",
@@ -2356,6 +2358,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "vec_errors"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "vec_mempool"
 version = "0.1.0"
 dependencies = [
@@ -2374,21 +2383,21 @@ dependencies = [
 name = "vec_merkle"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "prost",
  "prost-derive",
  "protobuf",
  "rayon",
  "sha3",
+ "thiserror",
  "tokio",
  "vec_proto",
+ "vec_transaction",
 ]
 
 [[package]]
 name = "vec_node"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "bincode",
  "ed25519-dalek",
  "futures",
@@ -2404,6 +2413,7 @@ dependencies = [
  "slog",
  "slog-async",
  "slog-term",
+ "thiserror",
  "tokio",
  "tokio-rustls",
  "tokio-stream",
@@ -2472,11 +2482,11 @@ dependencies = [
 name = "vec_store"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "ed25519-dalek",
  "hex",
  "rand 0.8.5",
+ "thiserror",
  "tokio",
  "vec_block",
  "vec_cryptography",

@@ -1,6 +1,5 @@
-use vec_store::store::*;
+use vec_store::block_store::*;
 use hex::encode;
-use vec_transaction::transaction::*;
 use vec_block::block::*;
 use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput, Block, Header};
 use vec_cryptography::cryptography::Keypair;
@@ -63,35 +62,6 @@ async fn create_sample_block() -> Block {
         msg_public_key: public_key,
         msg_signature: signature,
     }
-}
-
-#[test]
-fn memory_utxo_store() {
-    let mut store = MemoryUTXOStore::new();
-    let utxo = UTXO {
-        hash: "test_hash".to_string(),
-        out_index: 0,
-        amount: 100,
-        spent: false,
-    };
-    let put_result = store.put(utxo.clone());
-    assert!(put_result.is_ok());
-
-    let get_result = store.get(&utxo.hash, utxo.out_index);
-    assert_eq!(get_result.unwrap(), Some(utxo));
-}
-
-#[tokio::test]
-async fn memory_tx_store() {
-    let mut store = MemoryTXStore::new();
-    let tx = create_sample_transaction();
-
-    let put_result = store.put(tx.clone()).await;
-    assert!(put_result.is_ok());
-
-    let hash = encode(hash_transaction(&tx).await);
-    let get_result = store.get(&hash).await;
-    assert_eq!(get_result.unwrap(), Some(tx));
 }
 
 #[tokio::test]

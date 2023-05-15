@@ -34,7 +34,6 @@ pub fn inherit_seed() -> [u8; 32] {
 }
 pub struct Keypair {
     pub private: SecretKey,
-    pub optional_private: Option<SecretKey>,
     pub expanded_private_key: ExpandedSecretKey,
     pub public: PublicKey,
 }
@@ -47,7 +46,6 @@ impl Keypair {
         let public_key = PublicKey::from(&expanded_secret_key);
         Keypair {
             private: private_key,
-            optional_private: None, // Initialize `optional_private` with None
             expanded_private_key: expanded_secret_key,
             public: public_key,
         }
@@ -77,12 +75,10 @@ impl Keypair {
 impl Clone for Keypair {
     fn clone(&self) -> Self {
         let private = SecretKey::from_bytes(&self.private.to_bytes()).expect("Unable to clone SecretKey");
-        let optional_private = self.optional_private.as_ref().map(|sk| SecretKey::from_bytes(&sk.to_bytes()).expect("Unable to clone optional SecretKey"));
         let expanded_private_key = ExpandedSecretKey::from_bytes(&self.expanded_private_key.to_bytes()).expect("Unable to clone ExpandedSecretKey");
         let public = PublicKey::from_bytes(&self.public.to_bytes()).expect("Unable to clone PublicKey");
         Self {
             private,
-            optional_private,
             expanded_private_key,
             public,
         }
@@ -145,7 +141,7 @@ pub fn vec_to_bytes(vec: &Vec<u8>) -> [u8; 64] {
 
 impl std::fmt::Display for Keypair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}, {:?}, {:?}", self.private, self.optional_private, self.public)
+        write!(f, "{:?}, {:?}", self.private, self.public)
     }
 }
 
@@ -153,7 +149,6 @@ impl fmt::Debug for Keypair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Keypair")
             .field("private", &self.private)
-            .field("optional_private", &self.optional_private)
             .field("public", &self.public)
             .finish()
     }
@@ -162,7 +157,6 @@ impl fmt::Debug for Keypair {
 #[derive(Serialize, Deserialize)]
 struct SerializableKeypair {
     private: Vec<u8>,
-    optional_private: Option<Vec<u8>>,
     expanded_private_key: Vec<u8>,
     public: Vec<u8>,
 }
@@ -174,7 +168,6 @@ impl Serialize for Keypair {
     {
         let serializable = SerializableKeypair {
             private: self.private.to_bytes().to_vec(),
-            optional_private: self.optional_private.as_ref().map(|sk| sk.to_bytes().to_vec()),
             expanded_private_key: self.expanded_private_key.to_bytes().to_vec(),
             public: self.public.to_bytes().to_vec(),
         };
@@ -189,16 +182,10 @@ impl<'de> Deserialize<'de> for Keypair {
     {
         let serializable = SerializableKeypair::deserialize(deserializer)?;
         let private = SecretKey::from_bytes(&serializable.private).map_err(DeError::custom)?;
-        let optional_private = if let Some(op_bytes) = serializable.optional_private {
-            Some(SecretKey::from_bytes(&op_bytes).map_err(DeError::custom)?)
-        } else {
-            None
-        };
         let expanded_private_key = ExpandedSecretKey::from_bytes(&serializable.expanded_private_key).map_err(DeError::custom)?;
         let public = PublicKey::from_bytes(&serializable.public).map_err(DeError::custom)?;
         let keypair = Keypair {
             private,
-            optional_private,
             expanded_private_key,
             public,
         };

@@ -1,5 +1,5 @@
 use vec_chain::chain::*;
-use vec_store::store::*;
+use vec_store::block_store::*;
 use vec_block::block::*;
 use vec_cryptography::cryptography::*;
 use vec_transaction::transaction::*;
@@ -11,8 +11,7 @@ use anyhow::Result;
 
 async fn create_test_chain() -> Result<Chain> {
     let block_store = Box::new(MemoryBlockStore::new());
-    let tx_store = Box::new(MemoryTXStore::new());
-    let chain = Chain::new_chain(block_store, tx_store).await.unwrap();
+    let chain = Chain::new_chain(block_store).await.unwrap();
     Ok(chain)
 }
 
@@ -106,8 +105,7 @@ async fn test_get_block_by_hash() {
 #[tokio::test]
 async fn test_validate_block_another() {
     let block_store = Box::new(MemoryBlockStore::new());
-    let tx_store = Box::new(MemoryTXStore::new());
-    let chain = Chain::new_chain(block_store, tx_store).await.unwrap();
+    let chain = Chain::new_chain(block_store).await.unwrap();
     let genesis_block = chain.get_block_by_height(0).await.unwrap();
     let genesis_block_hash = hash_header_by_block(&genesis_block).unwrap().to_vec();
     let keypair = Keypair::generate_keypair();

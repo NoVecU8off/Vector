@@ -1,8 +1,15 @@
 use sha3::{Digest, Sha3_256};
 use vec_proto::messages::{Transaction};
+use vec_transaction::transaction::*;
 use prost::Message;
-use anyhow::Result;
 use rayon::prelude::*;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum MerkleTreeError {
+    #[error("Failed to compute hashes")]
+    HashingError,
+}
 
 #[derive(Debug, Clone)]
 pub struct MerkleTree {
@@ -19,10 +26,10 @@ pub struct TransactionWrapper {
 }
 
 impl MerkleTree {
-    pub fn new(transactions: &Vec<Transaction>) -> Result<MerkleTree> {
-        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions);
+    pub fn new(transactions: &Vec<Transaction>) -> Result<MerkleTree, MerkleTreeError> {
+        let leaves: Vec<TransactionWrapper> = compute_hashes(transactions)?; // Added ?
         let nodes = leaves.iter().map(|wrapper| wrapper.hash.clone()).collect::<Vec<_>>();  
-        let (root, depth) = MerkleTree::build(&nodes).unwrap();  
+        let (root, depth) = MerkleTree::build(&nodes)?;  // Added ?
         let merkle = MerkleTree {
             root,
             depth,
@@ -32,7 +39,7 @@ impl MerkleTree {
         Ok(merkle)
     }
 
-    pub fn build(nodes: &[Vec<u8>]) -> Result<(Vec<u8>, u64)> {
+    pub fn build(nodes: &[Vec<u8>]) -> Result<(Vec<u8>, u64), MerkleTreeError> {
         if nodes.is_empty() {
             return Ok((Vec::new(), 0));
         }
@@ -63,7 +70,7 @@ impl MerkleTree {
     }
     
     
-    pub async fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> Result<bool> {
+    pub async fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> Result<bool, MerkleTreeError> {
         let mut hasher = Sha3_256::new();
         let mut bytes = Vec::new();
         leaf.encode(&mut bytes).unwrap();
@@ -90,7 +97,7 @@ impl MerkleTree {
         Ok(current_hash == self.root) // Wrap in Ok()
     }    
 
-    pub async fn get_proof(&self, transaction: &Transaction) -> Result<Option<(usize, Vec<Vec<u8>>)>> {
+    pub async fn get_proof(&self, transaction: &Transaction) -> Result<Option<(usize, Vec<Vec<u8>>)>, MerkleTreeError> {
         let leaf_index = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction).unwrap();
         let mut proof = Vec::new();
         let mut index = leaf_index;
@@ -111,14 +118,14 @@ impl MerkleTree {
         Ok(Some((leaf_index, proof)))
     }
 
-    pub fn add_leaf(&mut self, transaction: Transaction) {
+    pub fn add_leaf(&mut self, transaction: Transaction) -> Result<(), MerkleTreeError> {
         if self.leaves.len() == 1 {
             let new_transactions = vec![self.leaves[0].transaction.clone(), transaction];
-            *self = MerkleTree::new(&new_transactions).unwrap();
-            self.depth = 1; // Update the depth after reconstructing the tree
-            return;
+            *self = MerkleTree::new(&new_transactions)?;
+            self.depth = 1;
+            return Ok(());
         }
-        let wrapper = compute_hashes(&[transaction]).into_iter().next().unwrap();
+        let wrapper = compute_hashes(&[transaction])?.into_iter().next().unwrap();
         self.leaves.push(wrapper.clone());
         self.nodes.push(wrapper.hash.clone());
         let mut index = self.leaves.len() - 1;
@@ -142,9 +149,10 @@ impl MerkleTree {
             index = parent_index;
         }
         self.root = current_hash;
+        Ok(())
     }    
 
-    pub async fn remove_leaf(&mut self, transaction: &Transaction) -> Result<bool> {
+    pub async fn remove_leaf(&mut self, transaction: &Transaction) -> Result<bool, MerkleTreeError> {
         if let Some(index) = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction) {
             self.leaves.remove(index);
             self.nodes.remove(index);
@@ -192,19 +200,15 @@ impl MerkleTree {
     }
 }
 
-pub fn compute_hashes(transactions: &[Transaction]) -> Vec<TransactionWrapper> {
+pub fn compute_hashes(transactions: &[Transaction]) -> Result<Vec<TransactionWrapper>, MerkleTreeError> {
     transactions
         .par_iter()
         .map(|transaction| {
-            let mut bytes = Vec::new();
-            transaction.encode(&mut bytes).unwrap();
-            let mut hasher = Sha3_256::new();
-            hasher.update(&bytes);
-            let hash = hasher.finalize().to_vec();
-            TransactionWrapper {
+            let hash = hash_transaction_sync(transaction);
+            Ok(TransactionWrapper {
                 transaction: transaction.clone(),
                 hash,
-            }
+            })
         })
         .collect()
 }

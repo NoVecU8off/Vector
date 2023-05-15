@@ -2,23 +2,52 @@ use crate::validator::*;
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_chain::chain::Chain;
-use vec_store::store::{MemoryBlockStore, BlockStorer, MemoryTXStore, TXStorer};
+use vec_store::{block_store::{MemoryBlockStore, BlockStorer}, utxo_store::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
-use vec_transaction::transaction::*;
 use std::{collections::HashMap, sync::Arc, net::SocketAddr};
 use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
-use anyhow::{Context, Result};
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use std::time::{SystemTime, UNIX_EPOCH};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum NodeServiceError {
+    #[error("Failed to create chain: {0}")]
+    ChainCreationError(String),
+    #[error("Failed to setup server: {0}")]
+    ServerSetupError(#[from] tonic::transport::Error),
+    #[error("Failed to bootstrap node: {0}")]
+    NodeBootstrapError(String),
+    #[error("Address parsing error: {0}")]
+    AddrParseError(#[from] std::net::AddrParseError),
+    #[error("Failed to broadcast transaction: {0}")]
+    BroadcastTransactionError(String),
+    #[error("Failed to bootstrap: {0}")]
+    BootstrapError(String),
+    #[error("Failed to make node client: {0}")]
+    MakeNodeClientError(#[from] tonic::transport::Error),
+    #[error("Failed to perform handshake: {0}")]
+    HandshakeError(#[from] tonic::Status),
+    #[error("Error encountered in bootstrap_network: {0}")]
+    BootstrapNetworkError(String),
+    #[error("Failed to create transaction: {0}")]
+    CreateTransactionError(String),
+    #[error("Failed to parse URI: {0}")]
+    UriParseError(#[from] http::uri::InvalidUri),
+    #[error("Failed to send shutdown signal")]
+    ShutdownError,
+}
+
 
 #[derive(Clone)]
 pub struct NodeService {
     pub server_config: ServerConfig,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
     pub validator: Option<Arc<ValidatorService>>,
+    pub utxo_store: Arc<Mutex<dyn UTXOStorer>>,
     pub logger: Logger,
 }
 
@@ -96,7 +125,7 @@ impl Node for NodeService {
 }
 
 impl NodeService {
-    pub async fn new(cfg: ServerConfig) -> Self {
+    pub async fn new(cfg: ServerConfig) -> Result<Self, NodeServiceError> {
         let logger = {
             let decorator = slog_term::TermDecorator::new().build();
             let drain = slog_term::FullFormat::new(decorator).build().fuse();
@@ -106,16 +135,16 @@ impl NodeService {
         info!(logger, "NodeService {} created", cfg.cfg_addr);
         let peer_lock = Arc::new(RwLock::new(HashMap::new()));
         let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
-        let tx_storer: Box<dyn TXStorer> = Box::new(MemoryTXStore::new());
-        let chain = match Chain::new_chain(block_storer, tx_storer).await {
-            Ok(chain) => Arc::new(RwLock::new(chain)),
-            Err(e) => panic!("Failed to create chain: {:?}", e),
-        };
+        let utxo_storer: Arc<Mutex<dyn UTXOStorer>> = Arc::new(Mutex::new(MemoryUTXOStore::new())); // add this line
+        let chain = Chain::new_chain(block_storer)
+            .await
+            .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let node_service = NodeService {
             server_config: cfg.clone(),
             peer_lock: Arc::clone(&peer_lock),
             validator: None,
             logger: logger.clone(),
+            utxo_store: utxo_storer.clone(), // add this line
         };
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
@@ -139,18 +168,19 @@ impl NodeService {
             peer_lock,
             validator,
             logger,
+            utxo_store: utxo_storer, // add this line
         }
-    }    
+    }
 
-    pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<()> {
+    pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<(), NodeServiceError> {
         let node_service = self.clone();
         let addr = format!("{}", self.server_config.cfg_addr)
             .parse()
-            .unwrap();
+            .map_err(NodeServiceError::AddrParseError)?;
         info!(self.logger, "NodeServer {} starting listening", self.server_config.cfg_addr);
-        self.setup_server(node_service, addr).await.unwrap();
+        self.setup_server(node_service, addr).await?;
         if !nodes_to_bootstrap.is_empty() {
-            self.bootstrap(nodes_to_bootstrap).await.unwrap();
+            self.bootstrap(nodes_to_bootstrap).await?;
         }
         if self.server_config.cfg_is_validator {
             if let Some(validator) = &self.validator {
@@ -160,25 +190,21 @@ impl NodeService {
         Ok(())
     }
     
-    pub async fn setup_server(&self, node_service: NodeService, addr: SocketAddr) -> Result<()> {
+    pub async fn setup_server(&self, node_service: NodeService, addr: SocketAddr) -> Result<(), NodeServiceError> {
         let server_tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&self.server_config.cfg_pem_certificate, &self.server_config.cfg_pem_key))
             .client_ca_root(Certificate::from_pem(&self.server_config.cfg_root_crt))
             .client_auth_optional(true);
-        Ok(Server::builder()
-            .tls_config(server_tls_config)
-            .unwrap()
+        Server::builder()
+            .tls_config(server_tls_config)?
             .accept_http1(true)
             .add_service(NodeServer::new(node_service))
             .serve(addr)
             .await
-            .map_err(|err| {
-                error!(self.logger, "Error listening for incoming connections: {:?}", err);
-                err
-            }).unwrap())
+            .map_err(NodeServiceError::ServerSetupError)
     }
 
-    pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<()> {
+    pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
         let peers_data = {
             let peers = self.peer_lock.read().await;
             peers
@@ -204,20 +230,21 @@ impl NodeService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await.unwrap();
+        try_join_all(tasks).await.map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
         Ok(())
     }
     
-    pub async fn bootstrap(&self, unbootstraped_nodes: Vec<String>) -> Result<()> {
+    pub async fn bootstrap(&self, unbootstraped_nodes: Vec<String>) -> Result<(), NodeServiceError> {
         let node_clone = self.clone();
         info!(self.logger, "{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, unbootstraped_nodes);
-        tokio::spawn(async move {
-            if let Err(e) = node_clone.bootstrap_network(unbootstraped_nodes).await {
-                error!(node_clone.logger, "{}: Failed to bootstrap: {:?}", node_clone.server_config.cfg_addr, e);
-            }
-        });
+        
+        if let Err(e) = node_clone.bootstrap_network(unbootstraped_nodes).await {
+            error!(node_clone.logger, "{}: Failed to bootstrap: {:?}", node_clone.server_config.cfg_addr, e);
+            return Err(NodeServiceError::BootstrapError(format!("{:?}", e)));
+        }
+        
         Ok(())
-    }
+    }    
     
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version, is_validator: bool) {
         if !is_validator {
@@ -241,22 +268,14 @@ impl NodeService {
         peers.values().map(|(_, version, _)| version.msg_listen_address.clone()).collect()
     }
 
-    pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version)> {
+    pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
         let mut c = make_node_client(addr)
             .await
-            .map_err(|err| {
-                error!(self.logger, "{}: Failed to make node client: {:?}", self.server_config.cfg_addr, err);
-                err
-            })
-            .context("Failed to create node for dial").unwrap();
+            .map_err(NodeServiceError::MakeNodeClientError)?;
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
-            .map_err(|err| {
-                error!(self.logger, "{}: Failed to perform handshake with remote node: {:?}", self.server_config.cfg_addr, err);
-                err
-            })
-            .unwrap()
+            .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
         info!(self.logger, "{}: Dialed remote node: {}", self.server_config.cfg_addr, addr);
         Ok((c, v))
@@ -280,7 +299,7 @@ impl NodeService {
         }
     }
     
-    pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<()> {
+    pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<(), NodeServiceError> {
         let mut tasks = Vec::new();
         for addr in addrs {
             if !self.can_connect_with(&addr).await {
@@ -301,7 +320,7 @@ impl NodeService {
             });
             tasks.push(task);
         }
-        try_join_all(tasks).await.unwrap();
+        try_join_all(tasks).await.map_err(|err| NodeServiceError::BootstrapNetworkError(format!("{:?}", err)))?;
         Ok(())
     }    
 
@@ -322,53 +341,70 @@ impl NodeService {
         !results.into_iter().any(|res| res.unwrap_or(false))
     }
 
-    pub async fn create_transaction_request(
-        &self,
-        amount: i64, 
-        destination_public_key: Vec<u8>,
-    ) -> Result<Transaction> {
+    pub async fn create_transaction(&self, to: &Vec<u8>, amount: i64) -> Result<Transaction, NodeServiceError> {
         let keypair = &self.server_config.cfg_keypair;
-        let public_key_vec = keypair.public.to_bytes().to_vec();
-        let transaction_output = TransactionOutput {
+        let public_key = keypair.public.as_bytes().to_vec();
+        let from = &public_key;
+        let mut utxo_store = self.utxo_store.lock().await;
+        let utxos = utxo_store.find_utxos(&from, amount)?;
+        let mut inputs = Vec::new();
+        let mut total_input = 0;
+        let mut spent_utxo_keys = Vec::new();
+        for utxo in &utxos {
+            let msg_to_sign = format!("{}{}", utxo.transaction_hash, utxo.output_index);
+            let msg_signature = keypair.sign(msg_to_sign.as_bytes());
+            let input = TransactionInput {
+                msg_previous_tx_hash: utxo.transaction_hash.clone().into_bytes(),
+                msg_previous_out_index: utxo.output_index,
+                msg_public_key: public_key.clone(),
+                msg_signature: msg_signature.to_bytes().to_vec(),
+            };
+            inputs.push(input);
+            total_input += utxo.amount;
+            spent_utxo_keys.push((utxo.transaction_hash.clone(), utxo.output_index));
+        }
+        for key in spent_utxo_keys {
+            utxo_store.remove_utxo(&key)?;
+        }
+        let output = TransactionOutput {
             msg_amount: amount,
-            msg_to: destination_public_key,
+            msg_to: to.clone(),
         };
-        let transaction_input = TransactionInput {
-            msg_previous_tx_hash: vec![],
-            msg_previous_out_index: 0,
-            msg_public_key: public_key_vec.clone(),
-            msg_signature: vec![],
-        };
-        let mut transaction = Transaction {
+        let mut outputs = vec![output];
+        if total_input > amount {
+            let change_output = TransactionOutput {
+                msg_amount: total_input - amount,
+                msg_to: from.clone(),
+            };
+            outputs.push(change_output);
+        }
+        let tx = Transaction {
             msg_version: 1,
-            msg_inputs: vec![transaction_input],
-            msg_outputs: vec![transaction_output],
+            msg_inputs: inputs,
+            msg_outputs: outputs,
             msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
-        let signature = sign_transaction(keypair, &transaction).await;
-        transaction.msg_inputs[0].msg_signature = signature.to_bytes().to_vec();
-        Ok(transaction)
+        Ok(tx)
     }
-
 }
 
-pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>> {
-    let (cli_pem_certificate, cli_pem_key, cli_root) = read_client_certs_and_keys().await.unwrap();
-    let uri = format!("https://{}", addr).parse().unwrap();
+pub async fn make_node_client(addr: &str) -> Result<NodeClient<Channel>, NodeServiceError> {
+    let (cli_pem_certificate, cli_pem_key, cli_root) = read_client_certs_and_keys().await.map_err(|_| NodeServiceError::MakeNodeClientError(tonic::transport::Error::from(std::io::Error::new(std::io::ErrorKind::Other, "Failed to read client certs and keys"))))?;
+    let uri = format!("https://{}", addr).parse::<http::Uri>().map_err(NodeServiceError::UriParseError)?;
     let client_tls_config = ClientTlsConfig::new()
         .domain_name("cryptotron.test.com")
         .ca_certificate(Certificate::from_pem(cli_root))
         .identity(Identity::from_pem(cli_pem_certificate, cli_pem_key));
     let channel = Channel::builder(uri)
         .tls_config(client_tls_config)
-        .unwrap()
+        .map_err(NodeServiceError::MakeNodeClientError)?
         .connect()
         .await
-        .unwrap();
+        .map_err(NodeServiceError::MakeNodeClientError)?;
     let node_client = NodeClient::new(channel);
     Ok(node_client)
 }
 
-pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), &'static str> {
-    shutdown_tx.send(()).map_err(|_| "Failed to send shutdown signal")
+pub async fn shutdown(shutdown_tx: tokio::sync::oneshot::Sender<()>) -> Result<(), NodeServiceError> {
+    shutdown_tx.send(()).map_err(|_| NodeServiceError::ShutdownError)
 }
