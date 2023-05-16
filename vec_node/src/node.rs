@@ -169,7 +169,6 @@ impl NodeService {
                 vote_count: Arc::new(Mutex::new(HashMap::new())),
                 received_responses_count: Arc::new(Mutex::new(0)),
                 chain: Arc::new(RwLock::new(chain)),
-                trigger_sender: Arc::new(Mutex::new(None)),
             };
             Some(Arc::new(validator))
         } else {

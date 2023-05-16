@@ -6,7 +6,7 @@ use vec_merkle::merkle::MerkleTree;
 use vec_chain::chain::Chain;
 use vec_block::block::*;
 use vec_errors::errors::*;
-use tokio::sync::{Mutex, RwLock, oneshot};
+use tokio::sync::{Mutex, RwLock};
 use std::{collections::HashMap, time::{Duration, SystemTime}};
 use tonic::{Request, Response, Status, codegen::Arc};
 use futures::future::try_join_all;
@@ -24,7 +24,6 @@ pub struct ValidatorService {
     pub vote_count: Arc<Mutex<HashMap<u64, usize>>>,
     pub received_responses_count: Arc<Mutex<usize>>,
     pub chain: Arc<RwLock<Chain>>,
-    pub trigger_sender: Arc<Mutex<Option<oneshot::Sender<()>>>>,
 }
 
 #[tonic::async_trait]
