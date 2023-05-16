@@ -16,6 +16,20 @@ service Node {
 
     rpc PushState(LocalState) returns (BlockBatch);
 
+    rpc HandlePeerExchange(PeerList) returns (Confirmed);
+
+}
+
+message ValidatorList {
+
+    repeated string msg_validator_addresses = 1;
+    
+}
+
+message PeerList {
+
+    repeated string msg_peers_addresses = 1;
+
 }
 
 message LocalState {

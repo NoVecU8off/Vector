@@ -48,6 +48,11 @@ pub trait Validator: Sync + Send {
         &self,
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status>;
+
+    async fn handle_peer_exchange(
+        &self,
+        request: Request<PeerList>,
+    ) -> Result<Response<Confirmed>, Status>;
 }
 
 #[tonic::async_trait]
@@ -165,9 +170,93 @@ impl Validator for ValidatorService {
         }
         Ok(Response::new(Confirmed {}))
     }
+
+    async fn handle_peer_exchange(
+        &self,
+        request: Request<PeerList>,
+    ) -> Result<Response<Confirmed>, Status> {
+        let peer_list = request.into_inner();
+        if let Err(e) = self.update_peer_list(peer_list).await {
+            error!(self.node_service.logger, "Failed to update peer list: {}", e);
+        }
+        Ok(Response::new(Confirmed {}))
+    }
 }
 
 impl ValidatorService {
+    pub async fn update_peer_list(&self, peer_list: PeerList) -> Result<(), ValidatorServiceError> {
+        let peer_write_lock = self.node_service.peer_lock.write().await;
+        for addr in peer_list.msg_peers_addresses {
+            if !peer_write_lock.contains_key(&addr) {
+                match self.node_service.dial_remote_node(&addr).await {
+                    Ok((client, version)) => {
+                        if version.msg_validator {
+                            self.node_service.add_peer(client, version, true).await;
+                            info!(self.node_service.logger, "{}: new validator peer added: {}", self.node_service.server_config.cfg_addr, addr);
+                        }
+                    }
+                    Err(e) => {
+                        error!(self.node_service.logger, "Failed to dial remote node: {:?}", e);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn broadcast_peer_list(&mut self) -> Result<(), ValidatorServiceError> {
+        info!(self.node_service.logger, "{}: broadcasting peer list", self.node_service.server_config.cfg_addr);
+        let my_addr = &self.node_service.server_config.cfg_addr;
+        let mut peers_addresses = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .map(|(addr, (_, _, _))| (addr.clone()))
+                .collect::<Vec<_>>()
+        };
+        peers_addresses.push(my_addr.clone());
+        let msg = PeerList {
+            msg_peers_addresses: peers_addresses,
+        };
+        let peers_data = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .filter(|(_, (_, _, is_validator))| *is_validator)
+                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
+                .collect::<Vec<_>>()
+        };
+        let mut tasks = Vec::new();
+        for (addr, peer_client) in peers_data {
+            let msg_clone = msg.clone();
+            let self_clone = self.clone();
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                let req = Request::new(msg_clone);
+                if addr != self_clone.node_service.server_config.cfg_addr {
+                    if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
+                        error!(
+                            self_clone.node_service.logger,
+                            "Failed to broadcast peer list to {}: {:?}",
+                            addr,
+                            err
+                        );
+                    } else {
+                        info!(
+                            self_clone.node_service.logger,
+                            "{}: broadcasted peer list to {}",
+                            self_clone.node_service.server_config.cfg_addr,
+                            addr
+                        );
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::HashBroadcastFailed)?;
+        Ok(())
+    }
+
     pub async fn initialize_validating(&self) -> Result<(), ValidatorServiceError> {
         let node_clone = self.clone();
         let mut interval = tokio::time::interval(Duration::from_millis(10));

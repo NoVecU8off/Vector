@@ -122,6 +122,17 @@ impl Node for NodeService {
             }
         }
     }
+
+    async fn handle_peer_exchange(
+        &self,
+        request: Request<PeerList>,
+    ) -> Result<Response<Confirmed>, Status> {
+        if let Some(validator) = &self.validator {
+            validator.handle_peer_exchange(request).await
+        } else {
+            Err(Status::internal("Node is not a validator (peer exchange process)"))
+        }
+    }
 }
 
 impl NodeService {
@@ -239,12 +250,10 @@ impl NodeService {
     pub async fn bootstrap(&self, unbootstraped_nodes: Vec<String>) -> Result<(), NodeServiceError> {
         let node_clone = self.clone();
         info!(self.logger, "{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, unbootstraped_nodes);
-        
         if let Err(e) = node_clone.bootstrap_network(unbootstraped_nodes).await {
             error!(node_clone.logger, "{}: Failed to bootstrap: {:?}", node_clone.server_config.cfg_addr, e);
             return Err(NodeServiceError::BootstrapError(format!("{:?}", e)));
         }
-        
         Ok(())
     }    
     
@@ -254,8 +263,12 @@ impl NodeService {
         }
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
-        peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
-        info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
+        if !peers.contains_key(&remote_addr) {
+            peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
+            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
+        } else {
+            info!(self.logger, "{}: peer already exists: {}", self.server_config.cfg_addr, remote_addr);
+        }
     }
     
     pub async fn delete_peer(&self, addr: &str) {

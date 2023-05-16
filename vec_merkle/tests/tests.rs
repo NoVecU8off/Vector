@@ -98,7 +98,7 @@ async fn test_add_leaf() {
         msg_relative_timestamp: 327,
     };
 
-    tree.add_leaf(new_transaction.clone());
+    tree.add_leaf(new_transaction.clone()).unwrap();
 
     assert_ne!(tree.get_root(), &original_root[..]);
     assert_eq!(tree.get_leaves().len(), original_leaves_len + 1);
