@@ -44,7 +44,7 @@ pub trait Validator: Sync + Send {
         request: Request<Vote>,
     ) -> Result<Response<Confirmed>, Status>;
 
-    async fn synchronize_user(
+    async fn push_state(
         &self,
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status>;
@@ -52,7 +52,7 @@ pub trait Validator: Sync + Send {
 
 #[tonic::async_trait]
 impl Validator for ValidatorService {
-    async fn synchronize_user(
+    async fn push_state(
         &self,
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status> {

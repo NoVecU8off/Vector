@@ -14,7 +14,7 @@ service Node {
 
     rpc HandleBlock(Block) returns (Confirmed);
 
-    rpc SynchronizeUser(LocalState) returns (BlockBatch);
+    rpc PushState(LocalState) returns (BlockBatch);
 
 }
 

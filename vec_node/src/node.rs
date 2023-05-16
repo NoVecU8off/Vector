@@ -87,12 +87,12 @@ impl Node for NodeService {
         }
     }
 
-    async fn synchronize_user(
+    async fn push_state(
         &self,
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status> {
         if let Some(validator) = &self.validator {
-            validator.synchronize_user(request).await
+            validator.push_state(request).await
         } else {
             Err(Status::internal("Node is not a validator (state request process)"))
         }
@@ -388,10 +388,10 @@ impl NodeService {
         Ok(tx)
     }
 
-    pub async fn update_local_state(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+    pub async fn pull_state(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
         let last_block_height = self.latest_block_height.load(Relaxed);
         let request = Request::new(LocalState { msg_last_block_height: last_block_height });
-        let response = validator_client.synchronize_user(request).await?;
+        let response = validator_client.push_state(request).await?;
         let block_batch = response.into_inner();
         self.process_incoming_block_batch(block_batch).await?;
         Ok(())
