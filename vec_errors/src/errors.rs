@@ -119,6 +119,10 @@ pub enum NodeServiceError {
     ServerConfigError(#[from] ServerConfigError),
     #[error(transparent)]
     ValidatorServiceError(#[from] ValidatorServiceError),
+    #[error(transparent)]
+    MissingBlockHeader(#[from] ChainOpsError),
+    #[error(transparent)]
+    MissingHeader(#[from] BlockOpsError),
 }
 
 #[derive(Debug, Error)]

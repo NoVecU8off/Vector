@@ -5,6 +5,7 @@ use vec_chain::chain::Chain;
 use vec_store::{block_store::{MemoryBlockStore, BlockStorer}, utxo_store::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
+use vec_transaction::transaction::hash_transaction;
 use std::{collections::HashMap, sync::Arc, net::SocketAddr};
 use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
@@ -12,6 +13,8 @@ use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vec_errors::errors::*;
+use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering::Relaxed;
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -19,6 +22,7 @@ pub struct NodeService {
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
     pub validator: Option<Arc<ValidatorService>>,
     pub utxo_store: Arc<Mutex<dyn UTXOStorer>>,
+    pub latest_block_height: Arc<AtomicU64>,
     pub logger: Logger,
 }
 
@@ -36,7 +40,7 @@ impl Node for NodeService {
         match make_node_client(&addr).await {
             Ok(c) => {
                 info!(self.logger, "Created node client successfully");
-                if version_clone.msg_validator {
+                if self.server_config.cfg_is_validator || version_clone.msg_validator {
                     self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
                 }
                 let reply = self.get_version().await;
@@ -83,14 +87,39 @@ impl Node for NodeService {
         }
     }
 
+    async fn synchronize_user(
+        &self,
+        request: Request<LocalState>,
+    ) -> Result<Response<BlockBatch>, Status> {
+        if let Some(validator) = &self.validator {
+            validator.synchronize_user(request).await
+        } else {
+            Err(Status::internal("Node is not a validator (state request process)"))
+        }
+    }
+
     async fn handle_block(
         &self,
         request: Request<Block>,
     ) -> Result<Response<Confirmed>, Status> {
+        let block = request.into_inner();
         if let Some(validator) = &self.validator {
-            validator.handle_block(request).await
+            let mut chain_lock = validator.chain.write().await;
+            if let Err(e) = chain_lock.add_leader_block(block).await {
+                error!(self.logger, "Failed to add leaders block: {}", e);
+            }
+            Ok(Response::new(Confirmed {}))
         } else {
-            Err(Status::internal("Node is not a validator (synchronisation process)"))
+            match self.process_incoming_block(block).await {
+                Ok(_) => {
+                    info!(self.logger, "Local UTXO updated successfully");
+                    Ok(Response::new(Confirmed {}))
+                }
+                Err(e) => {
+                    error!(self.logger, "Failed to update local UTXO: {:?}", e);
+                    Err(Status::internal("Failed to update local UTXO"))
+                }
+            }
         }
     }
 }
@@ -115,7 +144,8 @@ impl NodeService {
             peer_lock: Arc::clone(&peer_lock),
             validator: None,
             logger: logger.clone(),
-            utxo_store: utxo_storer.clone(), // add this line
+            utxo_store: utxo_storer.clone(),
+            latest_block_height: Arc::new(AtomicU64::new(0)),
         };
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
@@ -140,6 +170,7 @@ impl NodeService {
             validator,
             logger,
             utxo_store: utxo_storer,
+            latest_block_height: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -355,6 +386,50 @@ impl NodeService {
             msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
         Ok(tx)
+    }
+
+    pub async fn update_local_state(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+        let last_block_height = self.latest_block_height.load(Relaxed);
+        let request = Request::new(LocalState { msg_last_block_height: last_block_height });
+        let response = validator_client.synchronize_user(request).await?;
+        let block_batch = response.into_inner();
+        self.process_incoming_block_batch(block_batch).await?;
+        Ok(())
+    }
+
+    pub async fn process_incoming_block_batch(&self, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
+        for block in block_batch.msg_blocks {
+            self.process_incoming_block(block).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn process_incoming_block(&self, block: Block) -> Result<(), NodeServiceError> {
+        for transaction in block.msg_transactions {
+            self.process_incoming_transaction(transaction).await?;
+        }
+        if let Some(header) = block.msg_header {
+            self.latest_block_height.store(header.msg_height as u64, Relaxed);
+        } else {
+            return Err(BlockOpsError::MissingHeader)?;
+        }
+        Ok(())
+    }
+
+    pub async fn process_incoming_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
+        let public_key = self.server_config.cfg_keypair.public.as_bytes().to_vec();
+        for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
+            if output.msg_to == public_key {
+                let utxo = UTXO {
+                    transaction_hash: hex::encode(hash_transaction(&transaction).await),
+                    output_index: output_index as u32,
+                    amount: output.msg_amount,
+                    address: public_key.clone(),
+                };
+                self.utxo_store.lock().await.put(utxo)?;
+            }
+        }
+        Ok(())
     }
 }
 

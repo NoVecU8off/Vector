@@ -44,14 +44,35 @@ pub trait Validator: Sync + Send {
         request: Request<Vote>,
     ) -> Result<Response<Confirmed>, Status>;
 
-    async fn handle_block(
+    async fn synchronize_user(
         &self,
-        request: Request<Block>,
-    ) -> Result<Response<Confirmed>, Status>;
+        request: Request<LocalState>,
+    ) -> Result<Response<BlockBatch>, Status>;
 }
 
 #[tonic::async_trait]
 impl Validator for ValidatorService {
+    async fn synchronize_user(
+        &self,
+        request: Request<LocalState>,
+    ) -> Result<Response<BlockBatch>, Status> {
+        let current_state = request.into_inner();
+        let requested_height = current_state.msg_last_block_height;
+        let mut blocks = Vec::new();
+        let chain_lock = self.chain.read().await;
+        for height in (requested_height + 1)..=chain_lock.chain_height() as u64 {
+            match chain_lock.get_block_by_height(height as usize).await {
+                Ok(block) => blocks.push(block),
+                Err(e) => {
+                    error!(self.node_service.logger, "Failed to get block at height {}: {:?}", height, e);
+                    return Err(Status::internal(format!("Failed to get block at height {}", height)));
+                }
+            }
+        }
+        let block_batch = BlockBatch { msg_blocks: blocks };
+        Ok(Response::new(block_batch))
+    }
+
     async fn handle_transaction(
         &self,
         request: Request<Transaction>,
@@ -141,18 +162,6 @@ impl Validator for ValidatorService {
         self.update_vote_count(target_validator_id).await;
         if let Err(e) = self.wait_for_voting_completion().await {
             error!(self.node_service.logger, "Failed to wait for voting completion: {}", e);
-        }
-        Ok(Response::new(Confirmed {}))
-    }
-
-    async fn handle_block(
-        &self,
-        request: Request<Block>,
-    ) -> Result<Response<Confirmed>, Status> {
-        let new_block = request.into_inner();
-        let mut chain_lock = self.chain.write().await;
-        if let Err(e) = chain_lock.add_leader_block(new_block).await {
-            error!(self.node_service.logger, "Failed to add leaders block: {}", e);
         }
         Ok(Response::new(Confirmed {}))
     }
@@ -516,7 +525,6 @@ impl ValidatorService {
             let peers = self.node_service.peer_lock.read().await;
             peers
                 .iter()
-                .filter(|(_, (_, _, is_validator))| *is_validator)
                 .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
                 .collect::<Vec<_>>()
         };
@@ -535,7 +543,7 @@ impl ValidatorService {
                     Err(e) => {
                         error!(
                             self_clone.node_service.logger, 
-                            "Failed to broadcast block to validator {}: {:?}",
+                            "Failed to broadcast block to {}: {:?}",
                             addr, e
                         );
                     }
