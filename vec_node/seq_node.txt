@@ -7,6 +7,30 @@ handle_block
 handle_peer_exchange
 handle_heartbeat
 
+1 new
+2 start 3,6 -> 1
+3 setup_server
+4 start_heartbeat_loop
+5 broadcast_transaction
+6 bootstrap
+7 add_peer
+8 get_peer_list
+9 dial_remote_node
+10 get_version
+11 bootstrap_network
+12 can_connect_with
+13 create_transaction
+14 pull_state_from
+15 pull_state_from_client
+16 process_incoming_block_batch
+17 process_incoming_block
+18 process_incoming_transaction
+19 update_peer_list
+20 make_node_client
+21 shutdown
+
+
+
 new
 start
 broadcast_transaction 
