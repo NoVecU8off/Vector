@@ -9,6 +9,7 @@ use vec_transaction::transaction::hash_transaction;
 use std::{collections::HashMap, sync::Arc, net::SocketAddr};
 use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::Duration;
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -105,10 +106,23 @@ impl Node for NodeService {
         let block = request.into_inner();
         if let Some(validator) = &self.validator {
             let mut chain_lock = validator.chain.write().await;
-            if let Err(e) = chain_lock.add_leader_block(block).await {
-                error!(self.logger, "Failed to add leaders block: {}", e);
+            let add_result = chain_lock.add_leader_block(block.clone()).await;
+            match self.process_incoming_block(block).await {
+                Ok(_) => {
+                    info!(self.logger, "Local UTXO updated successfully");
+                    match add_result {
+                        Ok(_) => Ok(Response::new(Confirmed {})),
+                        Err(e) => {
+                            error!(self.logger, "Failed to add leaders block: {}", e);
+                            Err(Status::internal("Failed to add leaders block"))
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!(self.logger, "Failed to update local UTXO: {:?}", e);
+                    Err(Status::internal("Failed to update local UTXO"))
+                }
             }
-            Ok(Response::new(Confirmed {}))
         } else {
             match self.process_incoming_block(block).await {
                 Ok(_) => {
@@ -121,17 +135,31 @@ impl Node for NodeService {
                 }
             }
         }
-    }
+    }    
 
     async fn handle_peer_exchange(
         &self,
         request: Request<PeerList>,
     ) -> Result<Response<Confirmed>, Status> {
-        if let Some(validator) = &self.validator {
-            validator.handle_peer_exchange(request).await
-        } else {
-            Err(Status::internal("Node is not a validator (peer exchange process)"))
+        let peer_list = request.into_inner();
+        match self.update_peer_list(peer_list).await {
+            Ok(_) => {
+                info!(self.logger, "Peer list updated successfully");
+                Ok(Response::new(Confirmed {}))
+            }
+            Err(e) => {
+                error!(self.logger, "Failed to update peer_list: {:?}", e);
+                Err(Status::internal("Failed to update peer_list"))
+            }
         }
+    }
+
+    async fn handle_heartbeat(
+        &self,
+        _request: Request<Confirmed>,
+    ) -> Result<Response<Confirmed>, Status> {
+        info!(self.logger, "Received health check request");
+        Ok(Response::new(Confirmed {}))
     }
 }
 
@@ -158,6 +186,9 @@ impl NodeService {
             utxo_store: utxo_storer.clone(),
             latest_block_height: Arc::new(AtomicU64::new(0)),
         };
+        let (mempool_signal, _) = tokio::sync::broadcast::channel(1);
+        let (broadcast_signal, _) = tokio::sync::broadcast::channel(1);
+        let (bt_loop_signal, _) = tokio::sync::broadcast::channel(1);
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
@@ -169,11 +200,15 @@ impl NodeService {
                 vote_count: Arc::new(Mutex::new(HashMap::new())),
                 received_responses_count: Arc::new(Mutex::new(0)),
                 chain: Arc::new(RwLock::new(chain)),
+                mempool_signal: Arc::new(RwLock::new(mempool_signal)),
+                broadcast_signal: Arc::new(RwLock::new(broadcast_signal)),
+                bt_loop_signal: Arc::new(RwLock::new(bt_loop_signal)),
+
             };
-            Some(Arc::new(validator))
-        } else {
-            None
-        };
+        Some(Arc::new(validator))
+    } else {
+        None
+    };
         Ok(NodeService {
             server_config: cfg,
             peer_lock,
@@ -199,6 +234,7 @@ impl NodeService {
                 validator.initialize_validating().await?;
             }
         }
+        self.start_heartbeat_loop().await;
         Ok(())
     }
     
@@ -215,6 +251,40 @@ impl NodeService {
             .await
             .map_err(NodeServiceError::TonicTransportError)
     }
+
+    async fn start_heartbeat_loop(&self) {
+        loop {
+            let mut to_remove = Vec::new();
+            {
+                let peers = self.peer_lock.read().await;
+                let peers_data = peers
+                    .iter()
+                    .filter(|(_, (_, _, is_validator))| *is_validator)
+                    .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
+                    .collect::<Vec<_>>();
+
+                for (addr, peer_client) in peers_data {
+                    let mut client = peer_client.lock().await;
+                    match client.handle_heartbeat(Request::new(Confirmed {})).await {
+                        Ok(_) => {
+                            info!(self.logger, "Validator {} is alive", addr);
+                        }
+                        Err(_) => {
+                            info!(self.logger, "Removing non-responsive validator {}", addr);
+                            to_remove.push(addr.clone());
+                        }
+                    }
+                }
+            }
+            {
+                let mut peers = self.peer_lock.write().await;
+                for addr in to_remove {
+                    peers.remove(&addr);
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }  
 
     pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
         let peers_data = {
@@ -267,13 +337,6 @@ impl NodeService {
             info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
         } else {
             info!(self.logger, "{}: peer already exists: {}", self.server_config.cfg_addr, remote_addr);
-        }
-    }
-    
-    pub async fn delete_peer(&self, addr: &str) {
-        let mut peers = self.peer_lock.write().await;
-        if peers.remove(addr).is_some() {
-            info!(self.logger, "{}: peer removed: {}", self.server_config.cfg_addr, addr);
         }
     }
 
@@ -397,10 +460,40 @@ impl NodeService {
             msg_outputs: outputs,
             msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
+        info!(self.logger, "{}: Created transaction with {} to {:?}", self.server_config.cfg_addr, amount, to);
         Ok(tx)
     }
 
-    pub async fn pull_state(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+    pub async fn pull_state_from(&self, addr: String) -> Result<(), NodeServiceError> {
+        let peer_write_lock = self.peer_lock.write().await;
+        if !peer_write_lock.contains_key(&addr) {
+            match self.dial_remote_node(&addr).await {
+                Ok((client, version)) => {
+                    if version.msg_validator {
+                        self.add_peer(client.clone(), version, true).await;
+                        info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
+                        let client_arc = Arc::new(Mutex::new(client));
+                        let mut client_lock = client_arc.lock().await;
+                        self.pull_state_from_client(&mut *client_lock).await?;
+                    } else {
+                        error!(self.logger, "{}: peer is not a validator: {}", self.server_config.cfg_addr, addr);
+                        return Err(NodeServiceError::PullFromNonValidatorNode);
+                    }
+                },
+                Err(e) => {
+                    error!(self.logger, "Failed to dial remote node: {:?}", e);
+                    return Err(NodeServiceError::ConnectionFailed);
+                },
+            }
+        } else {
+            let (client, _, _) = peer_write_lock.get(&addr).ok_or(NodeServiceError::PeerNotFound)?.clone();
+            let mut client_lock = client.lock().await;
+            self.pull_state_from_client(&mut *client_lock).await?;
+        }
+        Ok(())
+    }    
+    
+    pub async fn pull_state_from_client(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
         let last_block_height = self.latest_block_height.load(Relaxed);
         let request = Request::new(LocalState { msg_last_block_height: last_block_height });
         let response = validator_client.push_state(request).await?;
@@ -439,6 +532,29 @@ impl NodeService {
                     address: public_key.clone(),
                 };
                 self.utxo_store.lock().await.put(utxo)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn update_peer_list(&self, peer_list: PeerList) -> Result<(), ValidatorServiceError> {
+        let peer_write_lock = self.peer_lock.write().await;
+        for addr in peer_list.msg_peers_addresses {
+            if !peer_write_lock.contains_key(&addr) {
+                match self.dial_remote_node(&addr).await {
+                    Ok((client, version)) => {
+                        if version.msg_validator {
+                            self.add_peer(client, version, true).await;
+                            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
+                        } else {
+                            self.add_peer(client, version, false).await;
+                            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
+                        }
+                    }
+                    Err(e) => {
+                        error!(self.logger, "Failed to dial remote node: {:?}", e);
+                    }
+                }
             }
         }
         Ok(())

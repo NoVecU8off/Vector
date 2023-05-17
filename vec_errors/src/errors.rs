@@ -111,6 +111,12 @@ pub enum NodeServiceError {
     ShutdownError,
     #[error("Failed make node client")]
     MakeNodeClientError,
+    #[error("Peer not found")]
+    PeerNotFound,
+    #[error("Connection failed")]
+    ConnectionFailed,
+    #[error("Can not pull from non-validator node")]
+    PullFromNonValidatorNode,
     #[error(transparent)]
     UTXOStorageError(#[from] UTXOStorageError),
     #[error("Failed to read certificates")]
@@ -133,6 +139,8 @@ pub enum ValidatorServiceError {
     TransactionBroadcastFailed,
     #[error("Failed to join broadcast hash")]
     HashBroadcastFailed,
+    #[error("Failed to join peer broadcast")]
+    PeerBroadcastFailed,
     #[error("Failed to join broadcast leader block")]
     LeaderBlockBroadcastFailed,
     #[error("Failed to join broadcast vote")]
@@ -145,6 +153,8 @@ pub enum ValidatorServiceError {
     BlockOpsError(#[from] BlockOpsError),
     #[error(transparent)]
     BlockStorageError(#[from] BlockStorageError),
+    #[error("Broadcast error: {0}")]
+    BroadcastError(#[from] tokio::sync::broadcast::error::RecvError),
 }
 
 #[derive(Debug, Error)]
@@ -175,4 +185,12 @@ pub enum ServerConfigError {
     FailedToReadFromConfigFile(std::io::Error),
     #[error("Failed to deserialize config: {0}")]
     FailedToDeserializeConfig(bincode::Error),
+    #[error("HTTP request failed: {0}")]
+    HttpRequestFailed(reqwest::Error),
+}
+
+impl From<reqwest::Error> for ServerConfigError {
+    fn from(err: reqwest::Error) -> ServerConfigError {
+        ServerConfigError::HttpRequestFailed(err)
+    }
 }

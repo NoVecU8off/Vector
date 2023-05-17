@@ -6,7 +6,7 @@ use vec_merkle::merkle::MerkleTree;
 use vec_chain::chain::Chain;
 use vec_block::block::*;
 use vec_errors::errors::*;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use std::{collections::HashMap, time::{Duration, SystemTime}};
 use tonic::{Request, Response, Status, codegen::Arc};
 use futures::future::try_join_all;
@@ -24,6 +24,9 @@ pub struct ValidatorService {
     pub vote_count: Arc<Mutex<HashMap<u64, usize>>>,
     pub received_responses_count: Arc<Mutex<usize>>,
     pub chain: Arc<RwLock<Chain>>,
+    pub mempool_signal: Arc<RwLock<broadcast::Sender<()>>>,
+    pub broadcast_signal: Arc<RwLock<broadcast::Sender<()>>>,
+    pub bt_loop_signal: Arc<RwLock<broadcast::Sender<()>>>,
 }
 
 #[tonic::async_trait]
@@ -47,11 +50,6 @@ pub trait Validator: Sync + Send {
         &self,
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status>;
-
-    async fn handle_peer_exchange(
-        &self,
-        request: Request<PeerList>,
-    ) -> Result<Response<Confirmed>, Status>;
 }
 
 #[tonic::async_trait]
@@ -86,8 +84,10 @@ impl Validator for ValidatorService {
         let hash_str = hex::encode(&hash);
         if !self.mempool.contains_transaction(&transaction).await {
             if self.mempool.add(transaction.clone()).await {
-                info!(self.node_service.logger, "{}: received transaction: {}", self.node_service.server_config.cfg_addr, hash_str);
+                info!(self.node_service.logger, "{}: received and added transaction: {}", self.node_service.server_config.cfg_addr, hash_str);
                 let self_clone = self.clone();
+                let mempool_signal = self.mempool_signal.write().await;
+                mempool_signal.send(()).unwrap();
                 tokio::spawn(async move {
                     if let Err(e) = self_clone.broadcast_transaction(transaction).await {
                         error!(self_clone.node_service.logger, "Error broadcasting transaction: {}", e);
@@ -169,102 +169,37 @@ impl Validator for ValidatorService {
         }
         Ok(Response::new(Confirmed {}))
     }
-
-    async fn handle_peer_exchange(
-        &self,
-        request: Request<PeerList>,
-    ) -> Result<Response<Confirmed>, Status> {
-        let peer_list = request.into_inner();
-        if let Err(e) = self.update_peer_list(peer_list).await {
-            error!(self.node_service.logger, "Failed to update peer list: {}", e);
-        }
-        Ok(Response::new(Confirmed {}))
-    }
 }
 
 impl ValidatorService {
-    pub async fn update_peer_list(&self, peer_list: PeerList) -> Result<(), ValidatorServiceError> {
-        let peer_write_lock = self.node_service.peer_lock.write().await;
-        for addr in peer_list.msg_peers_addresses {
-            if !peer_write_lock.contains_key(&addr) {
-                match self.node_service.dial_remote_node(&addr).await {
-                    Ok((client, version)) => {
-                        if version.msg_validator {
-                            self.node_service.add_peer(client, version, true).await;
-                            info!(self.node_service.logger, "{}: new validator peer added: {}", self.node_service.server_config.cfg_addr, addr);
-                        }
-                    }
-                    Err(e) => {
-                        error!(self.node_service.logger, "Failed to dial remote node: {:?}", e);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn broadcast_peer_list(&mut self) -> Result<(), ValidatorServiceError> {
-        info!(self.node_service.logger, "{}: broadcasting peer list", self.node_service.server_config.cfg_addr);
-        let my_addr = &self.node_service.server_config.cfg_addr;
-        let mut peers_addresses = {
-            let peers = self.node_service.peer_lock.read().await;
-            peers
-                .iter()
-                .map(|(addr, (_, _, _))| (addr.clone()))
-                .collect::<Vec<_>>()
-        };
-        peers_addresses.push(my_addr.clone());
-        let msg = PeerList {
-            msg_peers_addresses: peers_addresses,
-        };
-        let peers_data = {
-            let peers = self.node_service.peer_lock.read().await;
-            peers
-                .iter()
-                .filter(|(_, (_, _, is_validator))| *is_validator)
-                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
-                .collect::<Vec<_>>()
-        };
-        let mut tasks = Vec::new();
-        for (addr, peer_client) in peers_data {
-            let msg_clone = msg.clone();
-            let self_clone = self.clone();
-            let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
-                let req = Request::new(msg_clone);
-                if addr != self_clone.node_service.server_config.cfg_addr {
-                    if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
-                        error!(
-                            self_clone.node_service.logger,
-                            "Failed to broadcast peer list to {}: {:?}",
-                            addr,
-                            err
-                        );
-                    } else {
-                        info!(
-                            self_clone.node_service.logger,
-                            "{}: broadcasted peer list to {}",
-                            self_clone.node_service.server_config.cfg_addr,
-                            addr
-                        );
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::HashBroadcastFailed)?;
-        Ok(())
-    }
-
     pub async fn initialize_validating(&self) -> Result<(), ValidatorServiceError> {
-        let node_clone = self.clone();
-        let mut interval = tokio::time::interval(Duration::from_millis(10));
-        loop {
-            interval.tick().await;
-            let num_transactions = node_clone.mempool.len().await;
+        let mut mempool_rx = {
+            let mempool_signal = self.mempool_signal.read().await;
+            mempool_signal.subscribe()
+        };
+        while let Ok(_) = mempool_rx.recv().await {
+            let num_transactions = self.mempool.len().await;
             if num_transactions == 5 {
-                node_clone.initialize_consensus().await?;
+                self.initialize_consensus().await?;
             }
+        }
+        {
+            let signal = self.bt_loop_signal.write().await;
+            let _ = signal.send(());
+        }
+        Ok(())
+    }
+
+    pub async fn start_broadcast_loop(&mut self) -> Result<(), ValidatorServiceError> {
+        let mut signal_receiver = {
+            let signal = self.bt_loop_signal.read().await;
+            signal.subscribe()
+        };
+        signal_receiver.recv().await?;
+        let mut interval = tokio::time::interval(Duration::from_secs(57));
+        loop {
+            self.broadcast_peer_list().await?;
+            interval.tick().await;
         }
     }
 
@@ -515,7 +450,7 @@ impl ValidatorService {
                             self_clone.node_service.logger,
                             "Vote counter updated"
                         );
-                        self_clone.update_vote_count(vote.msg_target_validator_id).await;
+                        // self_clone.update_vote_count(vote.msg_target_validator_id).await;  ?????
                     }
                     Err(e) => {
                         error!(
@@ -568,7 +503,7 @@ impl ValidatorService {
             None
         } else {
             let mut rng = rand::thread_rng();
-            let random_index = rng.gen_range(0..validators.len());
+            let random_index = rng.gen_range(0..validators.len()); // ?????
             Some(validators[random_index])
         }
     }    
@@ -640,6 +575,122 @@ impl ValidatorService {
             tasks.push(task);
         }
         try_join_all(tasks).await.map_err(|_| ValidatorServiceError::LeaderBlockBroadcastFailed)?;
+        Ok(())
+    }
+
+    pub async fn broadcast_peer_list(&mut self) -> Result<(), ValidatorServiceError> {
+        info!(self.node_service.logger, "{}: broadcasting peer list", self.node_service.server_config.cfg_addr);
+        let my_addr = &self.node_service.server_config.cfg_addr;
+        let mut peers_addresses = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .map(|(addr, (_, _, _))| (addr.clone()))
+                .collect::<Vec<_>>()
+        };
+        peers_addresses.push(my_addr.clone());
+        let msg = PeerList {
+            msg_peers_addresses: peers_addresses,
+        };
+        let peers_data = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .filter(|(_, (_, _, is_validator))| *is_validator)
+                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
+                .collect::<Vec<_>>()
+        };
+        let mut tasks = Vec::new();
+        for (addr, peer_client) in peers_data {
+            let msg_clone = msg.clone();
+            let self_clone = self.clone();
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                let req = Request::new(msg_clone);
+                if addr != self_clone.node_service.server_config.cfg_addr {
+                    if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
+                        error!(
+                            self_clone.node_service.logger,
+                            "Failed to broadcast peer list to {}: {:?}",
+                            addr,
+                            err
+                        );
+                    } else {
+                        info!(
+                            self_clone.node_service.logger,
+                            "{}: broadcasted peer list to {}",
+                            self_clone.node_service.server_config.cfg_addr,
+                            addr
+                        );
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::PeerBroadcastFailed)?;
+        {
+            let signal = self.broadcast_signal.write().await;
+            let _ = signal.send(());
+        }
+        Ok(())
+    }
+
+    pub async fn broadcast_validator_list(&self) -> Result<(), ValidatorServiceError> {
+        let mut signal_receiver = {
+            let signal = self.broadcast_signal.read().await;
+            signal.subscribe()
+        };
+        signal_receiver.recv().await?;
+        info!(self.node_service.logger, "{}: broadcasting validator peer list", self.node_service.server_config.cfg_addr);
+        let my_addr = &self.node_service.server_config.cfg_addr;
+        let mut validator_peers = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .filter(|(_, (_, _, is_validator))| *is_validator)
+                .map(|(addr, (_, _, _))| addr.clone())
+                .collect::<Vec<_>>()
+        };
+        validator_peers.push(my_addr.clone());
+        let msg = PeerList {
+            msg_peers_addresses: validator_peers,
+        };
+        let common_nodes = {
+            let peers = self.node_service.peer_lock.read().await;
+            peers
+                .iter()
+                .filter(|(_, (_, _, is_validator))| !*is_validator)
+                .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
+                .collect::<Vec<_>>()
+        };
+        let mut tasks = Vec::new();
+        for (addr, peer_client) in common_nodes {
+            let msg_clone = msg.clone();
+            let self_clone = self.clone();
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                let req = Request::new(msg_clone);
+                if addr != self_clone.node_service.server_config.cfg_addr {
+                    if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
+                        error!(
+                            self_clone.node_service.logger,
+                            "Failed to broadcast validator peer list to {}: {:?}",
+                            addr,
+                            err
+                        );
+                    } else {
+                        info!(
+                            self_clone.node_service.logger,
+                            "{}: broadcasted validator peer list to {}",
+                            self_clone.node_service.server_config.cfg_addr,
+                            addr
+                        );
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        try_join_all(tasks).await.map_err(|_| ValidatorServiceError::PeerBroadcastFailed)?;
         Ok(())
     }
 }

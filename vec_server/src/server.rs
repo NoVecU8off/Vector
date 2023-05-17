@@ -24,20 +24,7 @@ impl ServerConfig {
         ServerConfig {
             cfg_is_validator: true,
             cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8080".to_string(),
-            cfg_keypair: Keypair::generate_keypair(),
-            cfg_pem_certificate,
-            cfg_pem_key,
-            cfg_root_crt,
-        }
-    }
-
-    pub async fn default_v2() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
-        ServerConfig {
-            cfg_is_validator: true,
-            cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8084".to_string(),
+            cfg_addr: get_ip().await.expect("Failed to get IP"),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
@@ -50,7 +37,7 @@ impl ServerConfig {
         ServerConfig {
             cfg_is_validator: false,
             cfg_version: "1".to_string(),
-            cfg_addr: "127.0.0.1:8088".to_string(),
+            cfg_addr: get_ip().await.expect("Failed to get IP"),
             cfg_keypair: Keypair::generate_keypair(),
             cfg_pem_certificate,
             cfg_pem_key,
@@ -114,4 +101,11 @@ pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>),
     let key_pem = fs::read(key_file_path).map_err(ServerConfigError::FailedToReadClientKey)?;
     let root_pem = fs::read(root_file_path).map_err(ServerConfigError::FailedToReadClientRootCert)?;
     Ok((cert_pem, key_pem, root_pem))
+}
+
+async fn get_ip() -> Result<String, ServerConfigError> {
+    let response = reqwest::get("https://api.ipify.org").await?;
+    let ip = response.text().await?;
+    let ip_port = format!("{}:8088", ip);
+    Ok(ip_port)
 }

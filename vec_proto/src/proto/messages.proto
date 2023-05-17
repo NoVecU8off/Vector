@@ -18,7 +18,11 @@ service Node {
 
     rpc HandlePeerExchange(PeerList) returns (Confirmed);
 
+    rpc HandleHeartbeat(Confirmed) returns (Confirmed);
+
 }
+
+message Confirmed { }
 
 message ValidatorList {
 
@@ -37,8 +41,6 @@ message LocalState {
     uint64 msg_last_block_height = 1;
 
 }
-
-message Confirmed { }
 
 message Vote {
 

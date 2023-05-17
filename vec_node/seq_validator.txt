@@ -1,0 +1,22 @@
+1 initialize_validating 2,4 <- 2
+2 start_broadcast_loop 21
+3 broadcast_transaction -> handle_transaction
+4 initialize_consensus 5,6,11,8
+5 accept_round_transactions -
+6 create_unsigned_block 7
+7 hash_unsigned_block -
+8 broadcast_unsigned_block_hash -> handle_agreement
+9 compare_block_hashes <- handle_agreement
+10 respond_to_received_block_hash ->handle_agreement<-
+11 update_agreement_count -
+12 initialize_voting 13,17,14
+13 clear_round_transactions -
+14 broadcast_vote -> handle_vote
+15 update_vote_count -
+16 wait_for_voting_completion 18, <- handle_vote
+17 select_random_validator -
+18 finalize_block_if_winner 19
+19 finalize_block 20
+20 broadcast_block -> handle_block
+21 broadcast_peer_list 22, -> handle_peer_exchange_list
+22 broadcast_validator_list -> handle_peer_exchange_list
