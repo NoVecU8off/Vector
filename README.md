@@ -21,7 +21,7 @@ This project is licensed under the Apache-2.0 License - see the LICENSE.md file 
 ## Acknowledgments
 I am grateful to the Rust and gRPC communities for their comprehensive documentation and libraries, which have contributed significantly to the development of Vector.
 
-Contact
+## Contact
 For any queries, please raise an issue in our GitHub repository, or contact me at andrewnovikoff@outlook.com.
 
 Welcome to Vector, and thank you for being part of my journey!
