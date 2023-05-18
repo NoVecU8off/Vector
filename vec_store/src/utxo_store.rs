@@ -15,7 +15,7 @@ pub struct UTXO {
 pub trait UTXOStorer: Send + Sync {
     fn put(&mut self, utxo: UTXO) -> Result<(), UTXOStorageError>;
     fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, UTXOStorageError>;
-    fn find_utxos(&self, address: &Vec<u8>, amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError>;
+    fn find_utxos(&self, address: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError>;
     fn remove_utxo(&mut self, key: &(String, u32)) -> Result<(), UTXOStorageError>;
 }
 
@@ -55,7 +55,7 @@ impl UTXOStorer for MemoryUTXOStore {
     fn put(&mut self, utxo: UTXO) -> Result<(), UTXOStorageError> {
         let key = (utxo.transaction_hash.clone(), utxo.output_index);
         let mut data = self.data.write().map_err(|_| UTXOStorageError::WriteLockError)?;
-        data.insert(key.clone(), utxo.clone());
+        data.insert(key, utxo.clone());
         let mut user_utxos = self.user_utxos.write().map_err(|_| UTXOStorageError::WriteLockError)?;
         user_utxos.entry(utxo.address.clone()).or_insert_with(Vec::new).push(utxo);
         Ok(())
@@ -65,7 +65,7 @@ impl UTXOStorer for MemoryUTXOStore {
         let data = self.data.read().map_err(|_| UTXOStorageError::ReadLockError)?;
         Ok(data.get(&key).cloned())
     }
-    fn find_utxos(&self, address: &Vec<u8>, amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError> {
+    fn find_utxos(&self, address: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError> {
         let user_utxos = self.user_utxos.read().map_err(|_| UTXOStorageError::ReadLockError)?;        if let Some(utxos) = user_utxos.get(address) {
             let mut sorted_utxos = utxos.clone();
             sorted_utxos.sort_by(|a, b| b.amount.cmp(&a.amount));

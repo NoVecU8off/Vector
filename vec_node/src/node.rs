@@ -192,7 +192,7 @@ impl NodeService {
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
-                node_service: Arc::new(node_service.clone()),
+                node_service: Arc::new(node_service),
                 mempool: Arc::new(Mempool::new()),
                 round_transactions: Arc::new(Mutex::new(Vec::new())),
                 created_block: Arc::new(Mutex::new(None)),
@@ -221,7 +221,7 @@ impl NodeService {
 
     pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<(), NodeServiceError> {
         let node_service = self.clone();
-        let addr = format!("{}", self.server_config.cfg_addr)
+        let addr = self.server_config.cfg_addr.to_string()
             .parse()
             .map_err(NodeServiceError::AddrParseError)?;
         info!(self.logger, "NodeServer {} starting listening", self.server_config.cfg_addr);
@@ -286,7 +286,7 @@ impl NodeService {
         }
     }  
 
-    pub async fn broadcast_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
+    pub async fn broadcast_tx(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
         let peers_data = {
             let peers = self.peer_lock.read().await;
             peers
@@ -304,9 +304,19 @@ impl NodeService {
                 let req = Request::new(transaction_clone.clone());
                 if addr != self_clone.server_config.cfg_addr {
                     if let Err(e) = peer_client_lock.handle_transaction(req).await {
-                        error!(self_clone.logger, "{}: Broadcast error: {:?}", self_clone.server_config.cfg_addr, e)
+                        error!(
+                            self_clone.logger, 
+                            "{}: Broadcast error: {:?}", 
+                            self_clone.server_config.cfg_addr, 
+                            e
+                        );
                     } else {
-                        info!(self_clone.logger, "{}: Broadcasted tx to: {:?}", self_clone.server_config.cfg_addr, addr)
+                        info!(
+                            self_clone.logger, 
+                            "{}: Broadcasted tx to: {:?}", 
+                            self_clone.server_config.cfg_addr, 
+                            addr
+                        );
                     }
                 }
             });
@@ -417,12 +427,12 @@ impl NodeService {
         !results.into_iter().any(|res| res.unwrap_or(false))
     }
 
-    pub async fn create_transaction(&self, to: &Vec<u8>, amount: i64) -> Result<Transaction, NodeServiceError> {
+    pub async fn make_tx(&self, to: &Vec<u8>, amount: i64) -> Result<(), NodeServiceError> {
         let keypair = &self.server_config.cfg_keypair;
         let public_key = keypair.public.as_bytes().to_vec();
         let from = &public_key;
         let mut utxo_store = self.utxo_store.lock().await;
-        let utxos = utxo_store.find_utxos(&from, amount)?;
+        let utxos = utxo_store.find_utxos(from, amount)?;
         let mut inputs = Vec::new();
         let mut total_input = 0;
         let mut spent_utxo_keys = Vec::new();
@@ -461,7 +471,8 @@ impl NodeService {
             msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
         info!(self.logger, "{}: Created transaction with {} to {:?}", self.server_config.cfg_addr, amount, to);
-        Ok(tx)
+        self.broadcast_tx(tx).await?;
+        Ok(())
     }
 
     pub async fn pull_state_from(&self, addr: String) -> Result<(), NodeServiceError> {
@@ -474,7 +485,7 @@ impl NodeService {
                         info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
                         let client_arc = Arc::new(Mutex::new(client));
                         let mut client_lock = client_arc.lock().await;
-                        self.pull_state_from_client(&mut *client_lock).await?;
+                        self.pull_state_from_client(&mut client_lock).await?;
                     } else {
                         error!(self.logger, "{}: peer is not a validator: {}", self.server_config.cfg_addr, addr);
                         return Err(NodeServiceError::PullFromNonValidatorNode);
@@ -488,7 +499,7 @@ impl NodeService {
         } else {
             let (client, _, _) = peer_write_lock.get(&addr).ok_or(NodeServiceError::PeerNotFound)?.clone();
             let mut client_lock = client.lock().await;
-            self.pull_state_from_client(&mut *client_lock).await?;
+            self.pull_state_from_client(&mut client_lock).await?;
         }
         Ok(())
     }    

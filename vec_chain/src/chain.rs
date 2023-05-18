@@ -163,8 +163,7 @@ impl Chain {
             .msg_transactions
             .par_iter()
             .try_for_each(|tx| {
-                let chain = self.clone();
-                chain.validate_transaction(tx)
+                self.validate_transaction(tx)
             })
     }
     
@@ -206,7 +205,7 @@ pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
         msg_outputs: vec![output],
         msg_relative_timestamp: 0,
     };
-    let merkle_tree = MerkleTree::new(&vec![transaction.clone()]).unwrap();
+    let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
     let merkle_root = merkle_tree.root.to_vec();
     let header = Header {
         msg_version: 1,

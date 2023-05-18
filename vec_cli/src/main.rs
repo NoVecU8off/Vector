@@ -80,15 +80,12 @@ async fn main() {
                 loop {
                     match rx.recv().await {
                         Some(Command::SendTransaction { to, amount }) => {
-                            match nsv.create_transaction(&to, amount).await {
-                                Ok(transaction) => {
-                                    // broadcast the transaction
-                                    if let Err(e) = nsv.broadcast_transaction(transaction).await {
-                                        println!("Error broadcasting transaction: {:?}", e);
-                                    }
+                            match nsv.make_tx(&to, amount).await {
+                                Ok(_) => {
+                                    println!("Error broadcasting transaction");
                                 }
                                 Err(e) => {
-                                    println!("Error creating transaction: {:?}", e);
+                                    println!("Error creating and broadcasting transaction: {:?}", e);
                                 }
                             }
                         },
@@ -118,7 +115,7 @@ async fn main() {
                                 if parts.len() == 4 {
                                     let recipient = parts[1].as_bytes().to_vec();
                                     let amount = parts[3].parse::<i64>().unwrap_or(0);
-                                    let _ = tx.send(Command::SendTransaction { to: recipient, amount: amount }).await;
+                                    let _ = tx.send(Command::SendTransaction { to: recipient, amount }).await;
                                 } else {
                                     println!("Invalid 'send' command format. It should be 'send <recipient> to <amount>'");
                                 }
