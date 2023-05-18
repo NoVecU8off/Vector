@@ -106,7 +106,7 @@ impl Validator for ValidatorService {
         let is_response = hash_agreement.msg_is_responce;
         let sender_addr = hash_agreement.msg_sender_addr;
         if !is_response {
-            let agreed = match self.compare_block_hashes(&hash).await {
+            let agreed = match self.compare_hashes(&hash).await {
                 Ok(result) => result,
                 Err(e) => {
                     error!(self.node_service.logger, "Error comparing block hashes: {}", e);
@@ -120,7 +120,7 @@ impl Validator for ValidatorService {
                 msg_is_responce: true,
                 msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
             };
-            if let Err(e) = self.respond_to_received_block_hash(&msg, sender_addr).await {
+            if let Err(e) = self.respond_hash(&msg, sender_addr).await {
                 error!(self.node_service.logger, "Error responding to hash agreement message: {}", e);
             }
         } else {
@@ -137,16 +137,14 @@ impl Validator for ValidatorService {
             let mut received_responses_count = self.received_responses_count.lock().await;
             *received_responses_count += 1;
             if *received_responses_count == num_validators - 1 {
-                let mut agreement_count = self.agreement_count.lock().await;
-                let required_agreements = (2 * num_validators) / 3 + 1;
+                let agreement_count = self.agreement_count.lock().await;
+                let required_agreements = ( 2 * num_validators / 3  ) + 1;
                 if *agreement_count >= required_agreements {
                     if let Err(e) = self.initialize_voting().await {
                         error!(self.node_service.logger, "Failed to initialize voting during hash agreement: {}", e);
                     }
                 } else {
-                    *agreement_count = 0;
-                    *received_responses_count = 0;
-                    if let Err(e) = self.initialize_consensus().await {
+                    if let Err(e) = self.wait_for_voting_completion().await {
                         error!(self.node_service.logger, "Failed to reinitialize consensus after hash agreement failure: {}", e);
                     }
                 }
@@ -195,7 +193,7 @@ impl ValidatorService {
             signal.subscribe()
         };
         signal_receiver.recv().await?;
-        let mut interval = tokio::time::interval(Duration::from_secs(57));
+        let mut interval = tokio::time::interval(Duration::from_secs(61));
         loop {
             self.broadcast_peer_list().await?;
             interval.tick().await;
@@ -209,12 +207,7 @@ impl ValidatorService {
         self.accept_round_transactions().await?;
         self.mempool.clear().await;
         self.create_unsigned_block().await?;
-        let (_, block_hash) = {
-            let created_block_lock = self.created_block.lock().await;
-            created_block_lock.as_ref().ok_or(ValidatorServiceError::NoCreatedBlockFound)?.clone()
-        };
         self.update_agreement_count().await;
-        self.broadcast_unsigned_block_hash(&block_hash).await?;
         Ok(())
     }
 
@@ -230,7 +223,7 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn create_unsigned_block(&self) -> Result<Block, ValidatorServiceError> {
+    pub async fn create_unsigned_block(&self) -> Result<(), ValidatorServiceError> {
         info!(self.node_service.logger, "{}: unsigned block creation", self.node_service.server_config.cfg_addr);
         let chain = &self.chain;
         let chain_read_lock = chain.read().await;
@@ -259,8 +252,9 @@ impl ValidatorService {
         };
         let hash = self.hash_unsigned_block(&block).await?;
         let mut created_block_lock = self.created_block.lock().await;
-        *created_block_lock = Some((block.clone(), hash));
-        Ok(block)
+        *created_block_lock = Some((block, hash.clone()));
+        self.broadcast_hash(&hash).await?;
+        Ok(())
     }    
 
     pub async fn hash_unsigned_block(&self, block: &Block) -> Result<Vec<u8>, ValidatorServiceError> {
@@ -268,7 +262,7 @@ impl ValidatorService {
         Ok(hash)
     }
 
-    pub async fn broadcast_unsigned_block_hash(&self, block_hash: &[u8]) -> Result<(), ValidatorServiceError> {
+    pub async fn broadcast_hash(&self, block_hash: &[u8]) -> Result<(), ValidatorServiceError> {
         info!(self.node_service.logger, "{}: broadcasting block", self.node_service.server_config.cfg_addr);
         let my_addr = &self.node_service.server_config.cfg_addr;
         let msg = HashAgreement {
@@ -317,7 +311,7 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn compare_block_hashes(&self, received_block_hash: &Vec<u8>) -> Result<bool, ValidatorServiceError> {
+    pub async fn compare_hashes(&self, received_block_hash: &Vec<u8>) -> Result<bool, ValidatorServiceError> {
         info!(self.node_service.logger, "{}: hashes are being compared", self.node_service.server_config.cfg_addr);
         let (_, local_block_hash) = {
             let local_block_hash = self.created_block.lock().await;
@@ -326,7 +320,7 @@ impl ValidatorService {
         Ok(received_block_hash == &local_block_hash)
     }
 
-    pub async fn respond_to_received_block_hash(&self, msg: &HashAgreement, target: String) -> Result<(), ValidatorServiceError> {
+    pub async fn respond_hash(&self, msg: &HashAgreement, target: String) -> Result<(), ValidatorServiceError> {
         let peers_data = {
             let peers = self.node_service.peer_lock.read().await;
             peers
@@ -369,7 +363,11 @@ impl ValidatorService {
 
     async fn initialize_voting(&self) -> Result<(), ValidatorServiceError> {
         self.clear_round_transactions().await?;
-        if let Some(random_validator_id) = self.select_random_validator().await {
+        let mut agreement_count = self.agreement_count.lock().await;
+        let mut received_responses_count = self.received_responses_count.lock().await;
+        *agreement_count = 0;
+        *received_responses_count = 0;
+        if let Some(random_validator_id) = self.get_validator().await {
             let vote = Vote {
                 msg_validator_id: self.validator_id as u64,
                 msg_voter_addr: self.node_service.server_config.cfg_addr.clone(),
@@ -450,7 +448,7 @@ impl ValidatorService {
         Ok(())
     }    
 
-    pub async fn select_random_validator(&self) -> Option<u64> {
+    pub async fn get_validator(&self) -> Option<u64> {
         let peers = self.node_service.peer_lock.read().await;
         let validators: Vec<u64> = peers
             .iter()
@@ -468,13 +466,14 @@ impl ValidatorService {
     }    
 
     async fn finalize_block_if_winner(&self, chain: &mut Chain) -> Result<(), ValidatorServiceError> {
-        let vote_count = self.vote_count.lock().await;
+        let mut vote_count = self.vote_count.lock().await;
         let highest_vote_count = vote_count.values().max().unwrap_or(&0);
         if let Some(own_vote_count) = vote_count.get(&(self.validator_id as u64)) {
             if own_vote_count == highest_vote_count {
                 self.finalize_block(chain).await?;
             }
         }
+        vote_count.clear();
         Ok(())
     }
 

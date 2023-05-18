@@ -234,7 +234,7 @@ impl NodeService {
                 validator.initialize_validating().await?;
             }
         }
-        self.start_heartbeat_loop().await;
+        self.start_heartbeat().await;
         Ok(())
     }
     
@@ -252,7 +252,7 @@ impl NodeService {
             .map_err(NodeServiceError::TonicTransportError)
     }
 
-    async fn start_heartbeat_loop(&self) {
+    async fn start_heartbeat(&self) {
         loop {
             let mut to_remove = Vec::new();
             {
@@ -282,7 +282,7 @@ impl NodeService {
                     peers.remove(&addr);
                 }
             }
-            tokio::time::sleep(Duration::from_secs(60)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
         }
     }  
 
