@@ -14,16 +14,13 @@ use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vec_errors::errors::*;
-use std::sync::atomic::AtomicU64;
-use std::sync::atomic::Ordering::Relaxed;
 
 #[derive(Clone)]
 pub struct NodeService {
-    pub server_config: ServerConfig,
+    pub server_config: Arc<RwLock<ServerConfig>>,
     pub peer_lock: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version, bool)>>>,
     pub validator: Option<Arc<ValidatorService>>,
     pub utxo_store: Arc<Mutex<dyn UTXOStorer>>,
-    pub latest_block_height: Arc<AtomicU64>,
     pub logger: Logger,
 }
 
@@ -39,11 +36,15 @@ impl Node for NodeService {
         let addr = version.msg_listen_address.clone();
         info!(self.logger, "Recieved version, address: {}", addr);
         let connected_peers = self.get_addrs_list().await;
-        if !self.contains(&addr, &connected_peers) {
+        let cfg_is_validator = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_is_validator
+        };
+        if !self.contains(&addr, &connected_peers).await {
             match make_node_client(&addr).await {
                 Ok(c) => {
                     info!(self.logger, "Created node client successfully");
-                    if self.server_config.cfg_is_validator || version_clone.msg_validator {
+                    if cfg_is_validator || version_clone.msg_validator {
                         self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
                     }
                 }
@@ -183,13 +184,13 @@ impl NodeService {
         let chain = Chain::new_chain(block_storer)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
+        let server_config = Arc::new(RwLock::new(cfg.clone()));
         let node_service = NodeService {
-            server_config: cfg.clone(),
+            server_config: Arc::clone(&server_config),
             peer_lock: Arc::clone(&peer_lock),
             validator: None,
             logger: logger.clone(),
             utxo_store: utxo_storer.clone(),
-            latest_block_height: Arc::new(AtomicU64::new(0)),
         };
         let (mempool_signal, _) = tokio::sync::broadcast::channel(1);
         let (broadcast_signal, _) = tokio::sync::broadcast::channel(1);
@@ -215,28 +216,34 @@ impl NodeService {
         None
     };
         Ok(NodeService {
-            server_config: cfg,
+            server_config: server_config,
             peer_lock,
             validator,
             logger,
             utxo_store: utxo_storer,
-            latest_block_height: Arc::new(AtomicU64::new(0)),
         })
     }
 
     pub async fn start(&mut self, nodes_to_bootstrap: Vec<String>) -> Result<(), NodeServiceError> {
         let node_service = self.clone();
-        let addr = self.server_config.cfg_addr.to_string()
+        let addr = {
+                let server_config = self.server_config.read().await;
+                server_config.cfg_addr.to_string()
+            }
             .parse()
             .map_err(NodeServiceError::AddrParseError)?;
-        info!(self.logger, "NodeServer {} starting listening", self.server_config.cfg_addr);
+        info!(self.logger, "NodeServer {} starting listening", addr);
         self.setup_server(node_service, addr).await?;
         if !nodes_to_bootstrap.is_empty() {
             self.bootstrap_network(nodes_to_bootstrap).await?;
         }
-        if self.server_config.cfg_is_validator {
+        let is_validator = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_is_validator
+        };
+        if is_validator {
             if let Some(validator) = &self.validator {
-                validator.initialize_validating().await?;
+                validator.initialize_validating().await?; // ??????????????????????????????????????????????????????????????????????????????????????????????????
             }
         }
         self.start_heartbeat().await;
@@ -244,9 +251,13 @@ impl NodeService {
     }
     
     pub async fn setup_server(&self, node_service: NodeService, addr: SocketAddr) -> Result<(), NodeServiceError> {
+        let (pem_certificate, pem_key, root_crt) = {
+            let server_config = self.server_config.read().await;
+            (server_config.cfg_pem_certificate.clone(), server_config.cfg_pem_key.clone(), server_config.cfg_root_crt.clone())
+        };
         let server_tls_config = ServerTlsConfig::new()
-            .identity(Identity::from_pem(&self.server_config.cfg_pem_certificate, &self.server_config.cfg_pem_key))
-            .client_ca_root(Certificate::from_pem(&self.server_config.cfg_root_crt))
+            .identity(Identity::from_pem(&pem_certificate, &pem_key))
+            .client_ca_root(Certificate::from_pem(&root_crt))
             .client_auth_optional(true);
         Server::builder()
             .tls_config(server_tls_config)?
@@ -304,22 +315,26 @@ impl NodeService {
         for (addr, peer_client) in peers_data {
             let transaction_clone = transaction.clone();
             let self_clone = self.clone();
+            let cfg_addr = {
+                let server_config = self_clone.server_config.read().await;
+                server_config.cfg_addr.to_string()
+            };
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(transaction_clone.clone());
-                if addr != self_clone.server_config.cfg_addr {
+                if addr != cfg_addr {
                     if let Err(e) = peer_client_lock.handle_transaction(req).await {
                         error!(
                             self_clone.logger, 
                             "{}: Broadcast error: {:?}", 
-                            self_clone.server_config.cfg_addr, 
+                            cfg_addr, 
                             e
                         );
                     } else {
                         info!(
                             self_clone.logger, 
                             "{}: Broadcasted tx to: {:?}", 
-                            self_clone.server_config.cfg_addr, 
+                            cfg_addr, 
                             addr
                         );
                     }
@@ -335,21 +350,25 @@ impl NodeService {
         let mut tasks = Vec::new();
         let connected_peers = self.get_addrs_list().await;
         for addr in addrs {
-            if self.contains(&addr, &connected_peers) {
+            if self.contains(&addr, &connected_peers).await {
                 continue;
             }
             let node_service_clone = self.clone();
+            let (cfg_is_validator, cfg_addr) = {
+                let server_config = node_service_clone.server_config.read().await;
+                (server_config.cfg_is_validator, server_config.cfg_addr.clone())
+            };
             let addr_clone = addr.clone();
             let task = tokio::spawn(async move {
                 match node_service_clone.dial_remote_node(&addr_clone).await {
                     Ok((c, v)) => {
                         let is_validator = v.msg_validator;
-                        if node_service_clone.server_config.cfg_is_validator || is_validator {
+                        if cfg_is_validator || is_validator {
                             node_service_clone.add_peer(c, v, is_validator).await;
                         }
                     }
                     Err(e) => {
-                        error!(node_service_clone.logger, "{}: Failed bootstrap and dial: {:?}", node_service_clone.server_config.cfg_addr, e);
+                        error!(node_service_clone.logger, "{}: Failed bootstrap and dial: {:?}", cfg_addr, e);
                     }
                 }
             });
@@ -359,8 +378,12 @@ impl NodeService {
         Ok(())
     }
 
-    pub fn contains(&self, addr: &str, connected_peers: &[String]) -> bool {
-        if self.server_config.cfg_addr == addr {
+    pub async fn contains(&self, addr: &str, connected_peers: &[String]) -> bool {
+        let cfg_addr = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_addr.to_string()
+        };
+        if cfg_addr == addr {
             return false;
         }
         connected_peers.iter().any(|connected_addr| addr == connected_addr)
@@ -372,6 +395,10 @@ impl NodeService {
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
+        let cfg_addr = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_addr.to_string()
+        };
         let mut c = make_node_client(addr)
             .await?;
         let v = c
@@ -379,41 +406,53 @@ impl NodeService {
             .await
             .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
-        info!(self.logger, "{}: Dialed remote node: {}", self.server_config.cfg_addr, addr);
+        info!(self.logger, "{}: Dialed remote node: {}", cfg_addr, addr);
         Ok((c, v))
     }
 
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version, is_validator: bool) {
+        let cfg_addr = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_addr.to_string()
+        };
         let mut peers = self.peer_lock.write().await;
         let remote_addr = v.msg_listen_address.clone();
         if !peers.contains_key(&remote_addr) {
             peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
-            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
+            info!(self.logger, "{}: new validator peer added: {}", cfg_addr, remote_addr);
         } else {
-            info!(self.logger, "{}: peer already exists: {}", self.server_config.cfg_addr, remote_addr);
+            info!(self.logger, "{}: peer already exists: {}", cfg_addr, remote_addr);
         }
     }
 
     pub async fn get_version(&self) -> Version {
-        let keypair = &self.server_config.cfg_keypair;
+        let (cfg_keypair, cfg_is_validator, cfg_version, cfg_addr) = {
+            let server_config = self.server_config.read().await;
+            (server_config.cfg_keypair.clone(), server_config.cfg_is_validator, server_config.cfg_version.clone(), server_config.cfg_addr.clone())
+        };
+        let keypair = cfg_keypair;
         let msg_public_key = keypair.public.to_bytes().to_vec();
         let msg_validator_id = match &self.validator {
             Some(validator_service) => validator_service.validator_id,
-            None => 10101010,
+            None => 0,
         };
         Version {
-            msg_validator: self.server_config.cfg_is_validator,
-            msg_version: self.server_config.cfg_version.clone(),
+            msg_validator: cfg_is_validator,
+            msg_version: cfg_version,
             msg_public_key,
             msg_height: 0,
-            msg_listen_address: self.server_config.cfg_addr.clone(),
+            msg_listen_address: cfg_addr,
             msg_peer_list: self.get_addrs_list().await,
             msg_validator_id,
         }
     }
 
     pub async fn make_tx(&self, to: &Vec<u8>, amount: i64) -> Result<(), NodeServiceError> {
-        let keypair = &self.server_config.cfg_keypair;
+        let (cfg_keypair, cfg_addr) = {
+            let server_config = self.server_config.read().await;
+            (server_config.cfg_keypair.clone(),  server_config.cfg_addr.clone())
+        };
+        let keypair = &cfg_keypair;
         let public_key = keypair.public.as_bytes().to_vec();
         let from = &public_key;
         let mut utxo_store = self.utxo_store.lock().await;
@@ -455,24 +494,28 @@ impl NodeService {
             msg_outputs: outputs,
             msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
-        info!(self.logger, "{}: Created transaction with {} to {:?}", self.server_config.cfg_addr, amount, to);
+        info!(self.logger, "{}: Created transaction with {} to {:?}", cfg_addr, amount, to);
         self.broadcast_tx(tx).await?;
         Ok(())
     }
 
     pub async fn pull_state_from(&self, addr: String) -> Result<(), NodeServiceError> {
+        let cfg_addr = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
         let peer_write_lock = self.peer_lock.write().await;
         if !peer_write_lock.contains_key(&addr) {
             match self.dial_remote_node(&addr).await {
                 Ok((client, version)) => {
                     if version.msg_validator {
                         self.add_peer(client.clone(), version, true).await;
-                        info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
+                        info!(self.logger, "{}: new validator peer added: {}", cfg_addr, addr);
                         let client_arc = Arc::new(Mutex::new(client));
                         let mut client_lock = client_arc.lock().await;
                         self.pull_state_from_client(&mut client_lock).await?;
                     } else {
-                        error!(self.logger, "{}: peer is not a validator: {}", self.server_config.cfg_addr, addr);
+                        error!(self.logger, "{}: peer is not a validator: {}", cfg_addr, addr);
                         return Err(NodeServiceError::PullFromNonValidatorNode);
                     }
                 },
@@ -490,8 +533,11 @@ impl NodeService {
     }    
     
     pub async fn pull_state_from_client(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
-        let last_block_height = self.latest_block_height.load(Relaxed);
-        let request = Request::new(LocalState { msg_last_block_height: last_block_height });
+        let cfg_last_height = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_last_height
+        };
+        let request = Request::new(LocalState { msg_last_block_height: cfg_last_height });
         let response = validator_client.push_state(request).await?;
         let block_batch = response.into_inner();
         self.process_incoming_block_batch(block_batch).await?;
@@ -510,7 +556,8 @@ impl NodeService {
             self.process_incoming_transaction(transaction).await?;
         }
         if let Some(header) = block.msg_header {
-            self.latest_block_height.store(header.msg_height as u64, Relaxed);
+            let mut server_config = self.server_config.write().await;
+            server_config.cfg_last_height = header.msg_height as u64;
         } else {
             return Err(BlockOpsError::MissingHeader)?;
         }
@@ -518,7 +565,11 @@ impl NodeService {
     }
 
     pub async fn process_incoming_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
-        let public_key = self.server_config.cfg_keypair.public.as_bytes().to_vec();
+        let cfg_keypair = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_keypair.clone()
+        };
+        let public_key = cfg_keypair.public.as_bytes().to_vec();
         for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
             if output.msg_to == public_key {
                 let utxo = UTXO {

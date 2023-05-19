@@ -82,8 +82,12 @@ impl Validator for ValidatorService {
         let transaction = request.into_inner();
         let hash = hash_transaction(&transaction).await;
         let hash_str = hex::encode(&hash);
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
         if !self.mempool.contains_transaction(&transaction).await && self.mempool.add(transaction.clone()).await {
-                info!(self.node_service.logger, "{}: received and added transaction: {}", self.node_service.server_config.cfg_addr, hash_str);
+                info!(self.node_service.logger, "{}: received and added transaction: {}", cfg_addr, hash_str);
                 let self_clone = self.clone();
                 let mempool_signal = self.mempool_signal.write().await;
                 mempool_signal.send(()).unwrap();
@@ -105,7 +109,10 @@ impl Validator for ValidatorService {
         let agreement = hash_agreement.msg_agreement;
         let is_response = hash_agreement.msg_is_responce;
         let sender_addr = hash_agreement.msg_sender_addr;
-    
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
         if !is_response {
             let agreed = match self.compare_hashes(&hash).await {
                 Ok(result) => result,
@@ -120,7 +127,7 @@ impl Validator for ValidatorService {
                 msg_block_hash: hash.clone(),
                 msg_agreement: agreed,
                 msg_is_responce: true,
-                msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
+                msg_sender_addr: cfg_addr.clone(),
             };
     
             if let Err(e) = self.respond_hash(&msg, sender_addr).await {
@@ -148,7 +155,7 @@ impl Validator for ValidatorService {
                     .flatten()
                     .cloned()
                     .collect::<HashSet<String>>();
-                if supermajority_addresses.contains(&self.node_service.server_config.cfg_addr) {
+                if supermajority_addresses.contains(&cfg_addr) {
                     if let Err(e) = self.initialize_voting(supermajority_addresses).await {
                         error!(self.node_service.logger, "Failed to initialize voting during hash agreement: {}", e);
                     }
@@ -196,7 +203,7 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn start_broadcast_loop(&mut self) -> Result<(), ValidatorServiceError> {
+    pub async fn start_broadcast_cascade(&self) -> Result<(), ValidatorServiceError> {
         let mut signal_receiver = {
             let signal = self.bt_loop_signal.read().await;
             signal.subscribe()
@@ -210,8 +217,12 @@ impl ValidatorService {
     }
 
     pub async fn initialize_consensus(&self) -> Result<(), ValidatorServiceError> {
-        info!(self.node_service.logger, "{}: Consensus initialized", self.node_service.server_config.cfg_addr);
-        let my_addr = self.node_service.server_config.cfg_addr.clone();
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
+        info!(self.node_service.logger, "{}: Consensus initialized", cfg_addr);
+        let my_addr = cfg_addr.clone();
         let mut created_block_lock = self.created_block.lock().await;
         *created_block_lock = None;
         self.accept_round_transactions().await?;
@@ -226,24 +237,32 @@ impl ValidatorService {
     }
 
     pub async fn accept_round_transactions(&self) -> Result<(), ValidatorServiceError> {
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
         let transactions = self.mempool.get_transactions().await;
         {
             let mut round_transactions = self.round_transactions.lock().await;
             for transaction in transactions {
                 round_transactions.push(transaction);
             }
-            info!(self.node_service.logger, "{}: round transactions accepted", self.node_service.server_config.cfg_addr);
+            info!(self.node_service.logger, "{}: round transactions accepted", cfg_addr);
         }
         Ok(())
     }
 
     pub async fn create_unsigned_block(&self) -> Result<(), ValidatorServiceError> {
-        info!(self.node_service.logger, "{}: unsigned block creation", self.node_service.server_config.cfg_addr);
+        let (cfg_keypair, cfg_addr) = {
+            let server_config = self.node_service.server_config.read().await;
+            (server_config.cfg_keypair.clone(), server_config.cfg_addr.clone())
+        };
+        info!(self.node_service.logger, "{}: unsigned block creation", cfg_addr);
         let chain = &self.chain;
         let chain_read_lock = chain.read().await;
         let msg_previous_hash = Chain::get_previous_hash_in_chain(&chain_read_lock).await?;
         let height = Chain::chain_height(&chain_read_lock) as i32;
-        let keypair = &self.node_service.server_config.cfg_keypair;
+        let keypair = &cfg_keypair;
         let public_key = keypair.public.to_bytes().to_vec();
         let transactions = {
             let round_transactions = self.round_transactions.lock().await;
@@ -277,8 +296,12 @@ impl ValidatorService {
     }
 
     pub async fn broadcast_hash(&self, block_hash: &[u8]) -> Result<(), ValidatorServiceError> {
-        info!(self.node_service.logger, "{}: broadcasting block", self.node_service.server_config.cfg_addr);
-        let my_addr = &self.node_service.server_config.cfg_addr;
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
+        info!(self.node_service.logger, "{}: broadcasting block", cfg_addr);
+        let my_addr = &cfg_addr;
         let msg = HashAgreement {
             msg_validator_id: self.validator_id as u64,
             msg_block_hash: block_hash.to_owned(),
@@ -298,10 +321,14 @@ impl ValidatorService {
         for (addr, peer_client) in peers_data {
             let msg_clone = msg.clone();
             let self_clone = self.clone();
+            let cfg_addr = {
+                let server_config = self_clone.node_service.server_config.read().await;
+                server_config.cfg_addr.clone()
+            };
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(msg_clone);
-                if addr != self_clone.node_service.server_config.cfg_addr {
+                if addr != cfg_addr {
                     if let Err(err) = peer_client_lock.handle_agreement(req).await {
                         error!(
                             self_clone.node_service.logger,
@@ -313,7 +340,7 @@ impl ValidatorService {
                         info!(
                             self_clone.node_service.logger,
                             "{}: broadcasted unsigned block hash to  {}",
-                            self_clone.node_service.server_config.cfg_addr,
+                            cfg_addr,
                             addr
                         );
                     }
@@ -326,7 +353,11 @@ impl ValidatorService {
     }
 
     pub async fn compare_hashes(&self, received_block_hash: &Vec<u8>) -> Result<bool, ValidatorServiceError> {
-        info!(self.node_service.logger, "{}: hashes are being compared", self.node_service.server_config.cfg_addr);
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
+        info!(self.node_service.logger, "{}: hashes are being compared", cfg_addr);
         let (_, local_block_hash) = {
             let local_block_hash = self.created_block.lock().await;
             local_block_hash.as_ref().ok_or(ValidatorServiceError::NoCreatedBlockFound)?.clone()
@@ -344,9 +375,13 @@ impl ValidatorService {
         if let Some((addr, peer_client)) = peers_data {
             let msg_clone = msg.clone();
             let self_clone = self.clone();
+            let cfg_addr = {
+                let server_config = self_clone.node_service.server_config.read().await;
+                server_config.cfg_addr.clone()
+            };
             let mut peer_client_lock = peer_client.lock().await;
             let req = Request::new(msg_clone);
-            if addr != self_clone.node_service.server_config.cfg_addr {
+            if addr != cfg_addr {
                 if let Err(err) = peer_client_lock.handle_agreement(req).await {
                     error!(
                         self_clone.node_service.logger,
@@ -358,7 +393,7 @@ impl ValidatorService {
                     info!(
                         self_clone.node_service.logger,
                         "{}: sent response to  {}",
-                        self_clone.node_service.server_config.cfg_addr,
+                        cfg_addr,
                         addr
                     );
                 }
@@ -376,13 +411,17 @@ impl ValidatorService {
     }
 
     async fn initialize_voting(&self, supermajority_addresses: HashSet<String>) -> Result<(), ValidatorServiceError> {
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
         self.clear_round_transactions().await?;
         let mut received_responses_count = self.received_responses_count.lock().await;
         *received_responses_count = 0;
         if let Some(random_validator_id) = self.get_validator().await {
             let vote = Vote {
                 msg_validator_id: self.validator_id as u64,
-                msg_voter_addr: self.node_service.server_config.cfg_addr.clone(),
+                msg_voter_addr: cfg_addr,
                 msg_target_validator_id: random_validator_id,
             };
             self.broadcast_vote(vote, supermajority_addresses).await?;
@@ -490,6 +529,10 @@ impl ValidatorService {
     }
 
     pub async fn finalize_block(&self, chain: &mut Chain) -> Result<(), ValidatorServiceError> {
+        let cfg_keypair = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_keypair.clone()
+        };
         let created_block_tuple = {
             let created_block_lock = self.created_block.lock().await;
             created_block_lock.clone()
@@ -502,7 +545,7 @@ impl ValidatorService {
             if let Some(header) = block.msg_header.as_mut() {
                 header.msg_timestamp = timestamp as i64;
             }
-            let keypair = &self.node_service.server_config.cfg_keypair;
+            let keypair = &cfg_keypair;
             let signature = sign_block(&block, keypair).await?;
             block.msg_signature = signature.to_vec();
             chain.add_block(block.clone()).await?;
@@ -548,9 +591,13 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn broadcast_peer_list(&mut self) -> Result<(), ValidatorServiceError> {
-        info!(self.node_service.logger, "{}: broadcasting peer list", self.node_service.server_config.cfg_addr);
-        let my_addr = &self.node_service.server_config.cfg_addr;
+    pub async fn broadcast_peer_list(&self) -> Result<(), ValidatorServiceError> {
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
+        info!(self.node_service.logger, "{}: broadcasting peer list", cfg_addr);
+        let my_addr = &cfg_addr;
         let mut peers_addresses = {
             let peers = self.node_service.peer_lock.read().await;
             peers
@@ -574,10 +621,14 @@ impl ValidatorService {
         for (addr, peer_client) in peers_data {
             let msg_clone = msg.clone();
             let self_clone = self.clone();
+            let cfg_addr = {
+                let server_config = self_clone.node_service.server_config.read().await;
+                server_config.cfg_addr.clone()
+            };
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(msg_clone);
-                if addr != self_clone.node_service.server_config.cfg_addr {
+                if addr != cfg_addr {
                     if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
                         error!(
                             self_clone.node_service.logger,
@@ -589,7 +640,7 @@ impl ValidatorService {
                         info!(
                             self_clone.node_service.logger,
                             "{}: broadcasted peer list to {}",
-                            self_clone.node_service.server_config.cfg_addr,
+                            cfg_addr,
                             addr
                         );
                     }
@@ -610,9 +661,13 @@ impl ValidatorService {
             let signal = self.broadcast_signal.read().await;
             signal.subscribe()
         };
+        let cfg_addr = {
+            let server_config = self.node_service.server_config.read().await;
+            server_config.cfg_addr.clone()
+        };
         signal_receiver.recv().await?;
-        info!(self.node_service.logger, "{}: broadcasting validator peer list", self.node_service.server_config.cfg_addr);
-        let my_addr = &self.node_service.server_config.cfg_addr;
+        info!(self.node_service.logger, "{}: broadcasting validator peer list", cfg_addr);
+        let my_addr = &cfg_addr;
         let mut validator_peers = {
             let peers = self.node_service.peer_lock.read().await;
             peers
@@ -637,10 +692,14 @@ impl ValidatorService {
         for (addr, peer_client) in common_nodes {
             let msg_clone = msg.clone();
             let self_clone = self.clone();
+            let cfg_addr = {
+                let server_config = self_clone.node_service.server_config.read().await;
+                server_config.cfg_addr.clone()
+            };
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(msg_clone);
-                if addr != self_clone.node_service.server_config.cfg_addr {
+                if addr != cfg_addr {
                     if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
                         error!(
                             self_clone.node_service.logger,
@@ -652,7 +711,7 @@ impl ValidatorService {
                         info!(
                             self_clone.node_service.logger,
                             "{}: broadcasted validator peer list to {}",
-                            self_clone.node_service.server_config.cfg_addr,
+                            cfg_addr,
                             addr
                         );
                     }
