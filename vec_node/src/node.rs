@@ -111,14 +111,9 @@ impl Node for NodeService {
         let leader_block = request.into_inner();
         if let Some(block) = leader_block.msg_block {
             let leader_address = leader_block.msg_leader_address;
-            match self.process_incoming_leader_block(block, &leader_address).await {
+            match self.process_leader_block(block, &leader_address).await {
                 Ok(_) => {
                     info!(self.logger, "Local UTXO updated successfully");
-                    if let Some(validator) = &self.validator {
-                        if let Err(e) = validator.initialize_validating().await {
-                            error!(self.logger, "Failed to initialize validating: {}", e);
-                        }
-                    }
                     Ok(Response::new(Confirmed {}))
                 },
                 Err(e) => {
@@ -479,6 +474,85 @@ impl NodeService {
         Ok(())
     }
 
+    pub async fn process_incoming_block_batch(&self, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
+        for block in block_batch.msg_blocks {
+            self.process_incoming_block(block).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn process_incoming_block(&self, block: Block) -> Result<(), NodeServiceError> {
+        let local_height = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_last_height
+        };
+        if let Some(header) = block.msg_header {
+            for transaction in block.msg_transactions {
+                self.process_transaction(&transaction).await?;
+            }
+            let mut server_config = self.server_config.write().await;
+            let incoming_height = header.msg_height as u64;
+            if local_height < incoming_height {
+                server_config.cfg_last_height = incoming_height;
+            }
+            Ok(())
+        } else {
+            Err(BlockOpsError::MissingHeader)?
+        }
+    }
+
+    pub async fn process_leader_block(&self, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
+        let local_height = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_last_height
+        };
+        if let Some(header) = block.msg_header.clone() {
+            let incoming_height = header.msg_height as u64;
+            if incoming_height == local_height + 1 {
+                for transaction in &block.msg_transactions {
+                    self.process_transaction(transaction).await?;
+                }
+                let mut server_config = self.server_config.write().await;
+                server_config.cfg_last_height = incoming_height;
+                if let Some(validator) = &self.validator {
+                    let mut chain_lock = validator.chain.write().await;
+                    chain_lock.add_leader_block(block.clone()).await?;
+                    if let Err(e) = validator.initialize_validating(&block).await {
+                        return Err(NodeServiceError::ValidatorServiceError(e));
+                    }
+                }
+                Ok(())
+            } else {
+                match self.pull_state_from(leader_address.to_string()).await {
+                    Ok(_) => Err(NodeServiceError::PullStateError),
+                    Err(e) => Err(e),
+                }
+            }
+        } else {
+            Err(BlockOpsError::MissingHeader)?
+        }
+    }
+
+    pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), NodeServiceError> {
+        let cfg_keypair = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_keypair.clone()
+        };
+        let public_key = cfg_keypair.public.as_bytes().to_vec();
+        for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
+            if output.msg_to == public_key {
+                let utxo = UTXO {
+                    transaction_hash: hex::encode(hash_transaction(transaction).await),
+                    output_index: output_index as u32,
+                    amount: output.msg_amount,
+                    address: public_key.clone(),
+                };
+                self.utxo_store.lock().await.put(utxo)?;
+            }
+        }
+        Ok(())
+    }
+
     pub async fn pull_state_from(&self, addr: String) -> Result<(), NodeServiceError> {
         let cfg_addr = {
             let server_config = self.server_config.read().await;
@@ -521,82 +595,6 @@ impl NodeService {
         let response = validator_client.push_state(request).await?;
         let block_batch = response.into_inner();
         self.process_incoming_block_batch(block_batch).await?;
-        Ok(())
-    }
-
-    pub async fn process_incoming_block_batch(&self, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
-        for block in block_batch.msg_blocks {
-            self.process_incoming_block(block).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn process_incoming_block(&self, block: Block) -> Result<(), NodeServiceError> {
-        let local_height = {
-            let server_config = self.server_config.read().await;
-            server_config.cfg_last_height
-        };
-        if let Some(header) = block.msg_header {
-            for transaction in block.msg_transactions {
-                self.process_transaction(&transaction).await?;
-            }
-            let mut server_config = self.server_config.write().await;
-            let incoming_height = header.msg_height as u64;
-            if local_height < incoming_height {
-                server_config.cfg_last_height = incoming_height;
-            }
-            Ok(())
-        } else {
-            Err(BlockOpsError::MissingHeader)?
-        }
-    }
-
-    pub async fn process_incoming_leader_block(&self, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
-        let local_height = {
-            let server_config = self.server_config.read().await;
-            server_config.cfg_last_height
-        };
-        if let Some(header) = block.msg_header.clone() {
-            let incoming_height = header.msg_height as u64;
-            if incoming_height == local_height + 1 {
-                for transaction in &block.msg_transactions {
-                    self.process_transaction(transaction).await?;
-                }
-                let mut server_config = self.server_config.write().await;
-                server_config.cfg_last_height = incoming_height;
-                if let Some(validator) = &self.validator {
-                    let mut chain_lock = validator.chain.write().await;
-                    chain_lock.add_leader_block(block).await?;
-                }
-                Ok(())
-            } else {
-                match self.pull_state_from(leader_address.to_string()).await {
-                    Ok(_) => Err(NodeServiceError::PullStateError),
-                    Err(e) => Err(e),
-                }
-            }
-        } else {
-            Err(BlockOpsError::MissingHeader)?
-        }
-    }
-
-    pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), NodeServiceError> {
-        let cfg_keypair = {
-            let server_config = self.server_config.read().await;
-            server_config.cfg_keypair.clone()
-        };
-        let public_key = cfg_keypair.public.as_bytes().to_vec();
-        for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
-            if output.msg_to == public_key {
-                let utxo = UTXO {
-                    transaction_hash: hex::encode(hash_transaction(transaction).await),
-                    output_index: output_index as u32,
-                    amount: output.msg_amount,
-                    address: public_key.clone(),
-                };
-                self.utxo_store.lock().await.put(utxo)?;
-            }
-        }
         Ok(())
     }
 }

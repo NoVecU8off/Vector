@@ -184,7 +184,7 @@ impl Validator for ValidatorService {
 }
 
 impl ValidatorService {
-    pub async fn initialize_validating(&self) -> Result<(), ValidatorServiceError> {
+    pub async fn initialize_validating(&self, block: &Block) -> Result<(), ValidatorServiceError> {
         {
             let signal = self.bt_loop_signal.write().await;
             let _ = signal.send(());
@@ -193,8 +193,10 @@ impl ValidatorService {
             let mempool_signal = self.mempool_signal.read().await;
             mempool_signal.subscribe()
         };
-        while (mempool_rx.recv().await).is_ok() 
-        {
+        while (mempool_rx.recv().await).is_ok() {
+            for transaction in &block.msg_transactions {
+                self.mempool.remove(transaction).await;
+            }
             let num_transactions = self.mempool.len().await;
             if num_transactions == 5 {
                 self.initialize_consensus().await?;

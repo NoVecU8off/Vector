@@ -60,6 +60,18 @@ impl Mempool {
         true
     }
 
+    pub async fn remove(&self, tx: &Transaction) -> bool {
+        let hash = hex::encode(hash_transaction(tx).await);
+        let mut lock = self.lock.write().await;
+        if lock.contains_key(&hash) {
+            lock.remove(&hash);
+            info!(self.logger, "Transaction removed from mempool: {}", hash);
+            true
+        } else {
+            false
+        }
+    }
+
     pub async fn contains_transaction(&self, transaction: &Transaction) -> bool {
         self.has(transaction).await
     }
