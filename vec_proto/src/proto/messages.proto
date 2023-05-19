@@ -12,7 +12,7 @@ service Node {
 
     rpc HandleVote (Vote) returns (Confirmed);
 
-    rpc HandleBlock(Block) returns (Confirmed);
+    rpc HandleBlock(LeaderBlock) returns (Confirmed);
 
     rpc PushState(LocalState) returns (BlockBatch);
 
@@ -87,6 +87,14 @@ message HashAgreement {
     bool msg_is_responce = 4;
 
     string msg_sender_addr = 5;
+
+}
+
+message LeaderBlock {
+
+    Block msg_block = 1;
+
+    string msg_leader_address = 2;
 
 }
 

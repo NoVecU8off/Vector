@@ -106,41 +106,30 @@ impl Node for NodeService {
 
     async fn handle_block(
         &self,
-        request: Request<Block>,
+        request: Request<LeaderBlock>,
     ) -> Result<Response<Confirmed>, Status> {
-        let block = request.into_inner();
-        if let Some(validator) = &self.validator {
-            let mut chain_lock = validator.chain.write().await;
-            let add_result = chain_lock.add_leader_block(block.clone()).await;
-            match self.process_incoming_block(block).await {
+        let leader_block = request.into_inner();
+        if let Some(block) = leader_block.msg_block {
+            let leader_address = leader_block.msg_leader_address;
+            match self.process_incoming_leader_block(block, &leader_address).await {
                 Ok(_) => {
                     info!(self.logger, "Local UTXO updated successfully");
-                    match add_result {
-                        Ok(_) => Ok(Response::new(Confirmed {})),
-                        Err(e) => {
-                            error!(self.logger, "Failed to add leaders block: {}", e);
-                            Err(Status::internal("Failed to add leaders block"))
+                    if let Some(validator) = &self.validator {
+                        if let Err(e) = validator.initialize_validating().await {
+                            error!(self.logger, "Failed to initialize validating: {}", e);
                         }
                     }
-                }
+                    Ok(Response::new(Confirmed {}))
+                },
                 Err(e) => {
                     error!(self.logger, "Failed to update local UTXO: {:?}", e);
                     Err(Status::internal("Failed to update local UTXO"))
                 }
             }
         } else {
-            match self.process_incoming_block(block).await {
-                Ok(_) => {
-                    info!(self.logger, "Local UTXO updated successfully");
-                    Ok(Response::new(Confirmed {}))
-                }
-                Err(e) => {
-                    error!(self.logger, "Failed to update local UTXO: {:?}", e);
-                    Err(Status::internal("Failed to update local UTXO"))
-                }
-            }
+            Err(Status::internal("LeaderBlock missing block"))
         }
-    }    
+    }
 
     async fn handle_peer_exchange(
         &self,
@@ -236,15 +225,6 @@ impl NodeService {
         self.setup_server(node_service, addr).await?;
         if !nodes_to_bootstrap.is_empty() {
             self.bootstrap_network(nodes_to_bootstrap).await?;
-        }
-        let is_validator = {
-            let server_config = self.server_config.read().await;
-            server_config.cfg_is_validator
-        };
-        if is_validator {
-            if let Some(validator) = &self.validator {
-                validator.initialize_validating().await?; // ??????????????????????????????????????????????????????????????????????????????????????????????????
-            }
         }
         self.start_heartbeat().await;
         Ok(())
@@ -552,19 +532,55 @@ impl NodeService {
     }
 
     pub async fn process_incoming_block(&self, block: Block) -> Result<(), NodeServiceError> {
-        for transaction in block.msg_transactions {
-            self.process_incoming_transaction(transaction).await?;
-        }
+        let local_height = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_last_height
+        };
         if let Some(header) = block.msg_header {
+            for transaction in block.msg_transactions {
+                self.process_transaction(&transaction).await?;
+            }
             let mut server_config = self.server_config.write().await;
-            server_config.cfg_last_height = header.msg_height as u64;
+            let incoming_height = header.msg_height as u64;
+            if local_height < incoming_height {
+                server_config.cfg_last_height = incoming_height;
+            }
+            Ok(())
         } else {
-            return Err(BlockOpsError::MissingHeader)?;
+            Err(BlockOpsError::MissingHeader)?
         }
-        Ok(())
     }
 
-    pub async fn process_incoming_transaction(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
+    pub async fn process_incoming_leader_block(&self, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
+        let local_height = {
+            let server_config = self.server_config.read().await;
+            server_config.cfg_last_height
+        };
+        if let Some(header) = block.msg_header.clone() {
+            let incoming_height = header.msg_height as u64;
+            if incoming_height == local_height + 1 {
+                for transaction in &block.msg_transactions {
+                    self.process_transaction(transaction).await?;
+                }
+                let mut server_config = self.server_config.write().await;
+                server_config.cfg_last_height = incoming_height;
+                if let Some(validator) = &self.validator {
+                    let mut chain_lock = validator.chain.write().await;
+                    chain_lock.add_leader_block(block).await?;
+                }
+                Ok(())
+            } else {
+                match self.pull_state_from(leader_address.to_string()).await {
+                    Ok(_) => Err(NodeServiceError::PullStateError),
+                    Err(e) => Err(e),
+                }
+            }
+        } else {
+            Err(BlockOpsError::MissingHeader)?
+        }
+    }
+
+    pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), NodeServiceError> {
         let cfg_keypair = {
             let server_config = self.server_config.read().await;
             server_config.cfg_keypair.clone()
@@ -573,7 +589,7 @@ impl NodeService {
         for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
             if output.msg_to == public_key {
                 let utxo = UTXO {
-                    transaction_hash: hex::encode(hash_transaction(&transaction).await),
+                    transaction_hash: hex::encode(hash_transaction(transaction).await),
                     output_index: output_index as u32,
                     amount: output.msg_amount,
                     address: public_key.clone(),

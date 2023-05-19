@@ -117,6 +117,8 @@ pub enum NodeServiceError {
     ConnectionFailed,
     #[error("Can not pull from non-validator node")]
     PullFromNonValidatorNode,
+    #[error("Pull from the leader failed")]
+    PullStateError,
     #[error(transparent)]
     UTXOStorageError(#[from] UTXOStorageError),
     #[error("Failed to read certificates")]
@@ -129,6 +131,8 @@ pub enum NodeServiceError {
     MissingBlockHeader(#[from] ChainOpsError),
     #[error(transparent)]
     MissingHeader(#[from] BlockOpsError),
+    #[error(transparent)]
+    TaskPanic(tokio::task::JoinError), 
 }
 
 #[derive(Debug, Error)]

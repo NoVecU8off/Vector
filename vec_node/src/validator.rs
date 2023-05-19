@@ -570,7 +570,11 @@ impl ValidatorService {
             let self_clone = self.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
-                let req = Request::new(block_clone);
+                let leader_block = LeaderBlock {
+                    msg_block: Some(block_clone),
+                    msg_leader_address: self_clone.node_service.server_config.read().await.cfg_addr.clone(),
+                };
+                let req = Request::new(leader_block);
                 let res = peer_client_lock.handle_block(req).await;
                 match res {
                     Ok(_) => {
