@@ -26,7 +26,7 @@ pub struct ValidatorService {
     pub chain: Arc<RwLock<Chain>>,
     pub mempool_signal: Arc<RwLock<broadcast::Sender<()>>>,
     pub broadcast_signal: Arc<RwLock<broadcast::Sender<()>>>,
-    pub start_broadcast_signal: Arc<RwLock<broadcast::Sender<()>>>,
+    pub bt_loop_signal: Arc<RwLock<broadcast::Sender<()>>>,
 }
 
 #[tonic::async_trait]
@@ -105,6 +105,7 @@ impl Validator for ValidatorService {
         let agreement = hash_agreement.msg_agreement;
         let is_response = hash_agreement.msg_is_responce;
         let sender_addr = hash_agreement.msg_sender_addr;
+    
         if !is_response {
             let agreed = match self.compare_hashes(&hash).await {
                 Ok(result) => result,
@@ -113,6 +114,7 @@ impl Validator for ValidatorService {
                     return Err(Status::internal("Failed to compare block hashes"));
                 }
             };
+    
             let msg = HashAgreement {
                 msg_validator_id: self.validator_id as u64,
                 msg_block_hash: hash.clone(),
@@ -120,6 +122,7 @@ impl Validator for ValidatorService {
                 msg_is_responce: true,
                 msg_sender_addr: self.node_service.server_config.cfg_addr.clone(),
             };
+    
             if let Err(e) = self.respond_hash(&msg, sender_addr).await {
                 error!(self.node_service.logger, "Error responding to hash agreement message: {}", e);
             }
@@ -176,7 +179,7 @@ impl Validator for ValidatorService {
 impl ValidatorService {
     pub async fn initialize_validating(&self) -> Result<(), ValidatorServiceError> {
         {
-            let signal = self.start_broadcast_signal.write().await;
+            let signal = self.bt_loop_signal.write().await;
             let _ = signal.send(());
         }
         let mut mempool_rx = {
@@ -195,7 +198,7 @@ impl ValidatorService {
 
     pub async fn start_broadcast_loop(&mut self) -> Result<(), ValidatorServiceError> {
         let mut signal_receiver = {
-            let signal = self.start_broadcast_signal.read().await;
+            let signal = self.bt_loop_signal.read().await;
             signal.subscribe()
         };
         signal_receiver.recv().await?;

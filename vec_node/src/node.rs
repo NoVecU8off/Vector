@@ -36,7 +36,7 @@ impl Node for NodeService {
         info!(self.logger, "Starting handshaking");
         let version = request.into_inner();
         let version_clone = version.clone();
-        let addr = version.msg_address.clone();
+        let addr = version.msg_listen_address.clone();
         info!(self.logger, "Recieved version, address: {}", addr);
         let connected_peers = self.get_addrs_list().await;
         if !self.contains(&addr, &connected_peers) {
@@ -193,7 +193,7 @@ impl NodeService {
         };
         let (mempool_signal, _) = tokio::sync::broadcast::channel(1);
         let (broadcast_signal, _) = tokio::sync::broadcast::channel(1);
-        let (start_broadcast_signal, _) = tokio::sync::broadcast::channel(1);
+        let (bt_loop_signal, _) = tokio::sync::broadcast::channel(1);
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
@@ -207,7 +207,7 @@ impl NodeService {
                 chain: Arc::new(RwLock::new(chain)),
                 mempool_signal: Arc::new(RwLock::new(mempool_signal)),
                 broadcast_signal: Arc::new(RwLock::new(broadcast_signal)),
-                start_broadcast_signal: Arc::new(RwLock::new(start_broadcast_signal)),
+                bt_loop_signal: Arc::new(RwLock::new(bt_loop_signal)),
 
             };
         Some(Arc::new(validator))
@@ -359,6 +359,18 @@ impl NodeService {
         Ok(())
     }
 
+    pub fn contains(&self, addr: &str, connected_peers: &[String]) -> bool {
+        if self.server_config.cfg_addr == addr {
+            return false;
+        }
+        connected_peers.iter().any(|connected_addr| addr == connected_addr)
+    }
+
+    pub async fn get_addrs_list(&self) -> Vec<String> {
+        let peers = self.peer_lock.read().await;
+        peers.values().map(|(_, version, _)| version.msg_listen_address.clone()).collect()
+    }
+
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
         let mut c = make_node_client(addr)
             .await?;
@@ -371,21 +383,9 @@ impl NodeService {
         Ok((c, v))
     }
 
-    pub fn contains(&self, addr: &str, connected_peers: &[String]) -> bool {
-        if self.server_config.cfg_addr == addr {
-            return false;
-        }
-        connected_peers.iter().any(|connected_addr| addr == connected_addr)
-    }
-
-    pub async fn get_addrs_list(&self) -> Vec<String> {
-        let peers = self.peer_lock.read().await;
-        peers.values().map(|(_, version, _)| version.msg_address.clone()).collect()
-    }
-
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version, is_validator: bool) {
         let mut peers = self.peer_lock.write().await;
-        let remote_addr = v.msg_address.clone();
+        let remote_addr = v.msg_listen_address.clone();
         if !peers.contains_key(&remote_addr) {
             peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
             info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
@@ -406,7 +406,7 @@ impl NodeService {
             msg_version: self.server_config.cfg_version.clone(),
             msg_public_key,
             msg_height: 0,
-            msg_address: self.server_config.cfg_addr.clone(),
+            msg_listen_address: self.server_config.cfg_addr.clone(),
             msg_peer_list: self.get_addrs_list().await,
             msg_validator_id,
         }
