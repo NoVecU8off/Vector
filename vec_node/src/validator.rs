@@ -7,7 +7,7 @@ use vec_chain::chain::Chain;
 use vec_block::block::*;
 use vec_errors::errors::*;
 use tokio::sync::{Mutex, RwLock, broadcast};
-use std::{collections::HashMap, time::{Duration, SystemTime}};
+use std::{collections::{HashMap, HashSet}, time::{Duration, SystemTime}};
 use tonic::{Request, Response, Status, codegen::Arc};
 use futures::future::try_join_all;
 use rand::{Rng};
@@ -20,13 +20,13 @@ pub struct ValidatorService {
     pub mempool: Arc<Mempool>,
     pub round_transactions: Arc<Mutex<Vec<Transaction>>>,
     pub created_block: Arc<Mutex<Option<(Block, Vec<u8>)>>>,
-    pub agreement_count: Arc<Mutex<usize>>,
+    pub agreement_count: Arc<Mutex<HashMap<Vec<u8>, HashSet<String>>>>,
     pub vote_count: Arc<Mutex<HashMap<u64, usize>>>,
     pub received_responses_count: Arc<Mutex<usize>>,
     pub chain: Arc<RwLock<Chain>>,
     pub mempool_signal: Arc<RwLock<broadcast::Sender<()>>>,
     pub broadcast_signal: Arc<RwLock<broadcast::Sender<()>>>,
-    pub bt_loop_signal: Arc<RwLock<broadcast::Sender<()>>>,
+    pub start_broadcast_signal: Arc<RwLock<broadcast::Sender<()>>>,
 }
 
 #[tonic::async_trait]
@@ -132,15 +132,21 @@ impl Validator for ValidatorService {
                     .count()
             };
             if agreement {
-                self.update_agreement_count().await;
+                self.update_agreement_count(hash, sender_addr).await;
             }
             let mut received_responses_count = self.received_responses_count.lock().await;
             *received_responses_count += 1;
             if *received_responses_count == num_validators - 1 {
                 let agreement_count = self.agreement_count.lock().await;
-                let required_agreements = ( 2 * num_validators / 3  ) + 1;
-                if *agreement_count >= required_agreements {
-                    if let Err(e) = self.initialize_voting().await {
+                let supermajority = (2 * num_validators / 3) + 1;
+                let supermajority_addresses = agreement_count
+                    .values()
+                    .filter(|addresses| addresses.len() >= supermajority)
+                    .flatten()
+                    .cloned()
+                    .collect::<HashSet<String>>();
+                if supermajority_addresses.contains(&self.node_service.server_config.cfg_addr) {
+                    if let Err(e) = self.initialize_voting(supermajority_addresses).await {
                         error!(self.node_service.logger, "Failed to initialize voting during hash agreement: {}", e);
                     }
                 } else {
@@ -169,6 +175,10 @@ impl Validator for ValidatorService {
 
 impl ValidatorService {
     pub async fn initialize_validating(&self) -> Result<(), ValidatorServiceError> {
+        {
+            let signal = self.start_broadcast_signal.write().await;
+            let _ = signal.send(());
+        }
         let mut mempool_rx = {
             let mempool_signal = self.mempool_signal.read().await;
             mempool_signal.subscribe()
@@ -180,16 +190,12 @@ impl ValidatorService {
                 self.initialize_consensus().await?;
             }
         }
-        {
-            let signal = self.bt_loop_signal.write().await;
-            let _ = signal.send(());
-        }
         Ok(())
     }
 
     pub async fn start_broadcast_loop(&mut self) -> Result<(), ValidatorServiceError> {
         let mut signal_receiver = {
-            let signal = self.bt_loop_signal.read().await;
+            let signal = self.start_broadcast_signal.read().await;
             signal.subscribe()
         };
         signal_receiver.recv().await?;
@@ -202,12 +208,17 @@ impl ValidatorService {
 
     pub async fn initialize_consensus(&self) -> Result<(), ValidatorServiceError> {
         info!(self.node_service.logger, "{}: Consensus initialized", self.node_service.server_config.cfg_addr);
+        let my_addr = self.node_service.server_config.cfg_addr.clone();
         let mut created_block_lock = self.created_block.lock().await;
         *created_block_lock = None;
         self.accept_round_transactions().await?;
         self.mempool.clear().await;
         self.create_unsigned_block().await?;
-        self.update_agreement_count().await;
+        let (_, block_hash) = {
+            let created_block_lock = self.created_block.lock().await;
+            created_block_lock.as_ref().ok_or(ValidatorServiceError::NoCreatedBlockFound)?.clone()
+        };
+        self.update_agreement_count(block_hash, my_addr).await;
         Ok(())
     }
 
@@ -355,17 +366,15 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn update_agreement_count(&self) {
-        info!(self.node_service.logger, "{}: updating agrement count", self.node_service.server_config.cfg_addr);
+    pub async fn update_agreement_count(&self, block_hash: Vec<u8>, sender_addr: String) {
         let mut agreement_count = self.agreement_count.lock().await;
-        *agreement_count += 1;
+        let entry = agreement_count.entry(block_hash).or_insert(HashSet::new());
+        entry.insert(sender_addr);
     }
 
-    async fn initialize_voting(&self) -> Result<(), ValidatorServiceError> {
+    async fn initialize_voting(&self, supermajority_addresses: HashSet<String>) -> Result<(), ValidatorServiceError> {
         self.clear_round_transactions().await?;
-        let mut agreement_count = self.agreement_count.lock().await;
         let mut received_responses_count = self.received_responses_count.lock().await;
-        *agreement_count = 0;
         *received_responses_count = 0;
         if let Some(random_validator_id) = self.get_validator().await {
             let vote = Vote {
@@ -373,7 +382,7 @@ impl ValidatorService {
                 msg_voter_addr: self.node_service.server_config.cfg_addr.clone(),
                 msg_target_validator_id: random_validator_id,
             };
-            self.broadcast_vote(vote).await?;
+            self.broadcast_vote(vote, supermajority_addresses).await?;
         }
         Ok(())
     }
@@ -384,12 +393,12 @@ impl ValidatorService {
         Ok(())
     }
 
-    pub async fn broadcast_vote(&self, vote: Vote) -> Result<(), ValidatorServiceError> {
+    pub async fn broadcast_vote(&self, vote: Vote, supermajority_addresses: HashSet<String>) -> Result<(), ValidatorServiceError> {
         let peers_data = {
             let peers = self.node_service.peer_lock.read().await;
             peers
                 .iter()
-                .filter(|(_, (_, _, is_validator))| *is_validator)
+                .filter(|(addr, (_, _, _))| supermajority_addresses.contains(*addr))
                 .map(|(addr, (peer_client, _, _))| (addr.clone(), Arc::clone(peer_client)))
                 .collect::<Vec<_>>()
         };

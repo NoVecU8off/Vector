@@ -36,23 +36,27 @@ impl Node for NodeService {
         info!(self.logger, "Starting handshaking");
         let version = request.into_inner();
         let version_clone = version.clone();
-        let addr = version.msg_listen_address;
+        let addr = version.msg_address.clone();
         info!(self.logger, "Recieved version, address: {}", addr);
-        match make_node_client(&addr).await {
-            Ok(c) => {
-                info!(self.logger, "Created node client successfully");
-                if self.server_config.cfg_is_validator || version_clone.msg_validator {
-                    self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
+        let connected_peers = self.get_addrs_list().await;
+        if !self.contains(&addr, &connected_peers) {
+            match make_node_client(&addr).await {
+                Ok(c) => {
+                    info!(self.logger, "Created node client successfully");
+                    if self.server_config.cfg_is_validator || version_clone.msg_validator {
+                        self.add_peer(c, version_clone.clone(), version_clone.msg_validator).await;
+                    }
                 }
-                let reply = self.get_version().await;
-                info!(self.logger, "Returning version: {:?}", reply);
-                Ok(Response::new(reply))
+                Err(e) => {
+                    error!(self.logger, "Failed to create node client: {:?}", e);
+                }
             }
-            Err(e) => {
-                error!(self.logger, "Failed to create node client: {:?}", e);
-                Err(Status::internal("Failed to create node client"))
-            }
+        } else {
+            info!(self.logger, "Address already connected: {}", addr);
         }
+        let reply = self.get_version().await;
+        info!(self.logger, "Returning version: {:?}", reply);
+        Ok(Response::new(reply))
     }
     
     async fn handle_transaction(
@@ -142,7 +146,8 @@ impl Node for NodeService {
         request: Request<PeerList>,
     ) -> Result<Response<Confirmed>, Status> {
         let peer_list = request.into_inner();
-        match self.update_peer_list(peer_list).await {
+        let peer_addresses = peer_list.msg_peers_addresses;
+        match self.bootstrap_network(peer_addresses).await {
             Ok(_) => {
                 info!(self.logger, "Peer list updated successfully");
                 Ok(Response::new(Confirmed {}))
@@ -152,7 +157,7 @@ impl Node for NodeService {
                 Err(Status::internal("Failed to update peer_list"))
             }
         }
-    }
+    }    
 
     async fn handle_heartbeat(
         &self,
@@ -188,7 +193,7 @@ impl NodeService {
         };
         let (mempool_signal, _) = tokio::sync::broadcast::channel(1);
         let (broadcast_signal, _) = tokio::sync::broadcast::channel(1);
-        let (bt_loop_signal, _) = tokio::sync::broadcast::channel(1);
+        let (start_broadcast_signal, _) = tokio::sync::broadcast::channel(1);
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
@@ -196,13 +201,13 @@ impl NodeService {
                 mempool: Arc::new(Mempool::new()),
                 round_transactions: Arc::new(Mutex::new(Vec::new())),
                 created_block: Arc::new(Mutex::new(None)),
-                agreement_count: Arc::new(Mutex::new(0)),
+                agreement_count: Arc::new(Mutex::new(HashMap::new())),
                 vote_count: Arc::new(Mutex::new(HashMap::new())),
                 received_responses_count: Arc::new(Mutex::new(0)),
                 chain: Arc::new(RwLock::new(chain)),
                 mempool_signal: Arc::new(RwLock::new(mempool_signal)),
                 broadcast_signal: Arc::new(RwLock::new(broadcast_signal)),
-                bt_loop_signal: Arc::new(RwLock::new(bt_loop_signal)),
+                start_broadcast_signal: Arc::new(RwLock::new(start_broadcast_signal)),
 
             };
         Some(Arc::new(validator))
@@ -227,7 +232,7 @@ impl NodeService {
         info!(self.logger, "NodeServer {} starting listening", self.server_config.cfg_addr);
         self.setup_server(node_service, addr).await?;
         if !nodes_to_bootstrap.is_empty() {
-            self.bootstrap(nodes_to_bootstrap).await?;
+            self.bootstrap_network(nodes_to_bootstrap).await?;
         }
         if self.server_config.cfg_is_validator {
             if let Some(validator) = &self.validator {
@@ -325,34 +330,33 @@ impl NodeService {
         try_join_all(tasks).await.map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
         Ok(())
     }
-    
-    pub async fn bootstrap(&self, unbootstraped_nodes: Vec<String>) -> Result<(), NodeServiceError> {
-        let node_clone = self.clone();
-        info!(self.logger, "{}: bootstrapping network with nodes: {:?}", self.server_config.cfg_addr, unbootstraped_nodes);
-        if let Err(e) = node_clone.bootstrap_network(unbootstraped_nodes).await {
-            error!(node_clone.logger, "{}: Failed to bootstrap: {:?}", node_clone.server_config.cfg_addr, e);
-            return Err(NodeServiceError::BootstrapError(format!("{:?}", e)));
-        }
-        Ok(())
-    }    
-    
-    pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version, is_validator: bool) {
-        if !is_validator {
-            return;
-        }
-        let mut peers = self.peer_lock.write().await;
-        let remote_addr = v.msg_listen_address.clone();
-        if !peers.contains_key(&remote_addr) {
-            peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
-            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
-        } else {
-            info!(self.logger, "{}: peer already exists: {}", self.server_config.cfg_addr, remote_addr);
-        }
-    }
 
-    pub async fn get_peer_list(&self) -> Vec<String> {
-        let peers = self.peer_lock.read().await;
-        peers.values().map(|(_, version, _)| version.msg_listen_address.clone()).collect()
+    pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<(), NodeServiceError> {
+        let mut tasks = Vec::new();
+        let connected_peers = self.get_addrs_list().await;
+        for addr in addrs {
+            if self.contains(&addr, &connected_peers) {
+                continue;
+            }
+            let node_service_clone = self.clone();
+            let addr_clone = addr.clone();
+            let task = tokio::spawn(async move {
+                match node_service_clone.dial_remote_node(&addr_clone).await {
+                    Ok((c, v)) => {
+                        let is_validator = v.msg_validator;
+                        if node_service_clone.server_config.cfg_is_validator || is_validator {
+                            node_service_clone.add_peer(c, v, is_validator).await;
+                        }
+                    }
+                    Err(e) => {
+                        error!(node_service_clone.logger, "{}: Failed bootstrap and dial: {:?}", node_service_clone.server_config.cfg_addr, e);
+                    }
+                }
+            });
+            tasks.push(task);
+        }
+        try_join_all(tasks).await.map_err(|err| NodeServiceError::BootstrapNetworkError(format!("{:?}", err)))?;
+        Ok(())
     }
 
     pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
@@ -367,6 +371,29 @@ impl NodeService {
         Ok((c, v))
     }
 
+    pub fn contains(&self, addr: &str, connected_peers: &[String]) -> bool {
+        if self.server_config.cfg_addr == addr {
+            return false;
+        }
+        connected_peers.iter().any(|connected_addr| addr == connected_addr)
+    }
+
+    pub async fn get_addrs_list(&self) -> Vec<String> {
+        let peers = self.peer_lock.read().await;
+        peers.values().map(|(_, version, _)| version.msg_address.clone()).collect()
+    }
+
+    pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version, is_validator: bool) {
+        let mut peers = self.peer_lock.write().await;
+        let remote_addr = v.msg_address.clone();
+        if !peers.contains_key(&remote_addr) {
+            peers.insert(remote_addr.clone(), (Arc::new(c.into()), v.clone(), is_validator));
+            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, remote_addr);
+        } else {
+            info!(self.logger, "{}: peer already exists: {}", self.server_config.cfg_addr, remote_addr);
+        }
+    }
+
     pub async fn get_version(&self) -> Version {
         let keypair = &self.server_config.cfg_keypair;
         let msg_public_key = keypair.public.to_bytes().to_vec();
@@ -379,52 +406,10 @@ impl NodeService {
             msg_version: self.server_config.cfg_version.clone(),
             msg_public_key,
             msg_height: 0,
-            msg_listen_address: self.server_config.cfg_addr.clone(),
-            msg_peer_list: self.get_peer_list().await,
+            msg_address: self.server_config.cfg_addr.clone(),
+            msg_peer_list: self.get_addrs_list().await,
             msg_validator_id,
         }
-    }
-    
-    pub async fn bootstrap_network(&self, addrs: Vec<String>) -> Result<(), NodeServiceError> {
-        let mut tasks = Vec::new();
-        for addr in addrs {
-            if !self.can_connect_with(&addr).await {
-                continue;
-            }
-            let node_service_clone = self.clone();
-            let addr_clone = addr.clone();
-            let task = tokio::spawn(async move {
-                match node_service_clone.dial_remote_node(&addr_clone).await {
-                    Ok((c, v)) => {
-                        let is_validator = v.msg_validator;
-                        node_service_clone.add_peer(c, v, is_validator).await;
-                    }
-                    Err(e) => {
-                        error!(node_service_clone.logger, "{}: Failed bootstrap and dial: {:?}", node_service_clone.server_config.cfg_addr, e);
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-        try_join_all(tasks).await.map_err(|err| NodeServiceError::BootstrapNetworkError(format!("{:?}", err)))?;
-        Ok(())
-    }    
-
-    pub async fn can_connect_with(&self, addr: &str) -> bool {
-        if self.server_config.cfg_addr == addr {
-            return false;
-        }
-        let connected_peers = self.get_peer_list().await;
-        let addr_owned = addr.to_owned();
-        let check_tasks: Vec<_> = connected_peers
-            .into_iter()
-            .map(|connected_addr| {
-                let addr_clone = addr_owned.clone();
-                tokio::spawn(async move { addr_clone == connected_addr })
-            })
-            .collect();
-        let results = futures::future::join_all(check_tasks).await;
-        !results.into_iter().any(|res| res.unwrap_or(false))
     }
 
     pub async fn make_tx(&self, to: &Vec<u8>, amount: i64) -> Result<(), NodeServiceError> {
@@ -543,29 +528,6 @@ impl NodeService {
                     address: public_key.clone(),
                 };
                 self.utxo_store.lock().await.put(utxo)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub async fn update_peer_list(&self, peer_list: PeerList) -> Result<(), ValidatorServiceError> {
-        let peer_write_lock = self.peer_lock.write().await;
-        for addr in peer_list.msg_peers_addresses {
-            if !peer_write_lock.contains_key(&addr) {
-                match self.dial_remote_node(&addr).await {
-                    Ok((client, version)) => {
-                        if version.msg_validator {
-                            self.add_peer(client, version, true).await;
-                            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
-                        } else {
-                            self.add_peer(client, version, false).await;
-                            info!(self.logger, "{}: new validator peer added: {}", self.server_config.cfg_addr, addr);
-                        }
-                    }
-                    Err(e) => {
-                        error!(self.logger, "Failed to dial remote node: {:?}", e);
-                    }
-                }
             }
         }
         Ok(())
