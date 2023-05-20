@@ -178,7 +178,7 @@ impl NodeService {
         };
         let (mempool_signal, _) = tokio::sync::broadcast::channel(1);
         let (broadcast_signal, _) = tokio::sync::broadcast::channel(1);
-        let (bt_loop_signal, _) = tokio::sync::broadcast::channel(1);
+        let (cascade_signal, _) = tokio::sync::broadcast::channel(1);
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
@@ -192,15 +192,14 @@ impl NodeService {
                 chain: Arc::new(RwLock::new(chain)),
                 mempool_signal: Arc::new(RwLock::new(mempool_signal)),
                 broadcast_signal: Arc::new(RwLock::new(broadcast_signal)),
-                bt_loop_signal: Arc::new(RwLock::new(bt_loop_signal)),
-
+                cascade_signal: Arc::new(RwLock::new(cascade_signal)),
             };
         Some(Arc::new(validator))
     } else {
         None
     };
         Ok(NodeService {
-            server_config: server_config,
+            server_config,
             peer_lock,
             validator,
             logger,

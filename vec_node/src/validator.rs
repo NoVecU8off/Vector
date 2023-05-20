@@ -10,6 +10,7 @@ use tokio::sync::{Mutex, RwLock, broadcast};
 use std::{collections::{HashMap, HashSet}, time::{Duration, SystemTime}};
 use tonic::{Request, Response, Status, codegen::Arc};
 use futures::future::try_join_all;
+use futures::stream::{self, StreamExt};
 use rand::{Rng};
 use slog::{info, error};
 
@@ -26,7 +27,7 @@ pub struct ValidatorService {
     pub chain: Arc<RwLock<Chain>>,
     pub mempool_signal: Arc<RwLock<broadcast::Sender<()>>>,
     pub broadcast_signal: Arc<RwLock<broadcast::Sender<()>>>,
-    pub bt_loop_signal: Arc<RwLock<broadcast::Sender<()>>>,
+    pub cascade_signal: Arc<RwLock<broadcast::Sender<()>>>,
 }
 
 #[tonic::async_trait]
@@ -159,10 +160,8 @@ impl Validator for ValidatorService {
                     if let Err(e) = self.initialize_voting(supermajority_addresses).await {
                         error!(self.node_service.logger, "Failed to initialize voting during hash agreement: {}", e);
                     }
-                } else {
-                    if let Err(e) = self.wait_for_voting_completion().await {
-                        error!(self.node_service.logger, "Failed to reinitialize consensus after hash agreement failure: {}", e);
-                    }
+                } else if let Err(e) = self.wait_for_voting_completion().await {
+                    error!(self.node_service.logger, "Failed to reinitialize consensus after hash agreement failure: {}", e);
                 }
             }
         }
@@ -185,38 +184,30 @@ impl Validator for ValidatorService {
 
 impl ValidatorService {
     pub async fn initialize_validating(&self, block: &Block) -> Result<(), ValidatorServiceError> {
-        {
-            let signal = self.bt_loop_signal.write().await;
-            let _ = signal.send(());
-        }
+        self.broadcast_peer_list().await?;
+        self.broadcast_validator_list().await?;
+        let mempool = self.mempool.clone();
+        let transactions = block.msg_transactions.clone();
+        stream::iter(transactions).for_each_concurrent(None, move |transaction| {
+            let mempool = mempool.clone();
+            async move {
+                mempool.remove(&transaction).await;
+            }
+        }).await;
         let mut mempool_rx = {
             let mempool_signal = self.mempool_signal.read().await;
             mempool_signal.subscribe()
         };
         while (mempool_rx.recv().await).is_ok() {
-            for transaction in &block.msg_transactions {
-                self.mempool.remove(transaction).await;
-            }
-            let num_transactions = self.mempool.len().await;
-            if num_transactions == 5 {
+            let num_transactions = self.mempool.len();
+            if num_transactions == 100 {
                 self.initialize_consensus().await?;
             }
         }
         Ok(())
     }
 
-    pub async fn start_broadcast_cascade(&self) -> Result<(), ValidatorServiceError> {
-        let mut signal_receiver = {
-            let signal = self.bt_loop_signal.read().await;
-            signal.subscribe()
-        };
-        signal_receiver.recv().await?;
-        let mut interval = tokio::time::interval(Duration::from_secs(61));
-        loop {
-            self.broadcast_peer_list().await?;
-            interval.tick().await;
-        }
-    }
+    
 
     pub async fn initialize_consensus(&self) -> Result<(), ValidatorServiceError> {
         let cfg_addr = {
@@ -228,7 +219,7 @@ impl ValidatorService {
         let mut created_block_lock = self.created_block.lock().await;
         *created_block_lock = None;
         self.accept_round_transactions().await?;
-        self.mempool.clear().await;
+        self.mempool.clear();
         self.create_unsigned_block().await?;
         let (_, block_hash) = {
             let created_block_lock = self.created_block.lock().await;
@@ -243,7 +234,7 @@ impl ValidatorService {
             let server_config = self.node_service.server_config.read().await;
             server_config.cfg_addr.clone()
         };
-        let transactions = self.mempool.get_transactions().await;
+        let transactions = self.mempool.get_transactions();
         {
             let mut round_transactions = self.round_transactions.lock().await;
             for transaction in transactions {

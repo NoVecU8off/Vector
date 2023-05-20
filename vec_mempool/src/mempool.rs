@@ -1,14 +1,12 @@
-use hex::encode;
 use slog::{o, Logger, info, Drain};
-use tokio::sync::{RwLock};
-use std::collections::HashMap;
 use vec_proto::messages::{Transaction};
 use vec_transaction::transaction::hash_transaction;
+use dashmap::DashMap;
 
 
 #[derive(Debug)]
 pub struct Mempool {
-    pub lock: RwLock<HashMap<String, Transaction>>,
+    pub transactions: DashMap<String, Transaction>,
     pub logger: Logger,
 }
 
@@ -22,49 +20,43 @@ impl Mempool {
         };
         info!(logger, "Mempool created");
         Mempool {
-            lock: RwLock::new(HashMap::new()),
+            transactions: DashMap::new(),
             logger,
         }
     }
 
-    pub async fn get_transactions(&self) -> Vec<Transaction> {
-        let lock = self.lock.read().await;
-        lock.values().cloned().collect::<Vec<_>>()
+    pub fn get_transactions(&self) -> Vec<Transaction> {
+        self.transactions.iter().map(|entry| entry.value().clone()).collect::<Vec<_>>()
     }
 
-    pub async fn clear(&self) {
-        let mut lock = self.lock.write().await;
-        lock.clear();
+    pub fn clear(&self) {
+        self.transactions.clear();
         info!(self.logger, "Mempool cleared");
     }
 
-    pub async fn len(&self) -> usize {
-        let lock = self.lock.read().await;
-        lock.len()
+    pub fn len(&self) -> usize {
+        self.transactions.len()
     }
 
     pub async fn has(&self, tx: &Transaction) -> bool {
-        let lock = self.lock.read().await;
-        let hex_hash = encode(hash_transaction(tx).await);
-        lock.contains_key(&hex_hash)
+        let hex_hash = hex::encode(hash_transaction(tx).await);
+        self.transactions.contains_key(&hex_hash)
     }
 
     pub async fn add(&self, tx: Transaction) -> bool {
         if self.has(&tx).await {
             return false;
         }
-        let mut lock = self.lock.write().await;
         let hash = hex::encode(hash_transaction(&tx).await);
-        lock.insert(hash.clone(), tx);
+        self.transactions.insert(hash.clone(), tx);
         info!(self.logger, "Transaction added to mempool: {}", hash);
         true
     }
 
     pub async fn remove(&self, tx: &Transaction) -> bool {
         let hash = hex::encode(hash_transaction(tx).await);
-        let mut lock = self.lock.write().await;
-        if lock.contains_key(&hash) {
-            lock.remove(&hash);
+        if self.transactions.contains_key(&hash) {
+            self.transactions.remove(&hash);
             info!(self.logger, "Transaction removed from mempool: {}", hash);
             true
         } else {

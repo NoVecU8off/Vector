@@ -49,6 +49,8 @@ pub enum BlockOpsError {
 pub enum MerkleTreeError {
     #[error("Failed to compute hashes")]
     HashingError,
+    #[error("Transaction not found in Merkle Tree")]
+    TransactionNotFound,
 }
 
 #[derive(Debug, Error)]
