@@ -1,4 +1,3 @@
-use vec_errors::errors::*;
 use vec_chain::chain::Chain;
 use vec_store::block_store::BlockStorer;
 use vec_store::block_store::MemoryBlockStore;
@@ -20,4 +19,6 @@ async fn test_new_chain_creation() {
     let chain = Chain::new(block_storer, utxo_set_storer).await;
     assert!(chain.is_ok())
 }
+
+
 
