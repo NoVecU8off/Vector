@@ -1,13 +1,12 @@
 use vec_store::block_store::{BlockStorer};
+use vec_store::utxo_store::*;
 use vec_cryptography::cryptography::{Keypair, Signature};
-use vec_transaction::transaction::*;
-use vec_proto::messages::{Header, Block, Transaction, TransactionOutput};
+use vec_proto::messages::{Header, Block, Transaction, TransactionOutput, TransactionInput};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
 use hex::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
-use ed25519_dalek::{PublicKey, Verifier};
-use rayon::prelude::*;
+use ed25519_dalek::{PublicKey, Verifier, Signature as EdSignature};
 use vec_errors::errors::*;
 use prost::Message;
 
@@ -52,15 +51,26 @@ impl Default for HeaderList {
 }
 
 pub struct Chain {
-    pub block_store: Box<dyn BlockStorer>,
     pub headers: HeaderList,
+    pub blocks: Box<dyn BlockStorer>,
+    pub utxos: Box<dyn UTXOSetStorer>,
 }
 
 impl Chain {
-    pub async fn new_chain(block_store: Box<dyn BlockStorer>) -> Result<Chain, ChainOpsError> {
-        let mut chain = Chain {
-            block_store,
+    pub async fn new(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOSetStorer>) -> Result<Chain, ChainOpsError> {
+        let chain = Chain {
             headers: HeaderList::new(),
+            blocks,
+            utxos,
+        };
+        Ok(chain)
+    }
+
+    pub async fn genesis_chain(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOSetStorer>) -> Result<Chain, ChainOpsError> {
+        let mut chain = Chain {
+            headers: HeaderList::new(),
+            blocks,
+            utxos,
         };
         chain.add_leader_block(create_genesis_block().await?).await?;
         Ok(chain)
@@ -74,13 +84,6 @@ impl Chain {
         self.headers.headers_list_len()
     }
 
-    pub async fn validate_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
-        self.check_block_signature(incoming_block).await?;
-        self.check_previous_block_hash(incoming_block).await?;
-        self.check_transactions_in_block(incoming_block)?;
-        Ok(())
-    }
-
     pub async fn add_block(&mut self, block: Block) -> Result<(), ChainOpsError> {
         let header = block
             .msg_header
@@ -88,7 +91,14 @@ impl Chain {
             .ok_or(ChainOpsError::MissingBlockHeader)?;
         self.validate_block(&block).await?;
         self.headers.add_header(header.clone());
-        self.block_store.put(&block).await?;
+        self.blocks.put(&block).await?;
+        Ok(())
+    }
+
+    pub async fn validate_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
+        self.check_block_signature(incoming_block).await?;
+        self.check_previous_block_hash(incoming_block).await?;
+        self.check_transactions_in_block(incoming_block).await?;
         Ok(())
     }
 
@@ -98,13 +108,13 @@ impl Chain {
             .as_ref()
             .ok_or(ChainOpsError::MissingBlockHeader)?;
         self.headers.add_header(header.clone());
-        self.block_store.put(&block).await?;
+        self.blocks.put(&block).await?;
         Ok(())
     }
     
     pub async fn get_block_by_hash(&self, hash: &[u8]) -> Result<Block, ChainOpsError> {
         let hash_hex = encode(hash);
-        match self.block_store.get(&hash_hex).await {
+        match self.blocks.get(&hash_hex).await {
             Ok(Some(block)) => Ok(block),
             Ok(None) => Err(ChainOpsError::BlockNotFound(hash_hex)),
             Err(err) => Err(err.into()),
@@ -159,36 +169,49 @@ impl Chain {
         Ok(last_block_hash)
     }
 
-    fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
-        incoming_block
-            .msg_transactions
-            .par_iter()
-            .try_for_each(|tx| {
-                self.validate_transaction(tx)
-            })
-    }
-    
-    fn validate_transaction(&self, transaction: &Transaction) -> Result<(), ChainOpsError> {
-        let public_keys = self.extract_public_keys_from_transaction(transaction)?;
-        self.check_transaction_signature(transaction, &public_keys)?;
+    pub async fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
+        for tx in &incoming_block.msg_transactions {
+            self.validate_transaction(tx).await?;
+        }
         Ok(())
     }
     
-    fn extract_public_keys_from_transaction(&self, transaction: &Transaction) -> Result<Vec<PublicKey>, ChainOpsError> {
-        let mut public_keys = Vec::new();
-        for input in &transaction.msg_inputs {
-            let public_key = PublicKey::from_bytes(&input.msg_public_key)
-                .map_err(|_| ChainOpsError::InvalidPublicKeyInTransactionInput)?;
-            public_keys.push(public_key);
+    pub async fn validate_transaction(&self, tx: &Transaction) -> Result<(), ChainOpsError> {
+        let mut input_sum: i64 = 0;
+        let mut inputs: Vec<UTXO> = Vec::new();
+        for input in &tx.msg_inputs {
+            let utxo = self.utxos.get(&encode(&input.msg_previous_tx_hash), input.msg_previous_out_index).await?;
+            match utxo {
+                Some(u) => {
+                    input_sum += u.amount;
+                    inputs.push(u);
+                },
+                None => return Err(ValidationError::MissingInput)?,
+            };
         }
-        Ok(public_keys)
+        for (input, utxo) in tx.msg_inputs.iter().zip(inputs.iter()) {
+            if !Chain::verify_signature(&utxo, &input)? {
+                return Err(ValidationError::InvalidSignature)?;
+            }
+        }
+        let output_sum: i64 = tx.msg_outputs.iter().map(|o| o.msg_amount).sum();
+        if input_sum < output_sum {
+            return Err(ValidationError::InsufficientInput)?;
+        }
+        for input in &tx.msg_inputs {
+            let key = (encode(&input.msg_previous_tx_hash), input.msg_previous_out_index);
+            self.utxos.remove(&key).await?;
+        }
+        Ok(())
     }
-
-    fn check_transaction_signature(&self, transaction: &Transaction, public_keys: &[PublicKey]) -> Result<(), ChainOpsError> {
-        if !verify_transaction(transaction, public_keys) {
-            Err(ChainOpsError::InvalidTransactionSignature)
-        } else {
-            Ok(())
+    
+    pub fn verify_signature(utxo: &UTXO, input: &TransactionInput) -> Result<bool, ChainOpsError> {
+        let pub_key = PublicKey::from_bytes(&input.msg_public_key).map_err(|_| ChainOpsError::InvalidPublicKey)?;
+        let signature = EdSignature::from_bytes(&input.msg_signature).map_err(|_| ChainOpsError::InvalidInputSignature)?;
+        let message = format!("{}{}", utxo.transaction_hash, utxo.output_index);
+        match pub_key.verify(message.as_bytes(), &signature) {
+            Ok(_) => Ok(true),
+            Err(_) => Ok(false),
         }
     }
 }

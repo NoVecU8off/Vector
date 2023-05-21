@@ -71,28 +71,6 @@ impl Node for NodeService {
         }
     }
 
-    async fn handle_agreement(
-        &self,
-        request: Request<HashAgreement>,
-    ) -> Result<Response<Agreement>, Status> {
-        if let Some(validator) = &self.validator {
-            validator.handle_agreement(request).await
-        } else {
-            Err(Status::internal("Node is not a validator (agreement process)"))
-        }
-    }
-
-    async fn handle_vote(
-        &self,
-        request: Request<Vote>,
-    ) -> Result<Response<Confirmed>, Status> {
-        if let Some(validator) = &self.validator {
-            validator.handle_vote(request).await
-        } else {
-            Err(Status::internal("Node is not a validator (voting process)"))
-        }
-    }
-
     async fn push_state(
         &self,
         request: Request<LocalState>,
@@ -164,8 +142,9 @@ impl NodeService {
         info!(logger, "NodeService {} created", cfg.cfg_addr);
         let peer_lock = Arc::new(RwLock::new(HashMap::new()));
         let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
+        let utxo_set_storer: Box<dyn UTXOSetStorer> = Box::new(MemoryUTXOSet::new());
         let utxo_storer: Arc<Mutex<dyn UTXOStorer>> = Arc::new(Mutex::new(MemoryUTXOStore::new()));
-        let chain = Chain::new_chain(block_storer)
+        let chain = Chain::new(block_storer, utxo_set_storer)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let server_config = Arc::new(RwLock::new(cfg.clone()));
@@ -176,23 +155,13 @@ impl NodeService {
             logger: logger.clone(),
             utxo_store: utxo_storer.clone(),
         };
-        let (mempool_signal, _) = tokio::sync::broadcast::channel(1);
-        let (broadcast_signal, _) = tokio::sync::broadcast::channel(1);
-        let (cascade_signal, _) = tokio::sync::broadcast::channel(1);
         let validator = if cfg.cfg_is_validator {
             let validator = ValidatorService {
                 validator_id: 0,
                 node_service: Arc::new(node_service),
                 mempool: Arc::new(Mempool::new()),
                 round_transactions: Arc::new(Mutex::new(Vec::new())),
-                created_block: Arc::new(Mutex::new(None)),
-                agreement_count: Arc::new(Mutex::new(HashMap::new())),
-                vote_count: Arc::new(Mutex::new(HashMap::new())),
-                received_responses_count: Arc::new(Mutex::new(0)),
                 chain: Arc::new(RwLock::new(chain)),
-                mempool_signal: Arc::new(RwLock::new(mempool_signal)),
-                broadcast_signal: Arc::new(RwLock::new(broadcast_signal)),
-                cascade_signal: Arc::new(RwLock::new(cascade_signal)),
             };
         Some(Arc::new(validator))
     } else {
@@ -516,7 +485,7 @@ impl NodeService {
                 if let Some(validator) = &self.validator {
                     let mut chain_lock = validator.chain.write().await;
                     chain_lock.add_leader_block(block.clone()).await?;
-                    if let Err(e) = validator.initialize_validating(&block).await {
+                    if let Err(e) = validator.make_decision(&block).await {
                         return Err(NodeServiceError::ValidatorServiceError(e));
                     }
                 }
@@ -544,7 +513,7 @@ impl NodeService {
                     transaction_hash: hex::encode(hash_transaction(transaction).await),
                     output_index: output_index as u32,
                     amount: output.msg_amount,
-                    address: public_key.clone(),
+                    public: public_key.clone(),
                 };
                 self.utxo_store.lock().await.put(utxo)?;
             }

@@ -56,6 +56,20 @@ pub enum MerkleTreeError {
 }
 
 #[derive(Debug, Error)]
+pub enum ValidationError {
+    #[error("Doublespend detected")]
+    DoubleSpend,
+    #[error("Transaction has invalid signature")]
+    InvalidSignature,
+    #[error("Transaction has insufficientInput")]
+    InsufficientInput,
+    #[error("Transaction check error")]
+    TransactionCheckError,
+    #[error("Transaction is missing input")]
+    MissingInput,
+}
+
+#[derive(Debug, Error)]
 pub enum ChainOpsError {
     #[error("Given index is too high")]
     IndexTooHigh,
@@ -85,8 +99,16 @@ pub enum ChainOpsError {
     InvalidPublicKeyInTransactionInput,
     #[error("Invalid transaction's signature")]
     InvalidTransactionSignature,
+    #[error("Invalid transaction's input signature")]
+    InvalidInputSignature,
     #[error(transparent)]
     Ed25519DalekError(#[from] ed25519_dalek::ed25519::Error),
+    #[error(transparent)]
+    ValidationError(#[from] ValidationError),
+    #[error(transparent)]
+    TaskPanic(tokio::task::JoinError),
+    #[error(transparent)]
+    UTXOStorageError(#[from] UTXOStorageError),
 }
 
 #[derive(Debug, Error)]
@@ -136,7 +158,7 @@ pub enum NodeServiceError {
     #[error(transparent)]
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]
-    TaskPanic(tokio::task::JoinError), 
+    TaskPanic(#[from] tokio::task::JoinError), 
 }
 
 #[derive(Debug, Error)]

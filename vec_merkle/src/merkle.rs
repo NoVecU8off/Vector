@@ -78,12 +78,12 @@ impl MerkleTree {
     }
 }
 
-fn compute_hash(data: &[u8]) -> Vec<u8> {
+pub fn compute_hash(data: &[u8]) -> Vec<u8> {
     let mut hasher = Sha3_256::new();
     hasher.update(data);
     hasher.finalize().to_vec()
 }
 
-fn combine_hash(hash1: &[u8], hash2: &[u8]) -> Vec<u8> {
+pub fn combine_hash(hash1: &[u8], hash2: &[u8]) -> Vec<u8> {
     compute_hash(&[hash1, hash2].concat())
 }

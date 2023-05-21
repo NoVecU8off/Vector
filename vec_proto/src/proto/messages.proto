@@ -8,10 +8,6 @@ service Node {
 
     rpc HandleTransaction(Transaction) returns (Confirmed);
 
-    rpc HandleAgreement(HashAgreement) returns (Agreement);
-
-    rpc HandleVote (Vote) returns (Confirmed);
-
     rpc HandleBlock(LeaderBlock) returns (Confirmed);
 
     rpc PushState(LocalState) returns (BlockBatch);
@@ -42,16 +38,6 @@ message LocalState {
 
 }
 
-message Vote {
-
-    uint64 msg_validator_id = 1;
-
-    string msg_voter_addr = 2;
-
-    uint64 msg_target_validator_id = 3;
-
-}
-
 message Version {
 
     bool msg_validator = 1;
@@ -68,26 +54,6 @@ message Version {
 
     repeated string msg_peer_list = 7;
     
-}
-
-message Agreement {
-
-    bool agreed = 1;
-
-}
-
-message HashAgreement {
-
-    uint64 msg_validator_id = 1;
-
-    bytes msg_block_hash = 2;
-
-    bool msg_agreement = 3;
-
-    bool msg_is_responce = 4;
-
-    string msg_sender_addr = 5;
-
 }
 
 message LeaderBlock {
