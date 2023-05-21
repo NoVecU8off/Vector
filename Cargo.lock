@@ -2396,6 +2396,7 @@ name = "vec_block"
 version = "0.1.0"
 dependencies = [
  "prost",
+ "protobuf",
  "sha3",
  "thiserror",
  "tokio",
@@ -2414,6 +2415,7 @@ dependencies = [
  "ed25519-dalek",
  "futures",
  "hex",
+ "prost",
  "protobuf",
  "rayon",
  "thiserror",
@@ -2514,6 +2516,7 @@ dependencies = [
  "native-tls",
  "openssl",
  "pem 2.0.1",
+ "prost",
  "rand 0.8.5",
  "rcgen",
  "rustls",
@@ -2596,6 +2599,7 @@ dependencies = [
  "async-trait",
  "ed25519-dalek",
  "hex",
+ "prost",
  "rand 0.8.5",
  "thiserror",
  "tokio",

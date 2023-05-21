@@ -3,6 +3,7 @@ use vec_merkle::merkle::{MerkleTree};
 use vec_cryptography::cryptography::{Keypair, Signature};
 use sha3::{Digest, Sha3_256};
 use vec_errors::errors::*;
+use prost::Message;
 
 pub async fn sign_block(block: &Block, keypair: &Keypair) -> Result<Signature, BlockOpsError> {
     let hash = hash_header_by_block(block)?;
@@ -21,9 +22,17 @@ pub fn verify_block_sync(block: &Block, signature: &Signature, keypair: &Keypair
 }
 
 pub async fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
-    let merkle_tree = MerkleTree::new(&block.msg_transactions)?;
-    let merkle_root = merkle_tree.root.to_vec();
+    let transaction_data: Vec<Vec<u8>> = block.msg_transactions
+        .iter()
+        .map(|transaction| {
+            let mut bytes = Vec::new();
+            transaction.encode(&mut bytes).unwrap();
+            bytes
+        })
+        .collect();
+    let merkle_tree = MerkleTree::from_list(&transaction_data);
     if let Some(header) = block.msg_header.as_ref() {
+        let merkle_root = merkle_tree.get_hash();
         Ok(header.msg_root_hash == merkle_root)
     } else {
         Err(BlockOpsError::MissingHeader)

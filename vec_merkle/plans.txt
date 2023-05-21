@@ -59,3 +59,49 @@ In the add_leaf method: The method currently rebuilds the entire tree if there i
 In the get_proof method: The line let leaf_index = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction).unwrap(); may cause a panic if the transaction is not found in the leaves. It is more appropriate to return an error in this situation.
 
 Concurrency: It seems like you're using rayon library for parallelism (the par_extend, par_iter calls). Just make sure that all your operations are thread-safe and you're using locks where necessary to avoid race conditions.
+
+Depth Handling: The depth of the Merkle tree is set to 0 when the first leaf is added but is not updated thereafter. You may want to adjust the depth whenever a new level is added to the tree.
+
+Tree Structure: The nodes vector appears to be a flat array, rather than a binary tree structure. It seems like it's being treated as a binary tree, using the index of an element to infer its position in the tree. This is not a standard way to represent a tree and could lead to confusion. It's also not clear if this representation correctly handles the case where the number of leaves is not a power of two.
+
+Hash Order: You calculate parent hashes by hashing the sibling hash and the current hash. However, the order in which you hash them depends on whether the index is odd or even. This could lead to situations where two different sets of transactions produce the same Merkle root, which should not be possible.
+
+Error Handling: The compute_hashes function returns a Result indicating that it may fail, but it's not clear what would cause it to fail. If hash_transaction_sync can fail, you should handle the error appropriately.
+
+Cloning: You're cloning the Leaf instance when adding to the leaves and nodes vectors. If these vectors are only going to be used within this context and not shared or modified elsewhere, cloning might not be necessary. It could potentially slow down the program and increase memory usage. But this depends on how these vectors are going to be used outside of this context, which is not clear from the provided code.
+
+Transaction Verification: You need to generate a Merkle tree whenever a new block is created. The transactions included in this block will form the leaves of the tree.
+
+Blockchain Integrity: The Merkle root (the hash of all transaction hashes in the block) is stored in the block header. This means that even a small change in any transaction will result in a change in the block's hash, ensuring the integrity of the blockchain.
+
+Efficient Proofs: Merkle trees can also provide a quick way to verify whether a specific transaction is included in a block. Given the transaction's hash, the Merkle root, and a 'proof of inclusion' (a list of hashes), a node can verify that a transaction is in a block without needing to know every transaction in that block. This property is crucial for "lightweight" or "SPV" (simplified payment verification) clients, which want to verify transactions without storing the entire blockchain.
+
+
+
+To create a transaction in Bitcoin, a user typically follows these steps:
+
+Select Inputs: The user selects the unspent transaction outputs (UTXOs) they want to spend as inputs to the new transaction. These UTXOs represent the funds they have received in previous transactions.
+
+Specify Outputs: The user specifies the outputs of the transaction, which determine where the funds will be sent. Each output includes the recipient's Bitcoin address and the amount to be transferred.
+
+Create Scripts: For each input, the user creates a script that satisfies the conditions required to spend the associated UTXO. This script is known as the unlocking script or scriptSig.
+
+Sign the Transaction: The user signs the transaction using their private key, creating a digital signature. This signature proves the ownership of the UTXOs being spent.
+
+Construct the Transaction: The user assembles all the inputs, outputs, and associated scripts, along with the digital signatures, to create a complete transaction.
+
+Broadcast the Transaction: The user broadcasts the transaction to the Bitcoin network, sending it to the network's nodes for propagation.
+
+Once the transaction is broadcasted, it goes through the following processing steps within the Bitcoin network:
+
+Transaction Propagation: The transaction is propagated through the network, with nodes relaying it to their connected peers.
+
+Transaction Validation: Each full node in the network receives the transaction and performs validation checks. This includes verifying the transaction's format, checking the digital signatures, ensuring inputs are valid and unspent, and verifying that the transaction adheres to the consensus rules.
+
+Transaction Inclusion in a Block: Valid transactions are collected by miners who are attempting to create a new block. Miners select a set of valid transactions from the mempool (a pool of unconfirmed transactions) and include them in the block they are mining.
+
+Block Mining: Miners perform the computationally intensive process of mining, which involves finding a nonce value that results in a block header hash that meets the network's difficulty target. This process aims to secure the network, validate transactions, and create new Bitcoin.
+
+Block Propagation and Confirmation: Once a miner successfully mines a block, they propagate it through the network. Other nodes validate the block and its transactions. Once a certain number of subsequent blocks are mined on top of the block containing the transaction (typically 6 confirmations), it is considered confirmed and widely accepted as a valid part of the blockchain.
+
+Throughout this process, the transaction becomes part of the blockchain's transaction history, and the recipient of the funds can then spend those funds in subsequent transactions.

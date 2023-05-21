@@ -41,6 +41,8 @@ pub enum BlockStorageError {
 pub enum BlockOpsError {
     #[error("Block header is missing")]
     MissingHeader,
+    #[error("Merkle tree is empty")]
+    EmptyTree,
     #[error(transparent)]
     MerkleTreeError(#[from] MerkleTreeError),
 }

@@ -8,6 +8,7 @@ use vec_merkle::merkle::*;
 use std::time::{SystemTime, UNIX_EPOCH};
 use hex::encode;
 use anyhow::Result;
+use prost::Message;
 
 async fn create_test_chain() -> Result<Chain> {
     let block_store = Box::new(MemoryBlockStore::new());
@@ -63,8 +64,10 @@ async fn test_add_block() {
     let signature = sign_transaction(&keypair, &new_transaction).await;
     input.msg_signature = signature.to_vec();
     new_transaction.msg_inputs[0] = input;
-    let merkle_tree = MerkleTree::new(&vec![new_transaction.clone()]).unwrap();
-    let merkle_root = merkle_tree.root.to_vec();
+    let mut bytes = Vec::new();
+    new_transaction.encode(&mut bytes).unwrap();
+    let merkle_tree = MerkleTree::from_list(&vec![bytes]);
+    let merkle_root = merkle_tree.get_hash();
     let prev_header = genesis_block.msg_header.as_ref().unwrap();
     let header = Header {
         msg_version: 1,
@@ -120,8 +123,10 @@ async fn test_validate_block_another() {
         msg_outputs: vec![output],
         msg_relative_timestamp: 125,
     };
-    let merkle_tree = MerkleTree::new(&vec![transaction.clone()]).unwrap();
-    let merkle_root = merkle_tree.root.to_vec();
+    let mut bytes = Vec::new();
+    transaction.encode(&mut bytes).unwrap();
+    let merkle_tree = MerkleTree::from_list(&vec![bytes]);
+    let merkle_root = merkle_tree.get_hash();
     let last_block = chain.get_block_by_height(chain.chain_height()).await.unwrap();
     let prev_header = last_block.msg_header.as_ref().unwrap();
     let prev_block_hash = hash_header(prev_header).await.unwrap();
@@ -183,8 +188,10 @@ async fn test_add_block_two() {
     input.msg_signature = signature.to_vec();
     new_transaction.msg_inputs[0] = input;
 
-    let merkle_tree = MerkleTree::new(&vec![new_transaction.clone()]).unwrap();
-    let merkle_root = merkle_tree.root.to_vec();
+    let mut bytes = Vec::new();
+    new_transaction.encode(&mut bytes).unwrap();
+    let merkle_tree = MerkleTree::from_list(&vec![bytes]);
+    let merkle_root = merkle_tree.get_hash();
     let prev_header = genesis_block.msg_header.as_ref().unwrap();
 
     let header = Header {

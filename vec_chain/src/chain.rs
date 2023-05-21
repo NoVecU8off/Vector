@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{PublicKey, Verifier};
 use rayon::prelude::*;
 use vec_errors::errors::*;
+use prost::Message;
 
 #[derive(Clone)]
 pub struct HeaderList {
@@ -205,8 +206,10 @@ pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
         msg_outputs: vec![output],
         msg_relative_timestamp: 0,
     };
-    let merkle_tree = MerkleTree::new(&[transaction.clone()]).unwrap();
-    let merkle_root = merkle_tree.root.to_vec();
+    let mut bytes = Vec::new();
+    transaction.encode(&mut bytes).unwrap();
+    let merkle_tree = MerkleTree::from_list(&vec![bytes]);
+    let merkle_root = merkle_tree.get_hash();
     let header = Header {
         msg_version: 1,
         msg_height: 0,

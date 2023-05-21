@@ -1,209 +1,89 @@
-use sha3::{Digest, Sha3_256};
-use vec_proto::messages::{Transaction};
-use vec_transaction::transaction::*;
-use prost::Message;
-use rayon::prelude::*;
-use vec_errors::errors::*;
+use sha3::{Sha3_256, Digest};
 
-#[derive(Debug, Clone)]
-pub struct MerkleTree {
-    pub root: Vec<u8>,
-    pub depth: u64,
-    pub leaves: Vec<Leaf>,
-    pub nodes: Vec<Vec<u8>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct Leaf {
-    pub transaction: Transaction,
-    pub hash: Vec<u8>,
+#[derive(Clone, Debug)]
+pub enum MerkleTree {
+    Empty,
+    Leaf { hash: Vec<u8>, data: Vec<u8> },
+    Node { hash: Vec<u8>, left: Box<MerkleTree>, right: Box<MerkleTree> },
 }
 
 impl MerkleTree {
-    pub fn new() -> MerkleTree {
-        MerkleTree {
-            root: Vec::new(),
-            depth: 0,
-            leaves: Vec::new(),
-            nodes: Vec::new(),
-        }
-    }
-    pub fn build(nodes: &[Vec<u8>]) -> Result<(Vec<u8>, u64), MerkleTreeError> {
-        if nodes.is_empty() {
-            return Ok((Vec::new(), 0));
-        }
-        let mut level = nodes.to_vec();
-        let mut next_level = Vec::new();
-        let mut depth = 0;
-        while level.len() > 1 {
-            if level.len() % 2 != 0 {
-                level.push(level.last().unwrap().clone());
+    pub fn from_list(data_list: &[Vec<u8>]) -> MerkleTree {
+        match data_list.len() {
+            0 => MerkleTree::Empty,
+            1 => {
+                let data = data_list[0].clone();
+                let hash = compute_hash(&data);
+                MerkleTree::Leaf { hash, data }
             }
-            next_level.par_extend(
-                (0..level.len())
-                    .into_par_iter()
-                    .step_by(2)
-                    .map(|i| {
-                        let mut hasher = Sha3_256::new();
-    
-                        hasher.update(&level[i]);
-                        hasher.update(&level[i + 1]);
-    
-                        hasher.finalize().to_vec()
-                    }),
-            );
-            level = next_level.drain(..).collect();
-            depth += 1;
-        }
-        Ok((level[0].clone(), depth))
-    }
-    
-    
-    pub async fn verify(&self, leaf: &Transaction, index: usize, proof: &[Vec<u8>]) -> Result<bool, MerkleTreeError> {
-        let mut hasher = Sha3_256::new();
-        let mut bytes = Vec::new();
-        leaf.encode(&mut bytes).unwrap();
-        hasher.update(&bytes);
-        let mut current_hash = hasher.finalize().to_vec();
-        let mut current_index = index; 
-        if proof.is_empty() {
-            return Ok(current_hash == self.root); // Wrap in Ok()
-        }
-        println!("Initial hash: {:?}", current_hash);
-        for sibling in proof {
-            let mut new_hasher = Sha3_256::new();
-            if current_index % 2 == 0 {
-                new_hasher.update(&current_hash);
-                new_hasher.update(sibling);
-            } else {
-                new_hasher.update(sibling);
-                new_hasher.update(&current_hash);
-            }
-            current_hash = new_hasher.finalize().to_vec();
-            current_index /= 2;
-            println!("Updated hash: {:?}", current_hash);
-        }
-        Ok(current_hash == self.root)
-    }    
-
-    pub async fn get_proof(&self, transaction: &Transaction) -> Result<Option<(usize, Vec<Vec<u8>>)>, MerkleTreeError> {
-        let leaf_index_option = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction);
-        if leaf_index_option.is_none() {
-            return Err(MerkleTreeError::TransactionNotFound);
-        }
-        let leaf_index = leaf_index_option.unwrap();
-        let mut proof = Vec::new();
-        let mut index = leaf_index;
-        let max_depth = self.depth as isize;
-        for _i in (0..max_depth).rev() {
-            let sibling_index = if index % 2 == 0 { index + 1 } else { index - 1 };
-            if sibling_index >= self.leaves.len() {
-                break;
-            }
-            proof.push(self.leaves[sibling_index].hash.clone());
-            println!("Current index: {}", index);
-            println!("Sibling index: {}", sibling_index);
-            println!("Current node hash: {:?}", self.leaves[index].hash);
-            println!("Sibling node hash: {:?}", self.leaves[sibling_index].hash);
-            println!("Current proof: {:?}", proof);
-            index /= 2;
-        }
-        Ok(Some((leaf_index, proof)))
-    }
-
-    pub fn add_leaf(&mut self, transaction: Transaction) -> Result<(), MerkleTreeError> {
-        if self.leaves.is_empty() {
-            let wrapper = compute_hashes(&[transaction])?.into_iter().next().unwrap();
-            self.leaves.push(wrapper.clone());
-            self.nodes.push(wrapper.hash.clone());
-            self.root = wrapper.hash;
-            self.depth = 0;
-            return Ok(());
-        }
-        let wrapper = compute_hashes(&[transaction])?.into_iter().next().unwrap();
-        self.leaves.push(wrapper.clone());
-        self.nodes.push(wrapper.hash.clone());
-        let mut index = self.leaves.len() - 1;
-        let mut current_hash = wrapper.hash;
-        while index > 0 {
-            let sibling_index = if index % 2 == 0 { index - 1 } else { index + 1 };
-            let parent_index = (index - 1) / 2;
-            if sibling_index >= self.nodes.len() {
-                break;
-            }
-            let mut hasher = Sha3_256::new();
-            if index % 2 == 0 {
-                hasher.update(&self.nodes[sibling_index]);
-                hasher.update(&current_hash);
-            } else {
-                hasher.update(&current_hash);
-                hasher.update(&self.nodes[sibling_index]);
-            }
-            current_hash = hasher.finalize().to_vec();
-            self.nodes[parent_index] = current_hash.clone();
-            index = parent_index;
-        }
-        self.root = current_hash;
-        Ok(())
-    }
-
-    pub async fn remove_leaf(&mut self, transaction: &Transaction) -> Result<bool, MerkleTreeError> {
-        if let Some(index) = self.leaves.iter().position(|wrapper| &wrapper.transaction == transaction) {
-            self.leaves.remove(index);
-            self.nodes.remove(index);
-            let mut current_hash = vec![0u8; 64]; // Placeholder hash for the removed leaf
-            let mut parent_index = index;
-            while parent_index > 0 {
-                let sibling_index = if parent_index % 2 == 0 { parent_index - 1 } else { parent_index + 1 };
-                parent_index = (parent_index - 1) / 2;
-                let mut hasher = Sha3_256::new();
-                if parent_index % 2 == 0 {
-                    hasher.update(&self.nodes[sibling_index]);
-                    hasher.update(&current_hash);
-                } else {
-                    hasher.update(&current_hash);
-                    hasher.update(&self.nodes[sibling_index]);
+            _ => {
+                let middle = data_list.len() / 2;
+                let left_tree = MerkleTree::from_list(&data_list[..middle]);
+                let right_tree = MerkleTree::from_list(&data_list[middle..]);
+                let combined_hash = combine_hash(
+                    &left_tree.get_hash(),
+                    &right_tree.get_hash()
+                );
+                MerkleTree::Node { 
+                    hash: combined_hash,
+                    left: Box::new(left_tree),
+                    right: Box::new(right_tree)
                 }
-                current_hash = hasher.finalize().to_vec();
-                self.nodes[parent_index] = current_hash.clone();
             }
-            self.root = current_hash;
-            Ok(true)
-        } else {
-            Ok(false)
         }
     }
 
-    pub fn get_root(&self) -> &[u8] {
-        &self.root
+    pub fn get_hash(&self) -> Vec<u8> {
+        match self {
+            MerkleTree::Empty => compute_hash(&[]),
+            MerkleTree::Leaf { hash, .. } => hash.clone(),
+            MerkleTree::Node { hash, .. } => hash.clone(),
+        }
     }
 
-    pub fn get_leaves(&self) -> Vec<Leaf> {
-        self.leaves.clone()
+    pub fn get_proof(&self, data: &[u8]) -> Option<Vec<(Vec<u8>, bool)>> {
+        match self {
+            MerkleTree::Empty => None,
+            MerkleTree::Leaf { data: leaf_data, .. } => {
+                if data == leaf_data {
+                    Some(vec![])
+                } else {
+                    None
+                }
+            },
+            MerkleTree::Node { left, right, .. } => {
+                if let Some(mut proof) = left.get_proof(data) {
+                    proof.push((right.get_hash(), true));
+                    Some(proof)
+                } else if let Some(mut proof) = right.get_proof(data) {
+                    proof.push((left.get_hash(), false));
+                    Some(proof)
+                } else {
+                    None
+                }
+            }
+        }
     }
 
-    pub fn get_nodes(&self) -> Vec<Vec<u8>> {
-        self.nodes.clone()
-    }
-
-    pub fn get_depth(&self) -> u64 {
-        self.depth
-    }
-
-    pub fn get_node(&self, index: usize) -> Option<&[u8]> {
-        self.nodes.get(index).map(|node| &node[..])
+    pub fn verify(&self, data: &[u8], proof: &[(Vec<u8>, bool)]) -> bool {
+        let mut current_hash = compute_hash(data);
+        for (proof_hash, is_right_sibling) in proof {
+            current_hash = if *is_right_sibling {
+                combine_hash(&current_hash, proof_hash)
+            } else {
+                combine_hash(proof_hash, &current_hash)
+            };
+        }
+        current_hash == self.get_hash()
     }
 }
 
-pub fn compute_hashes(transactions: &[Transaction]) -> Result<Vec<Leaf>, MerkleTreeError> {
-    transactions
-        .par_iter()
-        .map(|transaction| {
-            let hash = hash_transaction_sync(transaction);
-            Ok(Leaf {
-                transaction: transaction.clone(),
-                hash,
-            })
-        })
-        .collect()
+fn compute_hash(data: &[u8]) -> Vec<u8> {
+    let mut hasher = Sha3_256::new();
+    hasher.update(data);
+    hasher.finalize().to_vec()
+}
+
+fn combine_hash(hash1: &[u8], hash2: &[u8]) -> Vec<u8> {
+    compute_hash(&[hash1, hash2].concat())
 }

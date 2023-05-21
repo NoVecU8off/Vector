@@ -13,6 +13,7 @@ use futures::future::try_join_all;
 use futures::stream::{self, StreamExt};
 use rand::{Rng};
 use slog::{info, error};
+use prost::Message;
 
 #[derive(Clone)]
 pub struct ValidatorService {
@@ -261,8 +262,16 @@ impl ValidatorService {
             let round_transactions = self.round_transactions.lock().await;
             round_transactions.clone()
         };
-        let merkle_tree = MerkleTree::new(&transactions)?;
-        let merkle_root = merkle_tree.root.to_vec();
+        let transaction_data: Vec<Vec<u8>> = transactions
+            .iter()
+            .map(|transaction| {
+                let mut bytes = Vec::new();
+                transaction.encode(&mut bytes).unwrap();
+                bytes
+            })
+            .collect();
+        let merkle_tree = MerkleTree::from_list(&transaction_data);
+        let merkle_root = merkle_tree.get_hash();
         let header = Header {
             msg_version: 1,
             msg_height: height + 1,

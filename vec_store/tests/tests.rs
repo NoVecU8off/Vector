@@ -5,6 +5,7 @@ use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput, Bloc
 use vec_cryptography::cryptography::Keypair;
 use vec_merkle::merkle::MerkleTree;
 use std::time::{SystemTime, UNIX_EPOCH};
+use prost::Message;
 
 pub fn create_sample_transaction() -> Transaction {
     let keypair = Keypair::generate_keypair();
@@ -42,8 +43,16 @@ async fn create_sample_block() -> Block {
         },
     ];
 
-    let merkle_tree = MerkleTree::new(&transactions).unwrap();
-    let merkle_root = merkle_tree.root.to_vec();
+    let transaction_data: Vec<Vec<u8>> = transactions
+        .iter()
+        .map(|transaction| {
+            let mut bytes = Vec::new();
+            transaction.encode(&mut bytes).unwrap();
+            bytes
+        })
+        .collect();
+    let merkle_tree = MerkleTree::from_list(&transaction_data);
+    let merkle_root = merkle_tree.get_hash();
 
     let header = Header {
         msg_version: 1,
