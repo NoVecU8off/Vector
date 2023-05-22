@@ -20,7 +20,7 @@ fn test_inherit_seed() {
 
 #[test]
 fn test_generate_keypair() {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     assert_eq!(keypair.private.to_bytes().len(), 32);
     assert_eq!(keypair.public.to_bytes().len(), 32);
 }
@@ -28,14 +28,14 @@ fn test_generate_keypair() {
 #[test]
 fn test_sign_and_verify() {
     let message = b"Hello, world!";
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let signature = keypair.sign(message);
     assert!(keypair.verify(message, &signature));
 }
 
 #[test]
 fn test_sign_and_verify_different_way() {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let message = "Hello, world!".as_bytes();
 
     let signature = keypair.sign(&message);

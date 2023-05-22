@@ -40,19 +40,15 @@ message LocalState {
 
 message Version {
 
-    bool msg_validator = 1;
+    string msg_version = 1;
 
-    int32 msg_validator_id = 2;
+    bytes msg_public_key = 2;
 
-    string msg_version = 3;
+    int32 msg_height = 3;
 
-    bytes msg_public_key = 4;
+    string msg_listen_address = 4;
 
-    int32 msg_height = 5;
-
-    string msg_listen_address = 6;
-
-    repeated string msg_peer_list = 7;
+    repeated string msg_peer_list = 5;
     
 }
 

@@ -111,7 +111,7 @@ impl Chain {
         self.blocks.put(&block).await?;
         Ok(())
     }
-    
+
     pub async fn get_block_by_hash(&self, hash: &[u8]) -> Result<Block, ChainOpsError> {
         let hash_hex = encode(hash);
         match self.blocks.get(&hash_hex).await {
@@ -139,11 +139,10 @@ impl Chain {
         let signature = Signature::signature_from_vec(&signature_vec);
         let public_key = PublicKey::from_bytes(&incoming_block.msg_public_key)
             .map_err(|_| ChainOpsError::InvalidPublicKey)?;
-    
         let message = hash_header_by_block(incoming_block)?;
         public_key.verify(&message, &signature.signature)?;
         Ok(())
-    }    
+    }
 
     async fn check_previous_block_hash(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         if self.chain_len() > 0 {

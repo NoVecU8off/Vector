@@ -32,19 +32,19 @@ pub fn inherit_seed() -> [u8; 32] {
     seed.copy_from_slice(&hash[..32]);
     seed
 }
-pub struct Keypair {
+pub struct NodeKeypair {
     pub private: SecretKey,
     pub expanded_private_key: ExpandedSecretKey,
     pub public: PublicKey,
 }
 
-impl Keypair {
+impl NodeKeypair {
     pub fn generate_keypair() -> Self {
         let seed = inherit_seed();
         let private_key = SecretKey::from_bytes(&seed).unwrap();
-        let expanded_secret_key: ExpandedSecretKey = ExpandedSecretKey::from(&private_key);
+        let expanded_secret_key = ExpandedSecretKey::from(&private_key);
         let public_key = PublicKey::from(&expanded_secret_key);
-        Keypair {
+        NodeKeypair {
             private: private_key,
             expanded_private_key: expanded_secret_key,
             public: public_key,
@@ -72,7 +72,7 @@ impl Keypair {
     }
 }
 
-impl Clone for Keypair {
+impl Clone for NodeKeypair {
     fn clone(&self) -> Self {
         let private = SecretKey::from_bytes(&self.private.to_bytes()).expect("Unable to clone SecretKey");
         let expanded_private_key = ExpandedSecretKey::from_bytes(&self.expanded_private_key.to_bytes()).expect("Unable to clone ExpandedSecretKey");
@@ -139,13 +139,13 @@ pub fn vec_to_bytes(vec: &Vec<u8>) -> [u8; 64] {
     bytes
 }
 
-impl std::fmt::Display for Keypair {
+impl std::fmt::Display for NodeKeypair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?}, {:?}", self.private, self.public)
     }
 }
 
-impl fmt::Debug for Keypair {
+impl fmt::Debug for NodeKeypair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Keypair")
             .field("private", &self.private)
@@ -161,7 +161,7 @@ struct SerializableKeypair {
     public: Vec<u8>,
 }
 
-impl Serialize for Keypair {
+impl Serialize for NodeKeypair {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -175,7 +175,7 @@ impl Serialize for Keypair {
     }
 }
 
-impl<'de> Deserialize<'de> for Keypair {
+impl<'de> Deserialize<'de> for NodeKeypair {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -184,7 +184,7 @@ impl<'de> Deserialize<'de> for Keypair {
         let private = SecretKey::from_bytes(&serializable.private).map_err(DeError::custom)?;
         let expanded_private_key = ExpandedSecretKey::from_bytes(&serializable.expanded_private_key).map_err(DeError::custom)?;
         let public = PublicKey::from_bytes(&serializable.public).map_err(DeError::custom)?;
-        let keypair = Keypair {
+        let keypair = NodeKeypair {
             private,
             expanded_private_key,
             public,
