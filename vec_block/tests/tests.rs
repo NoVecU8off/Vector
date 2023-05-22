@@ -2,7 +2,7 @@
 mod tests {
     use vec_block::block::*;
     use vec_proto::messages::{Block, Header, Transaction};
-    use vec_cryptography::cryptography::{Keypair};
+    use vec_cryptography::cryptography::NodeKeypair;
     use std::time::{SystemTime, UNIX_EPOCH};
     use vec_merkle::merkle::*;
     use prost::Message;
@@ -12,18 +12,16 @@ mod tests {
             Transaction {
                 msg_inputs: vec![],
                 msg_outputs: vec![],
-                msg_version: 1,
-                msg_relative_timestamp: 1,
+                msg_timestamp: 1,
             },
             Transaction {
                 msg_inputs: vec![],
                 msg_outputs: vec![],
-                msg_version: 1,
-                msg_relative_timestamp: 2,
+                msg_timestamp: 2,
             },
         ];
     
-            let transaction_data: Vec<Vec<u8>> = transactions
+        let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
             .map(|transaction| {
                 let mut bytes = Vec::new();
@@ -56,7 +54,7 @@ mod tests {
     #[tokio::test]
     async fn test_sign_and_verify_block() {
         let block = create_sample_block().await;
-        let keypair = Keypair::generate_keypair();
+        let keypair = NodeKeypair::generate_keypair();
         let signature = sign_block(&block, &keypair).await.unwrap();
 
         let result = verify_block(&block, &signature, &keypair).await.unwrap();

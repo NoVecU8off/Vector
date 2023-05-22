@@ -2,13 +2,13 @@ use vec_store::block_store::*;
 use hex::encode;
 use vec_block::block::*;
 use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput, Block, Header};
-use vec_cryptography::cryptography::Keypair;
+use vec_cryptography::cryptography::NodeKeypair;
 use vec_merkle::merkle::MerkleTree;
 use std::time::{SystemTime, UNIX_EPOCH};
 use prost::Message;
 
 pub fn create_sample_transaction() -> Transaction {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let input = TransactionInput {
         msg_previous_tx_hash: (0..64).map(|_| rand::random::<u8>()).collect(),
         msg_previous_out_index: rand::random::<u32>(),
@@ -20,10 +20,9 @@ pub fn create_sample_transaction() -> Transaction {
         msg_to: (0..32).map(|_| rand::random::<u8>()).collect(),
     };
     Transaction {
-        msg_version: rand::random::<i32>(),
         msg_inputs: vec![input],
         msg_outputs: vec![output],
-        msg_relative_timestamp: 21,
+        msg_timestamp: 21,
     }
 }
 
@@ -32,14 +31,12 @@ async fn create_sample_block() -> Block {
         Transaction {
             msg_inputs: vec![],
             msg_outputs: vec![],
-            msg_version: 1,
-            msg_relative_timestamp: 221,
+            msg_timestamp: 221,
         },
         Transaction {
             msg_inputs: vec![],
             msg_outputs: vec![],
-            msg_version: 1,
-            msg_relative_timestamp: 21,
+            msg_timestamp: 21,
         },
     ];
 

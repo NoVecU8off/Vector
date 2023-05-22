@@ -13,15 +13,16 @@ use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use std::time::{SystemTime, UNIX_EPOCH};
 use vec_errors::errors::*;
+use tokio::time::Instant;
 
 #[derive(Clone)]
 pub struct NodeService {
     pub config: Arc<RwLock<ServerConfig>>,
     pub peers: Arc<RwLock<HashMap<String, (Arc<Mutex<NodeClient<Channel>>>, Version)>>>,
-    pub utxo_store: Arc<Mutex<dyn UTXOStorer>>,
     pub mempool: Arc<Mempool>,
     pub blockchain: Arc<RwLock<Chain>>,
     pub logger: Logger,
+    pub time: Arc<RwLock<u64>>,
 }
 
 #[tonic::async_trait]
@@ -105,7 +106,7 @@ impl Node for NodeService {
         let leader_block = request.into_inner();
         if let Some(block) = leader_block.msg_block {
             let leader_address = leader_block.msg_leader_address;
-            match self.process_leader_block(block, &leader_address).await {
+            match self.process_block(block, &leader_address).await {
                 Ok(_) => {
                     info!(self.logger, "Local UTXO updated successfully");
                     Ok(Response::new(Confirmed {}))
@@ -157,22 +158,21 @@ impl NodeService {
         };
         info!(logger, "NodeService {} created", server_cfg.cfg_ip);
         let peers = Arc::new(RwLock::new(HashMap::new()));
-        let block_storer: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
-        let utxo_set_storer: Box<dyn UTXOSetStorer> = Box::new(MemoryUTXOSet::new());
-        let utxo_store: Arc<Mutex<dyn UTXOStorer>> = Arc::new(Mutex::new(MemoryUTXOStore::new()));
+        let blocks: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
+        let utxos: Box<dyn UTXOSetStorer> = Box::new(MemoryUTXOSet::new());
         let mempool = Arc::new(Mempool::new());
-        let blockchain = Chain::new(block_storer, utxo_set_storer)
+        let blockchain = Chain::new(blocks, utxos)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
-
+        let time = Arc::new(RwLock::new(0));
         let config = Arc::new(RwLock::new(server_cfg.clone()));
         Ok(NodeService {
             config,
             peers,
             logger,
-            utxo_store,
             mempool,
             blockchain: Arc::new(RwLock::new(blockchain)),
+            time,
         })
     }
 
@@ -220,7 +220,6 @@ impl NodeService {
                     .iter()
                     .map(|(addr, (peer_client, _))| (addr.clone(), Arc::clone(peer_client)))
                     .collect::<Vec<_>>();
-
                 for (addr, peer_client) in peers_data {
                     let mut client = peer_client.lock().await;
                     match client.handle_heartbeat(Request::new(Confirmed {})).await {
@@ -387,8 +386,8 @@ impl NodeService {
         let keypair = &cfg_keypair;
         let public_key = keypair.public.as_bytes().to_vec();
         let from = &public_key;
-        let mut utxo_store = self.utxo_store.lock().await;
-        let utxos = utxo_store.find_utxos(from, amount)?;
+        let blockchain = self.blockchain.read().await;
+        let utxos = blockchain.utxos.collect_minimum_utxos(from, amount).await?;
         let mut inputs = Vec::new();
         let mut total_input = 0;
         let mut spent_utxo_keys = Vec::new();
@@ -405,8 +404,11 @@ impl NodeService {
             total_input += utxo.amount;
             spent_utxo_keys.push((utxo.transaction_hash.clone(), utxo.output_index));
         }
-        for key in spent_utxo_keys {
-            utxo_store.remove_utxo(&key)?;
+        {
+            let blockchain = self.blockchain.write().await;
+            for key in spent_utxo_keys {
+                blockchain.utxos.remove(&key).await?;
+            }
         }
         let output = TransactionOutput {
             msg_amount: amount,
@@ -421,15 +423,14 @@ impl NodeService {
             outputs.push(change_output);
         }
         let tx = Transaction {
-            msg_version: 1,
             msg_inputs: inputs,
             msg_outputs: outputs,
-            msg_relative_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
         info!(self.logger, "{}: Created transaction with {} to {:?}", cfg_addr, amount, to);
         self.broadcast_tx(tx).await?;
         Ok(())
-    }
+    }    
 
     pub async fn process_incoming_block_batch(&self, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
@@ -441,7 +442,7 @@ impl NodeService {
     pub async fn process_incoming_block(&self, block: Block) -> Result<(), NodeServiceError> {
         let local_height = {
             let server_config = self.config.read().await;
-            server_config.cfg_last_height
+            server_config.cfg_height
         };
         if let Some(header) = block.msg_header {
             for transaction in block.msg_transactions {
@@ -450,7 +451,7 @@ impl NodeService {
             let mut server_config = self.config.write().await;
             let incoming_height = header.msg_height as u64;
             if local_height < incoming_height {
-                server_config.cfg_last_height = incoming_height;
+                server_config.cfg_height = incoming_height;
             }
             Ok(())
         } else {
@@ -458,10 +459,10 @@ impl NodeService {
         }
     }
 
-    pub async fn process_leader_block(&self, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
+    pub async fn process_block(&self, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
         let local_height = {
             let server_config = self.config.read().await;
-            server_config.cfg_last_height
+            server_config.cfg_height
         };
         if let Some(header) = block.msg_header.clone() {
             let incoming_height = header.msg_height as u64;
@@ -470,7 +471,7 @@ impl NodeService {
                     self.process_transaction(transaction).await?;
                 }
                 let mut server_config = self.config.write().await;
-                server_config.cfg_last_height = incoming_height;
+                server_config.cfg_height = incoming_height;
                 Ok(())
             } else {
                 match self.pull_state_from(leader_address.to_string()).await {
@@ -484,21 +485,19 @@ impl NodeService {
     }
 
     pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), NodeServiceError> {
-        let cfg_keypair = {
-            let server_config = self.config.read().await;
-            server_config.cfg_keypair.clone()
-        };
-        let public_key = cfg_keypair.public.as_bytes().to_vec();
+        let blockchain = self.blockchain.write().await;
+        for input in &transaction.msg_inputs {
+            let tx_hash = hex::encode(input.msg_previous_tx_hash.clone());
+            blockchain.utxos.remove(&(tx_hash, input.msg_previous_out_index)).await?;
+        }
         for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
-            if output.msg_to == public_key {
-                let utxo = UTXO {
-                    transaction_hash: hex::encode(hash_transaction(transaction).await),
-                    output_index: output_index as u32,
-                    amount: output.msg_amount,
-                    public: public_key.clone(),
-                };
-                self.utxo_store.lock().await.put(utxo)?;
-            }
+            let utxo = UTXO {
+                transaction_hash: hex::encode(hash_transaction(transaction).await),
+                output_index: output_index as u32,
+                amount: output.msg_amount,
+                public: output.msg_to.clone(),
+            };
+            blockchain.utxos.put(&utxo).await?;
         }
         Ok(())
     }
@@ -532,11 +531,11 @@ impl NodeService {
     }    
     
     pub async fn pull_state_from_client(&self, validator_client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
-        let cfg_last_height = {
+        let height = {
             let server_config = self.config.read().await;
-            server_config.cfg_last_height
+            server_config.cfg_height
         };
-        let request = Request::new(LocalState { msg_last_block_height: cfg_last_height });
+        let request = Request::new(LocalState { msg_last_block_height: height });
         let response = validator_client.push_state(request).await?;
         let block_batch = response.into_inner();
         self.process_incoming_block_batch(block_batch).await?;

@@ -22,7 +22,7 @@ fn test_inherit_seed() {
 
 #[test]
 fn test_generate_keypair() {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     assert_eq!(keypair.private.to_bytes().len(), 32);
     assert_eq!(keypair.public.to_bytes().len(), 32);
 }
@@ -30,14 +30,14 @@ fn test_generate_keypair() {
 #[test]
 fn test_sign_and_verify() {
     let message = b"Hello, world!";
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let signature = keypair.sign(message);
     assert!(keypair.verify(message, &signature));
 }
 
 #[test]
 fn test_sign_and_verify_different_way() {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let message = "Hello, world!".as_bytes();
 
     let signature = keypair.sign(&message);
@@ -61,10 +61,9 @@ fn create_random_transaction() -> Transaction {
         msg_to: (0..32).map(|_| rand::random::<u8>()).collect(),
     };
     Transaction {
-        msg_version: rand::random::<i32>(),
         msg_inputs: vec![input],
         msg_outputs: vec![output],
-        msg_relative_timestamp: 21356,
+        msg_timestamp: 21356,
     }
 }
 
@@ -94,7 +93,7 @@ async fn test_hash_transaction_without_signature() {
 
 #[tokio::test]
 async fn test_sign_transaction() {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let transaction = create_random_transaction();
 
     let signature = sign_transaction(&keypair, &transaction).await;
@@ -105,7 +104,7 @@ async fn test_sign_transaction() {
 
 #[tokio::test]
 async fn test_verify_transaction_two() {
-    let keypair = Keypair::generate_keypair();
+    let keypair = NodeKeypair::generate_keypair();
     let mut transaction = create_random_transaction();
 
     let signature = sign_transaction(&keypair, &transaction).await;

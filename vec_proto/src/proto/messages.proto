@@ -20,6 +20,18 @@ service Node {
 
 message Confirmed { }
 
+message TimeRequest {
+
+    int64 msg_sent_time = 1;
+
+}
+
+message TimeResponse {
+
+    int64 msg_recieved_time = 1;
+
+}
+
 message ValidatorList {
 
     repeated string msg_validator_addresses = 1;
@@ -94,13 +106,11 @@ message Header {
 
 message Transaction {
 
-    int32 msg_version = 1;
-
     repeated TransactionInput msg_inputs = 2;
 
     repeated TransactionOutput msg_outputs = 3;
 
-    int64 msg_relative_timestamp = 4;
+    int64 msg_timestamp = 4;
     
 }
 

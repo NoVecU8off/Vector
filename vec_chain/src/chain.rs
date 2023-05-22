@@ -1,6 +1,6 @@
 use vec_store::block_store::{BlockStorer};
 use vec_store::utxo_store::*;
-use vec_cryptography::cryptography::{Keypair, Signature};
+use vec_cryptography::cryptography::{NodeKeypair, Signature};
 use vec_proto::messages::{Header, Block, Transaction, TransactionOutput, TransactionInput};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
@@ -208,6 +208,9 @@ impl Chain {
         let pub_key = PublicKey::from_bytes(&input.msg_public_key).map_err(|_| ChainOpsError::InvalidPublicKey)?;
         let signature = EdSignature::from_bytes(&input.msg_signature).map_err(|_| ChainOpsError::InvalidInputSignature)?;
         let message = format!("{}{}", utxo.transaction_hash, utxo.output_index);
+        if utxo.public != input.msg_public_key {
+            return Err(ValidationError::PublicKeyMismatch)?;
+        }
         match pub_key.verify(message.as_bytes(), &signature) {
             Ok(_) => Ok(true),
             Err(_) => Ok(false),
@@ -216,17 +219,16 @@ impl Chain {
 }
 
 pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
-    let genesis_keypair = Keypair::generate_keypair();
+    let genesis_keypair = NodeKeypair::generate_keypair();
     let address = genesis_keypair.public;
     let output = TransactionOutput {
         msg_amount: 1000,
         msg_to: address.to_bytes().to_vec(),
     };
     let transaction = Transaction {
-        msg_version: 1,
         msg_inputs: vec![],
         msg_outputs: vec![output],
-        msg_relative_timestamp: 0,
+        msg_timestamp: 0,
     };
     let mut bytes = Vec::new();
     transaction.encode(&mut bytes).unwrap();

@@ -67,6 +67,8 @@ pub enum ValidationError {
     TransactionCheckError,
     #[error("Transaction is missing input")]
     MissingInput,
+    #[error("Mismatched public key")]
+    PublicKeyMismatch,
 }
 
 #[derive(Debug, Error)]

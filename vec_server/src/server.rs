@@ -1,5 +1,5 @@
 use tokio::fs::{File};
-use vec_cryptography::cryptography::Keypair;
+use vec_cryptography::cryptography::NodeKeypair;
 use vec_errors::errors::*;
 use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize};
@@ -11,8 +11,8 @@ use std::fs;
 pub struct ServerConfig {
     pub cfg_version: String,
     pub cfg_ip: String,
-    pub cfg_keypair: Keypair,
-    pub cfg_last_height: u64,
+    pub cfg_keypair: NodeKeypair,
+    pub cfg_height: u64,
     pub cfg_pem_certificate: Vec<u8>,
     pub cfg_pem_key: Vec<u8>,
     pub cfg_root_crt: Vec<u8>,
@@ -24,8 +24,8 @@ impl ServerConfig {
         ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
-            cfg_keypair: Keypair::generate_keypair(),
-            cfg_last_height: 0,
+            cfg_keypair: NodeKeypair::generate_keypair(),
+            cfg_height: 0,
             cfg_pem_certificate,
             cfg_pem_key,
             cfg_root_crt,
@@ -37,8 +37,8 @@ impl ServerConfig {
         ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
-            cfg_keypair: Keypair::generate_keypair(),
-            cfg_last_height: 0,
+            cfg_keypair: NodeKeypair::generate_keypair(),
+            cfg_height: 0,
             cfg_pem_certificate,
             cfg_pem_key,
             cfg_root_crt,
@@ -47,7 +47,7 @@ impl ServerConfig {
 
     pub async fn new(
         version: &str,
-        keypair: Keypair,
+        keypair: NodeKeypair,
         certificate_pem: Vec<u8>,
         key_pem: Vec<u8>,
         root_pem: Vec<u8>,
@@ -56,7 +56,7 @@ impl ServerConfig {
             cfg_version: version.to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
             cfg_keypair: keypair,
-            cfg_last_height: 0,
+            cfg_height: 0,
             cfg_pem_certificate: certificate_pem,
             cfg_pem_key: key_pem,
             cfg_root_crt: root_pem,
