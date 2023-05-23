@@ -1,6 +1,7 @@
 # Vector
 
-Welcome to Vector, my blockchain solution designed in pure Rust. This project leverages the efficiency and concurrency of Rust alongside gRPC (protobuf) for network communication, and a custom PBFT-like consensus mechanism to ensure data integrity across the network. 
+Welcome to Vector, my blockchain solution designed in pure Rust. This project leverages the efficiency and concurrency of Rust alongside gRPC (protobuf) for network communication, and a custom PBFT-like consensus mechanism to ensure data integrity across the network.
+(UPD: the consensus mechanism was considered useless due to its inefficiency + unscalability and was permanetly removed, currently getting inspired by Cardano's Ouroboros)
 
 Built on a UTXO model, Vector should provide a robust and secure environment for transactions, offering a scalable and efficient platform for developers and businesses. 
 
