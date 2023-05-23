@@ -25,6 +25,15 @@ pub enum UTXOStorageError {
     InsufficientUtxos,
     #[error("Unexpected error")]
     UnexpectedError,
+    #[error("Unable to serialize UTXO")]
+    SerializationError,
+    #[error("Unable to deserialize UTXO")]
+    DeserializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to read from DB")]
+    ReadError,
+
 }
 
 #[derive(Debug, Error)]
@@ -34,7 +43,19 @@ pub enum BlockStorageError {
     #[error("Unable to acquire read lock")]
     ReadLockError,
     #[error(transparent)]
-    BlockOpsError(#[from] BlockOpsError)
+    SledError(sled::Error),
+    #[error(transparent)]
+    TaskPanic(tokio::task::JoinError),
+    #[error(transparent)]
+    BlockOpsError(#[from] BlockOpsError),
+    #[error("Unable to serialize block")]
+    SerializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to deserialize block")]
+    DeserializationError,
+    #[error("Unable to read from DB")]
+    ReadError,
 }
 
 #[derive(Debug, Error)]
@@ -161,6 +182,8 @@ pub enum NodeServiceError {
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]
     TaskPanic(#[from] tokio::task::JoinError), 
+    #[error("Unable to open Sled DB")]
+    SledOpenError,
 }
 
 #[derive(Debug, Error)]

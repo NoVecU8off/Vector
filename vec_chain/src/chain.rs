@@ -53,11 +53,11 @@ impl Default for HeaderList {
 pub struct Chain {
     pub headers: HeaderList,
     pub blocks: Box<dyn BlockStorer>,
-    pub utxos: Box<dyn UTXOSetStorer>,
+    pub utxos: Box<dyn UTXOStorer>,
 }
 
 impl Chain {
-    pub async fn new(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOSetStorer>) -> Result<Chain, ChainOpsError> {
+    pub async fn new(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOStorer>) -> Result<Chain, ChainOpsError> {
         let chain = Chain {
             headers: HeaderList::new(),
             blocks,
@@ -66,7 +66,7 @@ impl Chain {
         Ok(chain)
     }
 
-    pub async fn genesis_chain(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOSetStorer>) -> Result<Chain, ChainOpsError> {
+    pub async fn genesis_chain(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOStorer>) -> Result<Chain, ChainOpsError> {
         let mut chain = Chain {
             headers: HeaderList::new(),
             blocks,

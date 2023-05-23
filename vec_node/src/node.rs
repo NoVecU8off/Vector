@@ -1,7 +1,7 @@
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_chain::chain::Chain;
-use vec_store::{block_store::{MemoryBlockStore, BlockStorer}, utxo_store::*};
+use vec_store::{block_store::{BlockDB, BlockStorer}, utxo_store::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
@@ -160,48 +160,6 @@ impl Node for NodeService {
 }
 
 impl NodeService {
-    pub async fn start_clock(&self) {
-        let time_clone = Arc::clone(&self.clock);
-        tokio::spawn(async move {
-            loop {
-                sleep(Duration::from_millis(1)).await;
-                time_clone.fetch_add(1, Ordering::SeqCst);
-            }
-        });
-    }
-
-    async fn synchronize_clock_with(&self, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
-        // current time at the moment of request
-        let t1 = self.clock.load(Ordering::SeqCst) as i64;
-
-        // making request
-        let req =  Request::new(DelayRequest { } );
-        let res = client.handle_time_req(req).await?;
-
-        // the time response of recipient at the moment he processed the request
-        let t2 = res.into_inner().msg_time; 
-
-        // current time on recieve of response
-        let t3 = self.clock.load(Ordering::SeqCst) as i64;
-
-        // time needed for signal to travel 
-        let travel_delay = t3 - t1;
-
-        let average_delay = travel_delay / 2;
-
-        let relative_offset = t2 - t1;
-
-        // offset
-        let offset = relative_offset - average_delay;
-
-        if relative_offset >= 0 {
-            // adjustment of the lockal clock
-            self.clock.fetch_add(offset as u64, Ordering::SeqCst);
-        }
-        
-        Ok(())
-    }
-
     pub async fn new(server_cfg: ServerConfig) -> Result<Self, NodeServiceError> {
         let logger = {
             let decorator = slog_term::TermDecorator::new().build();
@@ -211,8 +169,11 @@ impl NodeService {
         };
         info!(logger, "NodeService {} created", server_cfg.cfg_ip);
         let peers = Arc::new(RwLock::new(HashMap::new()));
-        let blocks: Box<dyn BlockStorer> = Box::new(MemoryBlockStore::new());
-        let utxos: Box<dyn UTXOSetStorer> = Box::new(MemoryUTXOSet::new());
+        let block_db = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let utxo_db_th_oi = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let utxo_db_pk = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
+        let utxos: Box<dyn UTXOStorer> = Box::new(UTXODB::new(utxo_db_th_oi, utxo_db_pk));
         let mempool = Arc::new(Mempool::new());
         let blockchain = Chain::new(blocks, utxos)
             .await
@@ -298,6 +259,32 @@ impl NodeService {
             tokio::time::sleep(Duration::from_secs(30)).await;
         }
     }  
+
+    pub async fn start_clock(&self) {
+        let clock = Arc::clone(&self.clock);
+        tokio::spawn(async move {
+            loop {
+                sleep(Duration::from_millis(1)).await;
+                clock.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+    }
+
+    async fn synchronize_clock_with(&self, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+        let t1 = self.clock.load(Ordering::SeqCst) as i64;
+        let req =  Request::new(DelayRequest { } );
+        let res = client.handle_time_req(req).await?;
+        let t2 = res.into_inner().msg_time; 
+        let t3 = self.clock.load(Ordering::SeqCst) as i64;
+        let travel_delay = t3 - t1;
+        let average_delay = travel_delay / 2;
+        let relative_offset = t2 - t1;
+        let offset = relative_offset - average_delay;
+        if offset >= 0 {
+            self.clock.fetch_add(offset as u64, Ordering::SeqCst);
+        }
+        Ok(())
+    }
 
     pub async fn broadcast_tx(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
         let peers_data = {

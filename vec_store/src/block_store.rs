@@ -1,11 +1,10 @@
-use std::collections::HashMap;
-use std::sync::{RwLock};
 use hex::encode;
 use vec_proto::messages::{Block};
 use vec_block::block::*;
 use vec_errors::errors::*;
-use std::sync::Arc;
 use async_trait::async_trait;
+use sled::Db;
+use prost::Message;
 
 #[async_trait]
 pub trait BlockStorer: Send + Sync {
@@ -13,36 +12,36 @@ pub trait BlockStorer: Send + Sync {
     async fn get(&self, hash: &str) -> Result<Option<Block>, BlockStorageError>;
 }
 
-#[derive(Debug)]
-pub struct MemoryBlockStore {
-    blocks: Arc<RwLock<HashMap<String, Block>>>,
+pub struct BlockDB {
+    db: Db,
 }
 
-impl MemoryBlockStore {
-    pub fn new() -> Self {
-        MemoryBlockStore {
-            blocks: Arc::new(RwLock::new(HashMap::new())),
+impl BlockDB {
+    pub fn new(db: Db) -> Self {
+        BlockDB {
+            db,
         }
     }
 }
 
 #[async_trait]
-impl BlockStorer for MemoryBlockStore {
+impl BlockStorer for BlockDB {
     async fn put(&self, block: &Block) -> Result<(), BlockStorageError> {
-        let mut blocks = self.blocks.write().map_err(|_| BlockStorageError::WriteLockError)?;
         let hash = hash_header_by_block(block)?;
-        let hash_str = encode(hash); 
-        blocks.insert(hash_str, block.clone());
+        let hash_str = encode(hash);
+        let mut block_data = vec![];
+        block.encode(&mut block_data).map_err(|_| BlockStorageError::SerializationError)?;
+        self.db.insert(hash_str, block_data).map_err(|_| BlockStorageError::WriteError)?;
         Ok(())
     }
     async fn get(&self, hash: &str) -> Result<Option<Block>, BlockStorageError> {
-        let blocks = self.blocks.read().map_err(|_| BlockStorageError::ReadLockError)?;
-        Ok(blocks.get(hash).cloned())  
-    }
-}
-
-impl Default for MemoryBlockStore {
-    fn default() -> Self {
-        Self::new()
+        match self.db.get(hash) {
+            Ok(Some(data)) => {
+                let block = Block::decode(&*data).map_err(|_| BlockStorageError::DeserializationError)?;
+                Ok(Some(block))
+            },
+            Ok(None) => Ok(None),
+            Err(_) => Err(BlockStorageError::ReadError),
+        }
     }
 }
