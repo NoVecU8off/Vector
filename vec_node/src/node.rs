@@ -171,14 +171,34 @@ impl NodeService {
     }
 
     async fn synchronize_clock_with(&self, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+        // current time at the moment of request
         let t1 = self.clock.load(Ordering::SeqCst) as i64;
+
+        // making request
         let req =  Request::new(DelayRequest { } );
         let res = client.handle_time_req(req).await?;
-        let recieved_time = res.into_inner();
-        let t2 = recieved_time.msg_time;
+
+        // the time response of recipient at the moment he processed the request
+        let t2 = res.into_inner().msg_time; 
+
+        // current time on recieve of response
         let t3 = self.clock.load(Ordering::SeqCst) as i64;
-        let offset = ((t1 - t2) + (t3 - t2)) / 2;
-        self.clock.fetch_add(offset as u64, Ordering::SeqCst);
+
+        // time needed for signal to travel 
+        let travel_delay = t3 - t1;
+
+        let average_delay = travel_delay / 2;
+
+        let relative_offset = t2 - t1;
+
+        // offset
+        let offset = relative_offset - average_delay;
+
+        if relative_offset >= 0 {
+            // adjustment of the lockal clock
+            self.clock.fetch_add(offset as u64, Ordering::SeqCst);
+        }
+        
         Ok(())
     }
 
