@@ -16,19 +16,17 @@ service Node {
 
     rpc HandleHeartbeat(Confirmed) returns (Confirmed);
 
+    rpc HandleTimeReq(DelayRequest) returns (DelayResponse);
+
 }
 
 message Confirmed { }
 
-message TimeRequest {
+message DelayRequest { }
 
-    int64 msg_sent_time = 1;
+message DelayResponse {
 
-}
-
-message TimeResponse {
-
-    int64 msg_recieved_time = 1;
+    int64 msg_time = 1;
 
 }
 
@@ -58,7 +56,7 @@ message Version {
 
     int32 msg_height = 3;
 
-    string msg_listen_address = 4;
+    string msg_ip = 4;
 
     repeated string msg_peer_list = 5;
     
