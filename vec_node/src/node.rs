@@ -77,29 +77,6 @@ impl Node for NodeService {
         Ok(Response::new(block_batch))
     }
 
-    async fn handle_transaction(
-        &self,
-        request: Request<Transaction>,
-    ) -> Result<Response<Confirmed>, Status> {
-        let transaction = request.into_inner();
-        let hash = hash_transaction(&transaction).await;
-        let hash_str = hex::encode(&hash);
-        let cfg_addr = {
-            let server_config = self.config.read().await;
-            server_config.cfg_ip.clone()
-        };
-        if !self.mempool.contains_transaction(&transaction).await && self.mempool.add(transaction.clone()).await {
-                info!(self.logger, "{}: received and added transaction: {}", cfg_addr, hash_str);
-                let self_clone = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = self_clone.broadcast_tx(transaction).await {
-                        error!(self_clone.logger, "Error broadcasting transaction: {}", e);
-                    }
-                });
-            }
-        Ok(Response::new(Confirmed {}))
-    }
-
     async fn handle_block(
         &self,
         request: Request<LeaderBlock>,
@@ -155,6 +132,46 @@ impl Node for NodeService {
         let time = self.clock.get_time();
         let response = DelayResponse { msg_time : time };
         Ok(Response::new(response))
+    }
+
+    async fn handle_tx_push(
+        &self,
+        request: Request<PushTxRequest>,
+    ) -> Result<Response<Confirmed>, Status> {
+        let push_request = request.into_inner();
+        let sender_ip = push_request.msg_my_ip;
+        let transaction_hash = push_request.msg_transaction_hash;
+        if !self.mempool.has_hash(&transaction_hash) {
+            match self.pull_transaction_from(&sender_ip, &transaction_hash).await {
+                Ok(_) => {
+                    Ok(Response::new(Confirmed {}))
+                }
+                Err(e) => {
+                    error!(self.logger, "Failed to make transaction pull: {:?}", e);
+                    Err(Status::internal("Failed to make transaction pull"))
+                }
+            }
+        } else {
+            Ok(Response::new(Confirmed {}))
+        }
+    }
+
+    async fn handle_tx_pull(
+        &self,
+        request: Request<PullTxRequest>,
+    ) -> Result<Response<Transaction>, Status> {
+        let pull_request = request.into_inner();
+        let sender_ip = pull_request.msg_my_ip;
+        let transaction_hash = pull_request.msg_transaction_hash;
+        if !self.mempool.has_hash(&transaction_hash) {
+            if let Some(transaction) = self.mempool.get_by_hash(&transaction_hash) {
+                Ok(Response::new(transaction))
+            } else {
+                Err(Status::internal("Requested transaction not found"))
+            }
+        } else {
+            Err(Status::internal("Requested transaction not found"))
+        }
     }
 }
 
@@ -267,53 +284,13 @@ impl NodeService {
         let res = client.handle_time_req(req).await?;
         let t2 = res.into_inner().msg_time; 
         let t3 = self.clock.get_time();
-        let travel_delay = t3 - t1;
+        let travel_delay = (t3 - t1) as i64;
         let average_delay = travel_delay / 2;
-        let relative_offset = t2 - t1;
+        let relative_offset = (t2 - t1) as i64;
         let offset = relative_offset - average_delay;
         if offset >= 0 {
             self.clock.add_to_time(offset as u64);
         }
-        Ok(())
-    }
-
-    pub async fn broadcast_tx(&self, transaction: Transaction) -> Result<(), NodeServiceError> {
-        let peers_data = self.peers
-                    .iter()
-                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-                    .collect::<Vec<_>>();
-        let mut tasks = Vec::new();
-        for (ip, peer_client) in peers_data {
-            let transaction_clone = transaction.clone();
-            let self_clone = self.clone();
-            let cfg_ip = {
-                let server_config = self_clone.config.read().await;
-                server_config.cfg_ip.to_string()
-            };
-            let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
-                let req = Request::new(transaction_clone.clone());
-                if ip != cfg_ip {
-                    if let Err(e) = peer_client_lock.handle_transaction(req).await {
-                        error!(
-                            self_clone.logger, 
-                            "{}: Broadcast error: {:?}", 
-                            cfg_ip, 
-                            e
-                        );
-                    } else {
-                        info!(
-                            self_clone.logger, 
-                            "{}: Broadcasted tx to: {:?}", 
-                            cfg_ip, 
-                            ip
-                        );
-                    }
-                }
-            });
-            tasks.push(task);
-        }
-        try_join_all(tasks).await.map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
         Ok(())
     }
 
@@ -460,9 +437,71 @@ impl NodeService {
             msg_timestamp: self.clock.get_time(),
         };
         info!(self.logger, "{}: Created transaction with {} to {:?}", cfg_addr, amount, to);
-        self.broadcast_tx(tx).await?;
+        let hash_string = hex::encode(hash_transaction(&tx).await);
+        self.broadcast_tx_push_request(hash_string).await?;
         Ok(())
-    }    
+    }
+
+    pub async fn broadcast_tx_push_request(&self, hash_string: String) -> Result<(), NodeServiceError> {
+        let peers_data = self.peers
+                    .iter()
+                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+                    .collect::<Vec<_>>();
+        let mut tasks = Vec::new();
+        for (ip, peer_client) in peers_data {
+            let hash_clone = hash_string.clone();
+            let self_clone = self.clone();
+            let cfg_ip = {
+                let server_config = self_clone.config.read().await;
+                server_config.cfg_ip.to_string()
+            };
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                let message = PushTxRequest {
+                    msg_transaction_hash: hash_clone,
+                    msg_my_ip: cfg_ip.clone(),
+                };
+                if let Err(e) = peer_client_lock.handle_tx_push(message).await {
+                    error!(
+                        self_clone.logger, 
+                        "{}: Broadcast error: {:?}", 
+                        cfg_ip, 
+                        e
+                    );
+                } else {
+                    info!(
+                        self_clone.logger, 
+                        "{}: Broadcasted tx to: {:?}", 
+                        cfg_ip, 
+                        ip
+                    );
+                }
+            });
+            tasks.push(task);
+        }
+        try_join_all(tasks).await.map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
+        Ok(())
+    }
+
+    pub async fn pull_transaction_from(&self, sender_ip: &str, transaction_hash: &str) -> Result<(), NodeServiceError> {
+        if let Some(client_arc_mutex) = self.peers.get(sender_ip) {
+            let client_arc = client_arc_mutex.clone();
+            let mut client = client_arc.lock().await;
+            let my_ip = {
+                let server_config = self.config.read().await;
+                server_config.cfg_ip.to_string()
+            };
+            let message = PullTxRequest {
+                msg_transaction_hash: transaction_hash.to_string(),
+                msg_my_ip: my_ip.to_string(),
+            };
+            let response = client.handle_tx_pull(message).await?;
+            let transaction = response.into_inner();
+            self.mempool.add(transaction).await;
+            self.broadcast_tx_push_request(transaction_hash.to_string()).await?;
+        }
+        Ok(())
+    }
 
     pub async fn process_incoming_block_batch(&self, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {

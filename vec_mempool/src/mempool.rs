@@ -67,6 +67,37 @@ impl Mempool {
     pub async fn contains_transaction(&self, transaction: &Transaction) -> bool {
         self.has(transaction).await
     }
+
+    pub fn has_hash(&self, hash: &str) -> bool {
+        self.transactions.contains_key(hash)
+    }
+
+    pub async fn add_with_hash(&self, hash: String, tx: Transaction) -> bool {
+        if self.has_hash(&hash) {
+            return false;
+        }
+        self.transactions.insert(hash.clone(), tx);
+        info!(self.logger, "Transaction added to mempool: {}", hash);
+        true
+    }
+
+    pub fn remove_with_hash(&self, hash: &str) -> bool {
+        if self.transactions.contains_key(hash) {
+            self.transactions.remove(hash);
+            info!(self.logger, "Transaction removed from mempool: {}", hash);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn contains_hash(&self, hash: &str) -> bool {
+        self.has_hash(hash)
+    }
+
+    pub fn get_by_hash(&self, hash: &str) -> Option<Transaction> {
+        self.transactions.get(hash).map(|entry| entry.value().clone())
+    }
 }
 
 impl Default for Mempool {

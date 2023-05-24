@@ -6,8 +6,6 @@ service Node {
 
     rpc Handshake(Version) returns (Version);
 
-    rpc HandleTransaction(Transaction) returns (Confirmed);
-
     rpc HandleBlock(LeaderBlock) returns (Confirmed);
 
     rpc PushState(LocalState) returns (BlockBatch);
@@ -18,6 +16,10 @@ service Node {
 
     rpc HandleTimeReq(DelayRequest) returns (DelayResponse);
 
+    rpc HandleTxPush(PushTxRequest) returns (Confirmed);
+
+    rpc HandleTxPull(PullTxRequest) returns (Transaction);
+
 }
 
 message Confirmed { }
@@ -27,6 +29,22 @@ message DelayRequest { }
 message DelayResponse {
 
     uint64 msg_time = 1;
+
+}
+
+message PushTxRequest {
+
+    string msg_transaction_hash = 1;
+
+    string msg_my_ip = 2;
+
+}
+
+message PullTxRequest {
+
+    string msg_transaction_hash = 1;
+
+    string msg_my_ip = 2;
 
 }
 
