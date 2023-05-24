@@ -1,5 +1,5 @@
-use vec_store::block_store::{BlockStorer};
-use vec_store::utxo_store::*;
+use vec_storage::block_db::{BlockStorer};
+use vec_storage::utxo_db::*;
 use vec_cryptography::cryptography::{NodeKeypair, Signature};
 use vec_proto::messages::{Header, Block, Transaction, TransactionOutput, TransactionInput};
 use vec_block::block::*;

@@ -2494,7 +2494,7 @@ dependencies = [
  "vec_errors",
  "vec_merkle",
  "vec_proto",
- "vec_store",
+ "vec_storage",
  "vec_transaction",
 ]
 
@@ -2513,7 +2513,7 @@ dependencies = [
  "vec_node",
  "vec_proto",
  "vec_server",
- "vec_store",
+ "vec_storage",
  "vec_transaction",
 ]
 
@@ -2611,7 +2611,7 @@ dependencies = [
  "vec_merkle",
  "vec_proto",
  "vec_server",
- "vec_store",
+ "vec_storage",
  "vec_transaction",
  "webpki",
  "webpki-roots",
@@ -2664,7 +2664,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vec_store"
+name = "vec_storage"
 version = "0.1.0"
 dependencies = [
  "async-trait",

@@ -1,5 +1,5 @@
 [package]
-name = "vec_store"
+name = "vec_storage"
 version = "0.1.0"
 edition = "2021"
 

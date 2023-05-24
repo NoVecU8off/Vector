@@ -1,7 +1,7 @@
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_chain::chain::Chain;
-use vec_store::{block_store::{BlockDB, BlockStorer}, utxo_store::*};
+use vec_storage::{block_db::{BlockDB, BlockStorer}, utxo_db::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
@@ -374,19 +374,19 @@ impl NodeService {
         peers.values().map(|(_, version)| version.msg_ip.clone()).collect()
     }
 
-    pub async fn dial_remote_node(&self, addr: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
-        let cfg_addr = {
+    pub async fn dial_remote_node(&self, ip: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
+        let cfg_ip = {
             let server_config = self.config.read().await;
             server_config.cfg_ip.to_string()
         };
-        let mut c = make_node_client(addr)
+        let mut c = make_node_client(ip)
             .await?;
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
             .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
-        info!(self.logger, "{}: Dialed remote node: {}", cfg_addr, addr);
+        info!(self.logger, "{}: Dialed remote node: {}", cfg_ip, ip);
         Ok((c, v))
     }
 
