@@ -161,7 +161,6 @@ impl Node for NodeService {
         request: Request<PullTxRequest>,
     ) -> Result<Response<Transaction>, Status> {
         let pull_request = request.into_inner();
-        let sender_ip = pull_request.msg_my_ip;
         let transaction_hash = pull_request.msg_transaction_hash;
         if !self.mempool.has_hash(&transaction_hash) {
             if let Some(transaction) = self.mempool.get_by_hash(&transaction_hash) {
@@ -438,11 +437,11 @@ impl NodeService {
         };
         info!(self.logger, "{}: Created transaction with {} to {:?}", cfg_addr, amount, to);
         let hash_string = hex::encode(hash_transaction(&tx).await);
-        self.broadcast_tx_push_request(hash_string).await?;
+        self.broadcast_tx_hash(hash_string).await?;
         Ok(())
     }
 
-    pub async fn broadcast_tx_push_request(&self, hash_string: String) -> Result<(), NodeServiceError> {
+    pub async fn broadcast_tx_hash(&self, hash_string: String) -> Result<(), NodeServiceError> {
         let peers_data = self.peers
                     .iter()
                     .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
@@ -471,7 +470,7 @@ impl NodeService {
                 } else {
                     info!(
                         self_clone.logger, 
-                        "{}: Broadcasted tx to: {:?}", 
+                        "{}: Broadcasted hash to: {:?}", 
                         cfg_ip, 
                         ip
                     );
@@ -497,8 +496,9 @@ impl NodeService {
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
-            self.mempool.add(transaction).await;
-            self.broadcast_tx_push_request(transaction_hash.to_string()).await?;
+            self.mempool.add(transaction.clone()).await;
+            self.process_transaction(&transaction).await?;
+            self.broadcast_tx_hash(transaction_hash.to_string()).await?;
         }
         Ok(())
     }

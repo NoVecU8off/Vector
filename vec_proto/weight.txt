@@ -1,0 +1,47 @@
+TransactionInput (for each):
+
+msg_previous_tx_hash: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_previous_out_index: 1 byte (field key) + 5 bytes (value) = 6 bytes (note: although uint32 has 4 bytes, in protobuf it is encoded as varint which can take 5 bytes for the maximum uint32 value)
+msg_public_key: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_signature: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 64 bytes (value) = 67 bytes
+Total size of one TransactionInput is 35 + 6 + 35 + 67 = 143 bytes.
+
+For 5 inputs, the total size will be 5 * 143 = 715 bytes.
+
+TransactionOutput (for each):
+
+msg_amount: 1 byte (field key) + 10 bytes (value) = 11 bytes
+msg_to: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 16 bytes (value for IPv6) = 19 bytes
+Total size of one TransactionOutput is 11 + 19 = 30 bytes.
+
+For 10 outputs, the total size will be 10 * 30 = 300 bytes.
+
+Transaction:
+
+msg_inputs: 2 bytes (field key per TransactionInput) + total size of TransactionInputs = 2 * 5 + 715 = 725 bytes
+msg_outputs: 2 bytes (field key per TransactionOutput) + total size of TransactionOutputs = 2 * 10 + 300 = 320 bytes
+msg_timestamp: 1 byte (field key) + 10 bytes (value) = 11 bytes
+Total size of Transaction is 725 + 320 + 11 = 1056 bytes.
+
+
+Header:
+
+msg_version: 1 byte (field key) + 5 bytes (value) = 6 bytes
+msg_height: 1 byte (field key) + 5 bytes (value) = 6 bytes
+msg_previous_hash: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_root_hash: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_timestamp: 1 byte (field key) + 10 bytes (value) = 11 bytes
+Total size of Header is 6 + 6 + 35 + 35 + 11 = 93 bytes.
+
+Transaction:
+
+From our previous calculation, each Transaction message is 1056 bytes.
+
+Block:
+
+msg_header: 1 byte (field key) + total size of Header = 1 + 93 = 94 bytes
+msg_transactions: 3 bytes (field key per Transaction) + total size of Transactions = 3 * 5000 + 1056 * 5000 = 5295000 bytes
+msg_public_key: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_signature: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 64 bytes (value) = 67 bytes
+Total size of Block is 94 + 5295000 + 35 + 67 = 5295196 bytes, which is approximately 5.05 megabytes.
+
