@@ -16,6 +16,10 @@ service Node {
 
     rpc HandleTimeReq(DelayRequest) returns (DelayResponse);
 
+    rpc HandleBlockPush(PushBlockRequest) returns (Confirmed);
+
+    rpc HandleBlockPull(PullBlockRequest) returns (Block);
+
     rpc HandleTxPush(PushTxRequest) returns (Confirmed);
 
     rpc HandleTxPull(PullTxRequest) returns (Transaction);
@@ -29,6 +33,22 @@ message DelayRequest { }
 message DelayResponse {
 
     uint64 msg_time = 1;
+
+}
+
+message PushBlockRequest {
+
+    string msg_block_hash = 1;
+
+    string msg_my_ip = 2;
+
+}
+
+message PullBlockRequest {
+
+    string msg_block_hash = 1;
+
+    string msg_my_ip = 2;
 
 }
 

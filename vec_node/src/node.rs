@@ -1,5 +1,7 @@
 use crate::stake_pool::StakePool;
 use crate::clock::Clock;
+use vec_merkle::merkle::MerkleTree;
+use vec_block::block::sign_block;
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_chain::chain::Chain;
@@ -15,6 +17,7 @@ use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use tokio::time::Duration;
 use dashmap::DashMap;
+use prost::Message;
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -170,6 +173,57 @@ impl Node for NodeService {
             }
         } else {
             Err(Status::internal("Requested transaction not found"))
+        }
+    }
+
+    async fn handle_block_push(
+        &self,
+        request: Request<PushBlockRequest>,
+    ) -> Result<Response<Confirmed>, Status> {
+        let push_request = request.into_inner();
+        let sender_ip = push_request.msg_my_ip;
+        let block_hash = push_request.msg_block_hash;
+        let read_lock = self.blockchain.read().await;
+        match read_lock.blocks.get(&block_hash).await {
+            Ok(Some(_)) => {
+                Ok(Response::new(Confirmed {}))
+            },
+            Ok(None) => {
+                match self.pull_block_from(&sender_ip, &block_hash).await {
+                    Ok(_) => {
+                        Ok(Response::new(Confirmed {}))
+                    },
+                    Err(e) => {
+                        error!(self.logger, "Failed to make block pull: {:?}", e);
+                        Err(Status::internal("Failed to make block pull"))
+                    }
+                }
+            },
+            Err(e) => {
+                error!(self.logger, "Failed to check if block exists: {:?}", e);
+                Err(Status::internal("Failed to check if block exists"))
+            }
+        }
+    }
+
+    async fn handle_block_pull(
+        &self,
+        request: Request<PullBlockRequest>,
+    ) -> Result<Response<Block>, Status> {
+        let pull_request = request.into_inner();
+        let block_hash = pull_request.msg_block_hash;
+        let read_lock = self.blockchain.read().await;
+        match read_lock.blocks.get(&block_hash).await {
+            Ok(Some(block)) => {
+                Ok(Response::new(block))
+            },
+            Ok(None) => {
+                Err(Status::not_found("Block not found"))
+            },
+            Err(e) => {
+                error!(self.logger, "Failed to get block: {:?}", e);
+                Err(Status::internal("Failed to get block"))
+            }
         }
     }
 }
@@ -386,6 +440,86 @@ impl NodeService {
         }
     }
 
+    pub async fn make_block(&self) -> Result<Block, NodeServiceError> {
+        let cfg_keypair = {
+            let server_config = self.config.read().await;
+            server_config.cfg_keypair.clone()
+        };
+        let blockchain = self.blockchain.write().await;
+        let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
+        let msg_height = (blockchain.chain_height() + 1) as i32;
+        let keypair = &cfg_keypair;
+        let public_key = keypair.public.to_bytes().to_vec();
+        let transactions = self.mempool.get_transactions();
+        let transaction_data: Vec<Vec<u8>> = transactions
+            .iter()
+            .map(|transaction| {
+                let mut bytes = Vec::new();
+                transaction.encode(&mut bytes).unwrap();
+                bytes
+            })
+            .collect();
+        let merkle_tree = MerkleTree::from_list(&transaction_data);
+        let merkle_root = merkle_tree.get_hash();
+        let header = Header {
+            msg_version: 1,
+            msg_height,
+            msg_previous_hash,
+            msg_root_hash: merkle_root,
+            msg_timestamp: self.clock.get_time() as i64,
+        };
+        let mut block = Block {
+            msg_header: Some(header),
+            msg_transactions: transactions,
+            msg_public_key: public_key,
+            msg_signature: vec![],
+        };
+        let signature = sign_block(&block, keypair).await?;
+        block.msg_signature = signature.to_vec();
+        Ok(block)
+    }
+
+    pub async fn broadcast_block_hash(&self, hash_string: String) -> Result<(), NodeServiceError> {
+        let peers_data = self.peers
+                    .iter()
+                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+                    .collect::<Vec<_>>();
+        let mut tasks = Vec::new();
+        for (ip, peer_client) in peers_data {
+            let hash_clone = hash_string.clone();
+            let self_clone = self.clone();
+            let cfg_ip = {
+                let server_config = self_clone.config.read().await;
+                server_config.cfg_ip.to_string()
+            };
+            let task = tokio::spawn(async move {
+                let mut peer_client_lock = peer_client.lock().await;
+                let message = PushBlockRequest {
+                    msg_block_hash: hash_clone,
+                    msg_my_ip: cfg_ip.clone(),
+                };
+                if let Err(e) = peer_client_lock.handle_block_push(message).await {
+                    error!(
+                        self_clone.logger, 
+                        "{}: Broadcast error: {:?}", 
+                        cfg_ip, 
+                        e
+                    );
+                } else {
+                    info!(
+                        self_clone.logger, 
+                        "{}: Broadcasted hash to: {:?}", 
+                        cfg_ip, 
+                        ip
+                    );
+                }
+            });
+            tasks.push(task);
+        }
+        try_join_all(tasks).await.map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
+        Ok(())
+    }
+
     pub async fn make_tx(&self, to: &Vec<u8>, amount: i64) -> Result<(), NodeServiceError> {
         let (cfg_keypair, cfg_addr) = {
             let server_config = self.config.read().await;
@@ -499,6 +633,26 @@ impl NodeService {
             self.mempool.add(transaction.clone()).await;
             self.process_transaction(&transaction).await?;
             self.broadcast_tx_hash(transaction_hash.to_string()).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn pull_block_from(&self, sender_ip: &str, block_hash: &str) -> Result<(), NodeServiceError> {
+        if let Some(client_arc_mutex) = self.peers.get(sender_ip) {
+            let client_arc = client_arc_mutex.clone();
+            let mut client = client_arc.lock().await;
+            let my_ip = {
+                let server_config = self.config.read().await;
+                server_config.cfg_ip.to_string()
+            };
+            let message = PullBlockRequest {
+                msg_block_hash: block_hash.to_string(),
+                msg_my_ip: my_ip.to_string(),
+            };
+            let response = client.handle_block_pull(message).await?;
+            let block = response.into_inner();
+            self.process_incoming_block(block).await?;
+            self.broadcast_block_hash(block_hash.to_string()).await?;
         }
         Ok(())
     }
