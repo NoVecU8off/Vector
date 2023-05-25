@@ -142,7 +142,7 @@ impl Node for NodeService {
         request: Request<PushTxRequest>,
     ) -> Result<Response<Confirmed>, Status> {
         let push_request = request.into_inner();
-        let sender_ip = push_request.msg_my_ip;
+        let sender_ip = push_request.msg_ip;
         let transaction_hash = push_request.msg_transaction_hash;
         if !self.mempool.has_hash(&transaction_hash) {
             match self.pull_transaction_from(&sender_ip, &transaction_hash).await {
@@ -181,7 +181,7 @@ impl Node for NodeService {
         request: Request<PushBlockRequest>,
     ) -> Result<Response<Confirmed>, Status> {
         let push_request = request.into_inner();
-        let sender_ip = push_request.msg_my_ip;
+        let sender_ip = push_request.msg_ip;
         let block_hash = push_request.msg_block_hash;
         let read_lock = self.blockchain.read().await;
         match read_lock.blocks.get(&block_hash).await {
@@ -496,7 +496,7 @@ impl NodeService {
                 let mut peer_client_lock = peer_client.lock().await;
                 let message = PushBlockRequest {
                     msg_block_hash: hash_clone,
-                    msg_my_ip: cfg_ip.clone(),
+                    msg_ip: cfg_ip.clone(),
                 };
                 if let Err(e) = peer_client_lock.handle_block_push(message).await {
                     error!(
@@ -592,7 +592,7 @@ impl NodeService {
                 let mut peer_client_lock = peer_client.lock().await;
                 let message = PushTxRequest {
                     msg_transaction_hash: hash_clone,
-                    msg_my_ip: cfg_ip.clone(),
+                    msg_ip: cfg_ip.clone(),
                 };
                 if let Err(e) = peer_client_lock.handle_tx_push(message).await {
                     error!(
@@ -626,7 +626,7 @@ impl NodeService {
             };
             let message = PullTxRequest {
                 msg_transaction_hash: transaction_hash.to_string(),
-                msg_my_ip: my_ip.to_string(),
+                msg_ip: my_ip.to_string(),
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
@@ -647,7 +647,7 @@ impl NodeService {
             };
             let message = PullBlockRequest {
                 msg_block_hash: block_hash.to_string(),
-                msg_my_ip: my_ip.to_string(),
+                msg_ip: my_ip.to_string(),
             };
             let response = client.handle_block_pull(message).await?;
             let block = response.into_inner();
