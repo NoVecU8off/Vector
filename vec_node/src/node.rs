@@ -11,7 +11,7 @@ use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
 use vec_errors::errors::*;
 use std::{sync::Arc, net::SocketAddr};
-use tonic::{transport::{Server, Channel, ClientTlsConfig, ServerTlsConfig, Identity, Certificate}, Status, Request, Response};
+use tonic::{transport::{Server, Channel}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
@@ -280,17 +280,7 @@ impl NodeService {
     }
     
     pub async fn setup_server(&self, node_service: NodeService, cfg_ip: SocketAddr) -> Result<(), NodeServiceError> {
-        let (pem_certificate, pem_key, root_crt) = {
-            let server_config = self.config.read().await;
-            (server_config.cfg_pem_certificate.clone(), server_config.cfg_pem_key.clone(), server_config.cfg_root_crt.clone())
-        };
-        let server_tls_config = ServerTlsConfig::new()
-            .identity(Identity::from_pem(&pem_certificate, &pem_key))
-            .client_ca_root(Certificate::from_pem(&root_crt))
-            .client_auth_optional(true);
         Server::builder()
-            .tls_config(server_tls_config)?
-            .accept_http1(true)
             .add_service(NodeServer::new(node_service))
             .serve(cfg_ip)
             .await
@@ -821,15 +811,8 @@ impl NodeService {
 }
 
 pub async fn make_node_client(ip: &str) -> Result<NodeClient<Channel>, NodeServiceError> {
-    let (cli_pem_certificate, cli_pem_key, cli_root) = read_client_certs_and_keys().await.map_err(|_| NodeServiceError::FailedToReadCertificates)?;
-    let uri = format!("https://{}", ip).parse().map_err(NodeServiceError::UriParseError)?;
-    let client_tls_config = ClientTlsConfig::new()
-        .domain_name("cryptotron.test.com")
-        .ca_certificate(Certificate::from_pem(cli_root))
-        .identity(Identity::from_pem(cli_pem_certificate, cli_pem_key));
+    let uri = format!("http://{}", ip).parse().map_err(NodeServiceError::UriParseError)?;
     let channel = Channel::builder(uri)
-        .tls_config(client_tls_config)
-        .map_err(NodeServiceError::TonicTransportError)?
         .connect()
         .await
         .map_err(NodeServiceError::TonicTransportError)?;

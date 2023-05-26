@@ -5,7 +5,6 @@ use serde::{Serialize, Deserialize};
 use bincode::{serialize, deserialize};
 use tokio::io::{AsyncWriteExt, AsyncReadExt};
 use std::path::PathBuf;
-use std::fs;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -13,53 +12,36 @@ pub struct ServerConfig {
     pub cfg_ip: String,
     pub cfg_keypair: NodeKeypair,
     pub cfg_height: u64,
-    pub cfg_pem_certificate: Vec<u8>,
-    pub cfg_pem_key: Vec<u8>,
-    pub cfg_root_crt: Vec<u8>,
 }
 
 impl ServerConfig {
     pub async fn default_v() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
             cfg_keypair: NodeKeypair::generate_keypair(),
             cfg_height: 0,
-            cfg_pem_certificate,
-            cfg_pem_key,
-            cfg_root_crt,
         }
     }
 
     pub async fn default_n() -> Self {
-        let (cfg_pem_certificate, cfg_pem_key, cfg_root_crt) = read_server_certs_and_keys().unwrap();
         ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
             cfg_keypair: NodeKeypair::generate_keypair(),
             cfg_height: 0,
-            cfg_pem_certificate,
-            cfg_pem_key,
-            cfg_root_crt,
         }
     }
 
     pub async fn new(
         version: &str,
         keypair: NodeKeypair,
-        certificate_pem: Vec<u8>,
-        key_pem: Vec<u8>,
-        root_pem: Vec<u8>,
     ) -> Self {
         ServerConfig {
             cfg_version: version.to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
             cfg_keypair: keypair,
             cfg_height: 0,
-            cfg_pem_certificate: certificate_pem,
-            cfg_pem_key: key_pem,
-            cfg_root_crt: root_pem,
         }
     }
 }
@@ -79,26 +61,6 @@ async fn load_config(config_path: PathBuf) -> Result<ServerConfig, ServerConfigE
     file.read_to_end(&mut serialized_data).await.map_err(ServerConfigError::FailedToReadFromConfigFile)?;
     let config: ServerConfig = deserialize(&serialized_data).map_err(ServerConfigError::FailedToDeserializeConfig)?;
     Ok(config)
-}
-
-pub fn read_server_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), ServerConfigError> {
-    let cert_file_path = "./vec_server/certs/server.crt";
-    let key_file_path = "./vec_server/certs/server.key";
-    let root_file_path = "./vec_server/certs/root.crt";
-    let cert_pem = fs::read(cert_file_path).map_err(ServerConfigError::FailedToReadServerCert)?;
-    let key_pem = fs::read(key_file_path).map_err(ServerConfigError::FailedToReadServerKey)?;
-    let root_pem = fs::read(root_file_path).map_err(ServerConfigError::FailedToReadServerRootCert)?;
-    Ok((cert_pem, key_pem, root_pem))
-}
-
-pub async fn read_client_certs_and_keys() -> Result<(Vec<u8>, Vec<u8>, Vec<u8>), ServerConfigError> {
-    let cert_file_path = "./vec_server/certs/client.crt";
-    let key_file_path = "./vec_server/certs/client.key";
-    let root_file_path = "./vec_server/certs/root.crt";
-    let cert_pem = fs::read(cert_file_path).map_err(ServerConfigError::FailedToReadClientCert)?;
-    let key_pem = fs::read(key_file_path).map_err(ServerConfigError::FailedToReadClientKey)?;
-    let root_pem = fs::read(root_file_path).map_err(ServerConfigError::FailedToReadClientRootCert)?;
-    Ok((cert_pem, key_pem, root_pem))
 }
 
 async fn get_ip() -> Result<String, ServerConfigError> {
