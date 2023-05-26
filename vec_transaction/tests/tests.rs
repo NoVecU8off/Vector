@@ -54,10 +54,10 @@ fn create_random_transaction() -> Transaction {
         msg_previous_tx_hash: (0..64).map(|_| rand::random::<u8>()).collect(),
         msg_previous_out_index: rand::random::<u32>(),
         msg_pk: (0..32).map(|_| rand::random::<u8>()).collect(),
-        msg_signature: vec![],
+        msg_sig: vec![],
     };
     let output = TransactionOutput {
-        msg_amount: rand::random::<i64>(),
+        msg_amount: rand::random::<u64>(),
         msg_to: (0..32).map(|_| rand::random::<u8>()).collect(),
     };
     Transaction {
@@ -84,7 +84,7 @@ async fn test_hash_transaction_without_signature() {
     let hash_before_signing = hash_transaction_without_signature(&transaction);
 
     // Add a random signature
-    transaction.msg_inputs[0].msg_signature = (0..64).map(|_| rand::random::<u8>()).collect();
+    transaction.msg_inputs[0].msg_sig = (0..64).map(|_| rand::random::<u8>()).collect();
 
     let hash_after_signing = hash_transaction_without_signature(&transaction);
 
@@ -108,7 +108,7 @@ async fn test_verify_transaction_two() {
     let mut transaction = create_random_transaction();
 
     let signature = sign_transaction(&keypair, &transaction).await;
-    transaction.msg_inputs[0].msg_signature = signature.signature.to_bytes().to_vec();
+    transaction.msg_inputs[0].msg_sig = signature.signature.to_bytes().to_vec();
 
     assert!(verify_transaction(&transaction, &[keypair.pk]));
 }

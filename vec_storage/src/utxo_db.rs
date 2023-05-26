@@ -7,7 +7,7 @@ use serde::{Serialize, Deserialize};
 pub struct UTXO {
     pub transaction_hash: String,
     pub output_index: u32,
-    pub amount: i64,
+    pub amount: u64,
     pub pk: Vec<u8>,
 }
 
@@ -17,7 +17,7 @@ pub trait UTXOStorer: Send + Sync {
     async fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, UTXOStorageError>;
     async fn remove(&self, key: &(String, u32)) -> Result<(), UTXOStorageError>;
     async fn find_by_pk(&self, pk: &[u8]) -> Result<Vec<UTXO>, UTXOStorageError>;
-    async fn collect_minimum_utxos(&self, pk: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError>;
+    async fn collect_minimum_utxos(&self, pk: &[u8], amount_needed: u64) -> Result<Vec<UTXO>, UTXOStorageError>;
 }
 
 pub struct UTXODB {
@@ -117,10 +117,10 @@ impl UTXOStorer for UTXODB {
         }
     }
 
-    async fn collect_minimum_utxos(&self, pk: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError> {
+    async fn collect_minimum_utxos(&self, pk: &[u8], amount_needed: u64) -> Result<Vec<UTXO>, UTXOStorageError> {
         let mut utxos = self.find_by_pk(pk).await?;
         utxos.sort_by_key(|utxo| utxo.amount);
-        let mut total = 0;
+        let mut total: u64 = 0;
         let mut collected_utxos = Vec::new();
         for utxo in utxos {
             total += utxo.amount;

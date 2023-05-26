@@ -92,7 +92,7 @@ message Version {
 
     bytes msg_pk = 2;
 
-    int32 msg_height = 3;
+    uint64 msg_height = 3;
 
     string msg_ip = 4;
 
@@ -116,7 +116,7 @@ message Block {
 
     bytes msg_pk = 3;
 
-    bytes msg_signature = 4;
+    bytes msg_sig = 4;
 
 }
 
@@ -128,15 +128,15 @@ message BlockBatch {
 
 message Header {
 
-    int32 msg_version = 1;
+    uint32 msg_version = 1;
 
-    int32 msg_height = 2;
+    uint32 msg_height = 2;
 
     bytes msg_previous_hash = 3;
 
     bytes msg_root_hash = 4;
     
-    int64 msg_timestamp = 5;
+    uint64 msg_timestamp = 5;
 
 }
 
@@ -158,13 +158,13 @@ message TransactionInput {
 
     bytes msg_pk = 3;
 
-    bytes msg_signature = 4;
+    bytes msg_sig = 4;
 
 }
 
 message TransactionOutput {
 
-    int64 msg_amount = 1;
+    uint64 msg_amount = 1;
 
     bytes msg_to = 2;
 

@@ -447,7 +447,7 @@ impl NodeService {
         };
         let blockchain = self.blockchain.read().await;
         let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
-        let msg_height = (blockchain.chain_height() + 1) as i32;
+        let msg_height = (blockchain.chain_height() + 1) as u32;
         let keypair = &cfg_keypair;
         let pk = keypair.pk.to_bytes().to_vec();
         let transactions = self.mempool.get_transactions();
@@ -466,16 +466,16 @@ impl NodeService {
             msg_height,
             msg_previous_hash,
             msg_root_hash: merkle_root,
-            msg_timestamp: self.clock.get_time() as i64,
+            msg_timestamp: self.clock.get_time(),
         };
         let mut block = Block {
             msg_header: Some(header),
             msg_transactions: transactions,
             msg_pk: pk,
-            msg_signature: vec![],
+            msg_sig: vec![],
         };
         let signature = sign_block(&block, keypair).await?;
-        block.msg_signature = signature.to_vec();
+        block.msg_sig = signature.to_vec();
         Ok(block)
     }
 
@@ -520,7 +520,7 @@ impl NodeService {
         Ok(())
     }
 
-    pub async fn make_tx(&self, to: &Vec<u8>, amount: i64) -> Result<(), NodeServiceError> {
+    pub async fn make_tx(&self, to: &Vec<u8>, amount: u64) -> Result<(), NodeServiceError> {
         let (cfg_keypair, cfg_addr) = {
             let server_config = self.config.read().await;
             (server_config.cfg_keypair.clone(),  server_config.cfg_ip.clone())
@@ -535,12 +535,12 @@ impl NodeService {
         let mut spent_utxo_keys = Vec::new();
         for utxo in &utxos {
             let msg_to_sign = format!("{}{}", utxo.transaction_hash, utxo.output_index);
-            let msg_signature = keypair.sign(msg_to_sign.as_bytes());
+            let msg_sig = keypair.sign(msg_to_sign.as_bytes());
             let input = TransactionInput {
                 msg_previous_tx_hash: utxo.transaction_hash.clone().into_bytes(),
                 msg_previous_out_index: utxo.output_index,
                 msg_pk: pk.clone(),
-                msg_signature: msg_signature.to_bytes().to_vec(),
+                msg_sig: msg_sig.to_bytes().to_vec(),
             };
             inputs.push(input);
             total_input += utxo.amount;

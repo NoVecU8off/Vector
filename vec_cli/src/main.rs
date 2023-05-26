@@ -79,8 +79,8 @@ async fn main() {
             let server_future = tokio::spawn(async move {
                 loop {
                     match rx.recv().await {
-                        Some(Command::SendTransaction { to, amount }) => {
-                            match nsv.make_tx(&to, amount).await {
+                        Some(Command::SendTransaction { to, amount}) => {
+                            match nsv.make_tx(&to, amount as u64).await {
                                 Ok(_) => {
                                     println!("Error broadcasting transaction");
                                 }

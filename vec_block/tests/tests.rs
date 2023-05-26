@@ -37,7 +37,7 @@ mod tests {
             msg_height: 0,
             msg_previous_hash: vec![0; 32],
             msg_root_hash: merkle_root,
-            msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
+            msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
         };
     
         let pk = vec![0; 32];
@@ -47,7 +47,7 @@ mod tests {
             msg_header: Some(header),
             msg_transactions: transactions,
             msg_pk: pk,
-            msg_signature: signature,
+            msg_sig: signature,
         }
     }
 
