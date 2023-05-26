@@ -90,7 +90,7 @@ message Version {
 
     string msg_version = 1;
 
-    bytes msg_public_key = 2;
+    bytes msg_pk = 2;
 
     int32 msg_height = 3;
 
@@ -114,7 +114,7 @@ message Block {
 
     repeated Transaction msg_transactions = 2; 
 
-    bytes msg_public_key = 3;
+    bytes msg_pk = 3;
 
     bytes msg_signature = 4;
 
@@ -156,7 +156,7 @@ message TransactionInput {
 
     uint32 msg_previous_out_index = 2;
 
-    bytes msg_public_key = 3;
+    bytes msg_pk = 3;
 
     bytes msg_signature = 4;
 

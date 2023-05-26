@@ -86,7 +86,7 @@ Specify Outputs: The user specifies the outputs of the transaction, which determ
 
 Create Scripts: For each input, the user creates a script that satisfies the conditions required to spend the associated UTXO. This script is known as the unlocking script or scriptSig.
 
-Sign the Transaction: The user signs the transaction using their private key, creating a digital signature. This signature proves the ownership of the UTXOs being spent.
+Sign the Transaction: The user signs the transaction using their sk key, creating a digital signature. This signature proves the ownership of the UTXOs being spent.
 
 Construct the Transaction: The user assembles all the inputs, outputs, and associated scripts, along with the digital signatures, to create a complete transaction.
 

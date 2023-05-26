@@ -88,7 +88,7 @@ pub enum ValidationError {
     TransactionCheckError,
     #[error("Transaction is missing input")]
     MissingInput,
-    #[error("Mismatched public key")]
+    #[error("Mismatched pk key")]
     PublicKeyMismatch,
 }
 
@@ -111,14 +111,14 @@ pub enum ChainOpsError {
     },
     #[error(transparent)]
     BlockOpsError(#[from] BlockOpsError),
-    #[error("Invalid public key in the block")]
+    #[error("Invalid pk key in the block")]
     InvalidPublicKey,
     #[error("Invalid previous block's hash, expected: {expected}, got: {got}")]
     InvalidPreviousBlockHash {
         expected: String,
         got: String
     },
-    #[error("Invalid public key in the transaction's input")]
+    #[error("Invalid pk key in the transaction's input")]
     InvalidPublicKeyInTransactionInput,
     #[error("Invalid transaction's signature")]
     InvalidTransactionSignature,

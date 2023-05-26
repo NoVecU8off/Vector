@@ -8,7 +8,7 @@ pub struct UTXO {
     pub transaction_hash: String,
     pub output_index: u32,
     pub amount: i64,
-    pub public: Vec<u8>,
+    pub pk: Vec<u8>,
 }
 
 #[async_trait]
@@ -16,8 +16,8 @@ pub trait UTXOStorer: Send + Sync {
     async fn put(&self, utxo: &UTXO) -> Result<(), UTXOStorageError>;
     async fn get(&self, transaction_hash: &str, output_index: u32) -> Result<Option<UTXO>, UTXOStorageError>;
     async fn remove(&self, key: &(String, u32)) -> Result<(), UTXOStorageError>;
-    async fn find_by_public_key(&self, public: &[u8]) -> Result<Vec<UTXO>, UTXOStorageError>;
-    async fn collect_minimum_utxos(&self, public: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError>;
+    async fn find_by_pk(&self, pk: &[u8]) -> Result<Vec<UTXO>, UTXOStorageError>;
+    async fn collect_minimum_utxos(&self, pk: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError>;
 }
 
 pub struct UTXODB {
@@ -41,17 +41,17 @@ impl UTXOStorer for UTXODB {
         let key = bincode::serialize(&key).map_err(|_| UTXOStorageError::SerializationError)?;
         let utxo_bin = bincode::serialize(utxo).map_err(|_| UTXOStorageError::SerializationError)?;
         self.db_th_oi.insert(key.clone(), utxo_bin).map_err(|_| UTXOStorageError::WriteError)?;
-        let public = utxo.public.clone();
-        match self.db_pk.get(&public) {
+        let pk = utxo.pk.clone();
+        match self.db_pk.get(&pk) {
             Ok(Some(data)) => {
                 let mut keys: Vec<Vec<u8>> = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;
                 keys.push(key);
                 let keys_bin = bincode::serialize(&keys).map_err(|_| UTXOStorageError::SerializationError)?;
-                self.db_pk.insert(public, keys_bin).map_err(|_| UTXOStorageError::WriteError)?;
+                self.db_pk.insert(pk, keys_bin).map_err(|_| UTXOStorageError::WriteError)?;
             },
             Ok(None) => {
                 let keys_bin = bincode::serialize(&vec![key]).map_err(|_| UTXOStorageError::SerializationError)?;
-                self.db_pk.insert(public, keys_bin).map_err(|_| UTXOStorageError::WriteError)?;
+                self.db_pk.insert(pk, keys_bin).map_err(|_| UTXOStorageError::WriteError)?;
             },
             Err(_) => return Err(UTXOStorageError::ReadError),
         }
@@ -77,13 +77,13 @@ impl UTXOStorer for UTXODB {
             Ok(Some(data)) => {
                 let utxo: UTXO = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;
                 self.db_th_oi.remove(key_bin.clone()).map_err(|_| UTXOStorageError::WriteError)?;
-                let public = utxo.public;
-                match self.db_pk.get(&public) {
+                let pk = utxo.pk;
+                match self.db_pk.get(&pk) {
                     Ok(Some(data)) => {
                         let mut keys: Vec<Vec<u8>> = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;
                         keys.retain(|k| *k != key_bin);
                         let keys_bin = bincode::serialize(&keys).map_err(|_| UTXOStorageError::SerializationError)?;
-                        self.db_pk.insert(public, keys_bin).map_err(|_| UTXOStorageError::WriteError)?;
+                        self.db_pk.insert(pk, keys_bin).map_err(|_| UTXOStorageError::WriteError)?;
                     },
                     Ok(None) => (),
                     Err(_) => return Err(UTXOStorageError::ReadError),
@@ -95,8 +95,8 @@ impl UTXOStorer for UTXODB {
         }
     }
 
-    async fn find_by_public_key(&self, public: &[u8]) -> Result<Vec<UTXO>, UTXOStorageError> {
-        match self.db_pk.get(public) {
+    async fn find_by_pk(&self, pk: &[u8]) -> Result<Vec<UTXO>, UTXOStorageError> {
+        match self.db_pk.get(pk) {
             Ok(Some(data)) => {
                 let keys: Vec<Vec<u8>> = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;
                 let mut utxos = Vec::new();
@@ -117,8 +117,8 @@ impl UTXOStorer for UTXODB {
         }
     }
 
-    async fn collect_minimum_utxos(&self, public: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError> {
-        let mut utxos = self.find_by_public_key(public).await?;
+    async fn collect_minimum_utxos(&self, pk: &[u8], amount_needed: i64) -> Result<Vec<UTXO>, UTXOStorageError> {
+        let mut utxos = self.find_by_pk(pk).await?;
         utxos.sort_by_key(|utxo| utxo.amount);
         let mut total = 0;
         let mut collected_utxos = Vec::new();

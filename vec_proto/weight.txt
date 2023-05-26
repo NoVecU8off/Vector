@@ -2,7 +2,7 @@ TransactionInput (for each):
 
 msg_previous_tx_hash: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
 msg_previous_out_index: 1 byte (field key) + 5 bytes (value) = 6 bytes (note: although uint32 has 4 bytes, in protobuf it is encoded as varint which can take 5 bytes for the maximum uint32 value)
-msg_public_key: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_pk: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
 msg_signature: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 64 bytes (value) = 67 bytes
 Total size of one TransactionInput is 35 + 6 + 35 + 67 = 143 bytes.
 
@@ -41,7 +41,7 @@ Block:
 
 msg_header: 1 byte (field key) + total size of Header = 1 + 93 = 94 bytes
 msg_transactions: 3 bytes (field key per Transaction) + total size of Transactions = 3 * 5000 + 1056 * 5000 = 5295000 bytes
-msg_public_key: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
+msg_pk: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes
 msg_signature: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 64 bytes (value) = 67 bytes
 Total size of Block is 94 + 5295000 + 35 + 67 = 5295196 bytes, which is approximately 5.05 megabytes.
 

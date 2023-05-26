@@ -33,54 +33,54 @@ pub fn inherit_seed() -> [u8; 32] {
     seed
 }
 pub struct NodeKeypair {
-    pub private: SecretKey,
-    pub expanded_private_key: ExpandedSecretKey,
-    pub public: PublicKey,
+    pub sk: SecretKey,
+    pub expanded_sk_key: ExpandedSecretKey,
+    pub pk: PublicKey,
 }
 
 impl NodeKeypair {
     pub fn generate_keypair() -> Self {
         let seed = inherit_seed();
-        let private_key = SecretKey::from_bytes(&seed).unwrap();
-        let expanded_secret_key = ExpandedSecretKey::from(&private_key);
-        let public_key = PublicKey::from(&expanded_secret_key);
+        let sk_key = SecretKey::from_bytes(&seed).unwrap();
+        let expanded_secret_key = ExpandedSecretKey::from(&sk_key);
+        let pk = PublicKey::from(&expanded_secret_key);
         NodeKeypair {
-            private: private_key,
-            expanded_private_key: expanded_secret_key,
-            public: public_key,
+            sk: sk_key,
+            expanded_sk_key: expanded_secret_key,
+            pk: pk,
         }
     }
 
     pub fn sign(&self, message: &[u8]) -> Signature {
-        let sig = self.expanded_private_key.sign(message, &self.public);
+        let signature = self.expanded_sk_key.sign(message, &self.pk);
         Signature {
-            signature: sig,
+            signature: signature,
         }
     }
 
-    pub fn verify(&self, message: &[u8], sig: &Signature) -> bool { 
-        self.public.verify(message, &sig.signature).is_ok()
+    pub fn verify(&self, message: &[u8], signature: &Signature) -> bool { 
+        self.pk.verify(message, &signature.signature).is_ok()
     }
 
     pub fn public_to_vec(&self) -> Vec<u8> {
-        let vec_public = self.public.as_bytes().to_vec();
+        let vec_public = self.pk.as_bytes().to_vec();
         vec_public
     }
 
-    pub fn public_key_from_vec(vec_public: &[u8]) -> PublicKey {
+    pub fn pk_from_vec(vec_public: &[u8]) -> PublicKey {
         PublicKey::from_bytes(vec_public).unwrap()
     }
 }
 
 impl Clone for NodeKeypair {
     fn clone(&self) -> Self {
-        let private = SecretKey::from_bytes(&self.private.to_bytes()).expect("Unable to clone SecretKey");
-        let expanded_private_key = ExpandedSecretKey::from_bytes(&self.expanded_private_key.to_bytes()).expect("Unable to clone ExpandedSecretKey");
-        let public = PublicKey::from_bytes(&self.public.to_bytes()).expect("Unable to clone PublicKey");
+        let sk = SecretKey::from_bytes(&self.sk.to_bytes()).expect("Unable to clone SecretKey");
+        let expanded_sk_key = ExpandedSecretKey::from_bytes(&self.expanded_sk_key.to_bytes()).expect("Unable to clone ExpandedSecretKey");
+        let pk = PublicKey::from_bytes(&self.pk.to_bytes()).expect("Unable to clone PublicKey");
         Self {
-            private,
-            expanded_private_key,
-            public,
+            sk,
+            expanded_sk_key,
+            pk,
         }
     }
 }
@@ -141,24 +141,24 @@ pub fn vec_to_bytes(vec: &Vec<u8>) -> [u8; 64] {
 
 impl std::fmt::Display for NodeKeypair {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}, {:?}", self.private, self.public)
+        write!(f, "{:?}, {:?}", self.sk, self.pk)
     }
 }
 
 impl fmt::Debug for NodeKeypair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Keypair")
-            .field("private", &self.private)
-            .field("public", &self.public)
+            .field("sk", &self.sk)
+            .field("pk", &self.pk)
             .finish()
     }
 }
 
 #[derive(Serialize, Deserialize)]
 struct SerializableKeypair {
-    private: Vec<u8>,
-    expanded_private_key: Vec<u8>,
-    public: Vec<u8>,
+    sk: Vec<u8>,
+    expanded_sk_key: Vec<u8>,
+    pk: Vec<u8>,
 }
 
 impl Serialize for NodeKeypair {
@@ -167,9 +167,9 @@ impl Serialize for NodeKeypair {
         S: Serializer,
     {
         let serializable = SerializableKeypair {
-            private: self.private.to_bytes().to_vec(),
-            expanded_private_key: self.expanded_private_key.to_bytes().to_vec(),
-            public: self.public.to_bytes().to_vec(),
+            sk: self.sk.to_bytes().to_vec(),
+            expanded_sk_key: self.expanded_sk_key.to_bytes().to_vec(),
+            pk: self.pk.to_bytes().to_vec(),
         };
         serializable.serialize(serializer)
     }
@@ -181,13 +181,13 @@ impl<'de> Deserialize<'de> for NodeKeypair {
         D: Deserializer<'de>,
     {
         let serializable = SerializableKeypair::deserialize(deserializer)?;
-        let private = SecretKey::from_bytes(&serializable.private).map_err(DeError::custom)?;
-        let expanded_private_key = ExpandedSecretKey::from_bytes(&serializable.expanded_private_key).map_err(DeError::custom)?;
-        let public = PublicKey::from_bytes(&serializable.public).map_err(DeError::custom)?;
+        let sk = SecretKey::from_bytes(&serializable.sk).map_err(DeError::custom)?;
+        let expanded_sk_key = ExpandedSecretKey::from_bytes(&serializable.expanded_sk_key).map_err(DeError::custom)?;
+        let pk = PublicKey::from_bytes(&serializable.pk).map_err(DeError::custom)?;
         let keypair = NodeKeypair {
-            private,
-            expanded_private_key,
-            public,
+            sk,
+            expanded_sk_key,
+            pk,
         };
         Ok(keypair)
     }

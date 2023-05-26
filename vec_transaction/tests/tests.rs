@@ -23,8 +23,8 @@ fn test_inherit_seed() {
 #[test]
 fn test_generate_keypair() {
     let keypair = NodeKeypair::generate_keypair();
-    assert_eq!(keypair.private.to_bytes().len(), 32);
-    assert_eq!(keypair.public.to_bytes().len(), 32);
+    assert_eq!(keypair.sk.to_bytes().len(), 32);
+    assert_eq!(keypair.pk.to_bytes().len(), 32);
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn test_sign_and_verify_different_way() {
     let signature = keypair.sign(&message);
 
     println!("message: {:?}", message);
-    println!("public key: {:?}", keypair.public.as_bytes());
+    println!("pk key: {:?}", keypair.pk.as_bytes());
     println!("signature: {:?}", signature.signature.to_bytes());
 
     assert!(keypair.verify(&message, &signature));
@@ -53,7 +53,7 @@ fn create_random_transaction() -> Transaction {
     let input = TransactionInput {
         msg_previous_tx_hash: (0..64).map(|_| rand::random::<u8>()).collect(),
         msg_previous_out_index: rand::random::<u32>(),
-        msg_public_key: (0..32).map(|_| rand::random::<u8>()).collect(),
+        msg_pk: (0..32).map(|_| rand::random::<u8>()).collect(),
         msg_signature: vec![],
     };
     let output = TransactionOutput {
@@ -110,5 +110,5 @@ async fn test_verify_transaction_two() {
     let signature = sign_transaction(&keypair, &transaction).await;
     transaction.msg_inputs[0].msg_signature = signature.signature.to_bytes().to_vec();
 
-    assert!(verify_transaction(&transaction, &[keypair.public]));
+    assert!(verify_transaction(&transaction, &[keypair.pk]));
 }

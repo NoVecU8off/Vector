@@ -430,10 +430,10 @@ impl NodeService {
             (server_config.cfg_keypair.clone(), server_config.cfg_version.clone(), server_config.cfg_ip.clone())
         };
         let keypair = cfg_keypair;
-        let msg_public_key = keypair.public.to_bytes().to_vec();
+        let msg_pk = keypair.pk.to_bytes().to_vec();
         Version {
             msg_version: cfg_version,
-            msg_public_key,
+            msg_pk,
             msg_height: 0,
             msg_ip: cfg_ip,
             msg_peer_list: self.get_ip_list(),
@@ -445,11 +445,11 @@ impl NodeService {
             let server_config = self.config.read().await;
             server_config.cfg_keypair.clone()
         };
-        let blockchain = self.blockchain.write().await;
+        let blockchain = self.blockchain.read().await;
         let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
         let msg_height = (blockchain.chain_height() + 1) as i32;
         let keypair = &cfg_keypair;
-        let public_key = keypair.public.to_bytes().to_vec();
+        let pk = keypair.pk.to_bytes().to_vec();
         let transactions = self.mempool.get_transactions();
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
@@ -471,7 +471,7 @@ impl NodeService {
         let mut block = Block {
             msg_header: Some(header),
             msg_transactions: transactions,
-            msg_public_key: public_key,
+            msg_pk: pk,
             msg_signature: vec![],
         };
         let signature = sign_block(&block, keypair).await?;
@@ -526,8 +526,8 @@ impl NodeService {
             (server_config.cfg_keypair.clone(),  server_config.cfg_ip.clone())
         };
         let keypair = &cfg_keypair;
-        let public_key = keypair.public.as_bytes().to_vec();
-        let from = &public_key;
+        let pk = keypair.pk.as_bytes().to_vec();
+        let from = &pk;
         let blockchain = self.blockchain.read().await;
         let utxos = blockchain.utxos.collect_minimum_utxos(from, amount).await?;
         let mut inputs = Vec::new();
@@ -539,7 +539,7 @@ impl NodeService {
             let input = TransactionInput {
                 msg_previous_tx_hash: utxo.transaction_hash.clone().into_bytes(),
                 msg_previous_out_index: utxo.output_index,
-                msg_public_key: public_key.clone(),
+                msg_pk: pk.clone(),
                 msg_signature: msg_signature.to_bytes().to_vec(),
             };
             inputs.push(input);
@@ -720,7 +720,7 @@ impl NodeService {
                 transaction_hash: hex::encode(hash_transaction(transaction).await),
                 output_index: output_index as u32,
                 amount: output.msg_amount,
-                public: output.msg_to.clone(),
+                pk: output.msg_to.clone(),
             };
             blockchain.utxos.put(&utxo).await?;
         }

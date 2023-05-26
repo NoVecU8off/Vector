@@ -21,8 +21,8 @@ fn test_inherit_seed() {
 #[test]
 fn test_generate_keypair() {
     let keypair = NodeKeypair::generate_keypair();
-    assert_eq!(keypair.private.to_bytes().len(), 32);
-    assert_eq!(keypair.public.to_bytes().len(), 32);
+    assert_eq!(keypair.sk.to_bytes().len(), 32);
+    assert_eq!(keypair.pk.to_bytes().len(), 32);
 }
 
 #[test]
@@ -41,7 +41,7 @@ fn test_sign_and_verify_different_way() {
     let signature = keypair.sign(&message);
 
     println!("message: {:?}", message);
-    println!("public key: {:?}", keypair.public.as_bytes());
+    println!("pk key: {:?}", keypair.pk.as_bytes());
     println!("signature: {:?}", signature.signature.to_bytes());
 
     assert!(keypair.verify(&message, &signature));

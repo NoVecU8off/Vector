@@ -40,13 +40,13 @@ mod tests {
             msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as i64,
         };
     
-        let public_key = vec![0; 32];
+        let pk = vec![0; 32];
         let signature = vec![0; 32];
     
         Block {
             msg_header: Some(header),
             msg_transactions: transactions,
-            msg_public_key: public_key,
+            msg_pk: pk,
             msg_signature: signature,
         }
     }
