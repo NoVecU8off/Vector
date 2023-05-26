@@ -50,7 +50,7 @@ message LocalState {
 
 message Version {
     string msg_version = 1;
-    bytes msg_pk = 2;
+    bytes msg_public = 2;
     uint64 msg_height = 3;
     string msg_ip = 4;
     repeated string msg_peer_list = 5;
@@ -63,8 +63,9 @@ message BlockBatch {
 message Block {
     Header msg_header = 1;
     repeated Transaction msg_transactions = 2; 
-    bytes msg_pk = 3;
-    bytes msg_sig = 4;
+    // repeated Delegation msg_delegations = 3;
+    bytes msg_public = 4;
+    bytes msg_sig = 5;
 }
 
 message Header {
@@ -73,13 +74,6 @@ message Header {
     bytes msg_previous_hash = 3;
     bytes msg_root_hash = 4;
     uint64 msg_timestamp = 5;
-}
-
-message StakeTransaction {
-    bytes msg_pk = 1;
-    string msg_pool_id = 2;
-    uint32 mag_amount = 3;
-    bytes msg_sig = 4;
 }
 
 message Transaction {
@@ -91,7 +85,7 @@ message Transaction {
 message TransactionInput {
     string msg_previous_tx_hash = 1;
     uint32 msg_previous_out_index = 2;
-    bytes msg_pk = 3;
+    bytes msg_public = 3;
     bytes msg_sig = 4;
 }
 

@@ -2,7 +2,6 @@ use async_trait::async_trait;
 use vec_errors::errors::*;
 use sled::Db;
 use serde::{Serialize, Deserialize};
-use dashmap::DashMap;
 use std::collections::HashMap;
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]

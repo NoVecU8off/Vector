@@ -140,7 +140,7 @@ impl Chain {
     async fn check_block_signature(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         let signature_vec = incoming_block.msg_sig.clone();
         let signature = Signature::signature_from_vec(&signature_vec);
-        let pk = PublicKey::from_bytes(&incoming_block.msg_pk)
+        let pk = PublicKey::from_bytes(&incoming_block.msg_public)
             .map_err(|_| ChainOpsError::InvalidPublicKey)?;
         let message = hash_header_by_block(incoming_block)?;
         pk.verify(&message, &signature.signature)?;
@@ -204,10 +204,10 @@ impl Chain {
     }
     
     pub fn verify_signature(utxo: &UTXO, input: &TransactionInput) -> Result<bool, ChainOpsError> {
-        let pub_key = PublicKey::from_bytes(&input.msg_pk).map_err(|_| ChainOpsError::InvalidPublicKey)?;
+        let pub_key = PublicKey::from_bytes(&input.msg_public).map_err(|_| ChainOpsError::InvalidPublicKey)?;
         let signature = EdSignature::from_bytes(&input.msg_sig).map_err(|_| ChainOpsError::InvalidInputSignature)?;
         let message = format!("{}{}", utxo.transaction_hash, utxo.output_index);
-        if utxo.pk != input.msg_pk {
+        if utxo.public != input.msg_public {
             return Err(ValidationError::PublicKeyMismatch)?;
         }
         match pub_key.verify(message.as_bytes(), &signature) {
@@ -227,7 +227,7 @@ impl Chain {
                 transaction_hash: transaction_hash.clone(),
                 output_index: output_index as u32,
                 amount: output.msg_amount,
-                pk: output.msg_to.clone(),
+                public: output.msg_to.clone(),
             };
             self.utxos.put(&utxo).await?;
         }
@@ -262,7 +262,7 @@ pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
     let mut block = Block {
         msg_header: Some(header),
         msg_transactions: vec![transaction],
-        msg_pk: genesis_keypair.pk.to_bytes().to_vec(),
+        msg_public: genesis_keypair.pk.to_bytes().to_vec(),
         msg_sig: vec![],
     };
     let signature = sign_block(&block, &genesis_keypair).await?;

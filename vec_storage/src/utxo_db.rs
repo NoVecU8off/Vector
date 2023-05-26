@@ -8,7 +8,7 @@ pub struct UTXO {
     pub transaction_hash: String,
     pub output_index: u32,
     pub amount: u64,
-    pub pk: Vec<u8>,
+    pub public: Vec<u8>,
 }
 
 #[async_trait]
@@ -41,7 +41,7 @@ impl UTXOStorer for UTXODB {
         let key = bincode::serialize(&key).map_err(|_| UTXOStorageError::SerializationError)?;
         let utxo_bin = bincode::serialize(utxo).map_err(|_| UTXOStorageError::SerializationError)?;
         self.db_th_oi.insert(key.clone(), utxo_bin).map_err(|_| UTXOStorageError::WriteError)?;
-        let pk = utxo.pk.clone();
+        let pk = utxo.public.clone();
         match self.db_pk.get(&pk) {
             Ok(Some(data)) => {
                 let mut keys: Vec<Vec<u8>> = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;
@@ -77,7 +77,7 @@ impl UTXOStorer for UTXODB {
             Ok(Some(data)) => {
                 let utxo: UTXO = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;
                 self.db_th_oi.remove(key_bin.clone()).map_err(|_| UTXOStorageError::WriteError)?;
-                let pk = utxo.pk;
+                let pk = utxo.public;
                 match self.db_pk.get(&pk) {
                     Ok(Some(data)) => {
                         let mut keys: Vec<Vec<u8>> = bincode::deserialize(&*data).map_err(|_| UTXOStorageError::DeserializationError)?;

@@ -1,4 +1,3 @@
-use crate::stake_pool::StakePool;
 use crate::clock::Clock;
 use vec_merkle::merkle::MerkleTree;
 use vec_block::block::sign_block;
@@ -27,7 +26,6 @@ pub struct NodeService {
     pub blockchain: Arc<RwLock<Chain>>,
     pub logger: Logger,
     pub clock: Arc<Clock>,
-    pub stake_pool: Option<StakePool>,
 }
 
 #[tonic::async_trait]
@@ -229,7 +227,6 @@ impl NodeService {
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let clock = Arc::new(Clock::new());
         let config = Arc::new(RwLock::new(server_cfg.clone()));
-        let stake_pool = Some(StakePool::new().await);
         Ok(NodeService {
             config,
             peers,
@@ -237,7 +234,6 @@ impl NodeService {
             mempool,
             blockchain: Arc::new(RwLock::new(blockchain)),
             clock,
-            stake_pool,
         })
     }
 
@@ -400,10 +396,10 @@ impl NodeService {
             (server_config.cfg_keypair.clone(), server_config.cfg_version.clone(), server_config.cfg_ip.clone())
         };
         let keypair = cfg_keypair;
-        let msg_pk = keypair.pk.to_bytes().to_vec();
+        let msg_public = keypair.pk.to_bytes().to_vec();
         Version {
             msg_version: cfg_version,
-            msg_pk,
+            msg_public,
             msg_height: 0,
             msg_ip: cfg_ip,
             msg_peer_list: self.get_ip_list(),
@@ -441,7 +437,7 @@ impl NodeService {
         let mut block = Block {
             msg_header: Some(header),
             msg_transactions: transactions,
-            msg_pk: pk,
+            msg_public: pk,
             msg_sig: vec![],
         };
         let signature = sign_block(&block, keypair).await?;
@@ -509,7 +505,7 @@ impl NodeService {
             let input = TransactionInput {
                 msg_previous_tx_hash: utxo.transaction_hash.clone(),
                 msg_previous_out_index: utxo.output_index,
-                msg_pk: pk.clone(),
+                msg_public: pk.clone(),
                 msg_sig: msg_sig.to_bytes().to_vec(),
             };
             inputs.push(input);
