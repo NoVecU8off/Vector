@@ -2670,6 +2670,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "bincode",
+ "dashmap",
  "ed25519-dalek",
  "hex",
  "prost",

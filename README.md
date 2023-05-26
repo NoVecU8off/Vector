@@ -10,11 +10,8 @@ Built on a UTXO model, Vector should provide a robust and secure environment for
 - **Pure Rust**: The project is built entirely in Rust, offering memory safety without garbage collection, and concurrent execution for optimum performance.
 - **gRPC (Protobuf)**: Google's high performance, open-source universal RPC framework is used for effective network communication.
 - **UTXO Model**: The Unspent Transaction Output (UTXO) model is used for transaction management, ensuring high levels of security and privacy.
-- **Custom PBFT-like Consensus Mechanism**: My consensus mechanism, inspired by the Practical Byzantine Fault Tolerance (PBFT) model, guarantees data consistency and fault tolerance across the network. !(consensus mechanism was rejected due to its impracticality)
+- **Custom PoS consensus mechanism**: My consensus mechanism, inspired by the Cardano's Ouroboros model, guarantees data consistency and fault tolerance across the network. !(DEV IN PROCESS)
 - **Scalability**: Designed to scale seamlessly, Vector should handle a growing number of transactions without compromising on speed or security.
-
-## Contributing
-I appreciate contributions of any kind and value them highly.
 
 ## License
 This project is licensed under the Apache-2.0 License - see the LICENSE file for details.

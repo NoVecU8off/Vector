@@ -5,7 +5,7 @@ use vec_block::block::sign_block;
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_chain::chain::Chain;
-use vec_storage::{block_db::{BlockDB, BlockStorer}, utxo_db::*};
+use vec_storage::{block_db::*, utxo_db::*, pool_db::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
@@ -241,10 +241,12 @@ impl NodeService {
         let block_db = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
         let utxo_db_th_oi = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
         let utxo_db_pk = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let pool_db_id = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
         let utxos: Box<dyn UTXOStorer> = Box::new(UTXODB::new(utxo_db_th_oi, utxo_db_pk));
+        let pools: Box<dyn StakePoolStorer> = Box::new(StakePoolDB::new(pool_db_id));
         let mempool = Arc::new(Mempool::new());
-        let blockchain = Chain::new(blocks, utxos)
+        let blockchain = Chain::new(blocks, utxos, pools)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let clock = Arc::new(Clock::new());
@@ -620,8 +622,8 @@ impl NodeService {
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
+            self.blockchain.write().await.validate_transaction(&transaction).await?;
             self.mempool.add(transaction.clone()).await;
-            self.process_transaction(&transaction).await?;
             self.broadcast_tx_hash(transaction_hash.to_string()).await?;
         }
         Ok(())
@@ -659,15 +661,16 @@ impl NodeService {
             let server_config = self.config.read().await;
             server_config.cfg_height
         };
-        if let Some(header) = block.msg_header {
-            for transaction in block.msg_transactions {
-                self.process_transaction(&transaction).await?;
+        if let Some(header) = block.clone().msg_header {
+            for transaction in &block.msg_transactions {
+                self.blockchain.write().await.process_transaction(transaction).await?;
             }
             let mut server_config = self.config.write().await;
             let incoming_height = header.msg_height as u64;
             if local_height < incoming_height {
                 server_config.cfg_height = incoming_height;
             }
+            self.blockchain.write().await.add_block(block).await?;
             Ok(())
         } else {
             Err(BlockOpsError::MissingHeader)?
@@ -683,10 +686,11 @@ impl NodeService {
             let incoming_height = header.msg_height as u64;
             if incoming_height == local_height + 1 {
                 for transaction in &block.msg_transactions {
-                    self.process_transaction(transaction).await?;
+                    self.blockchain.write().await.process_transaction(&transaction).await?;
                 }
                 let mut server_config = self.config.write().await;
                 server_config.cfg_height = incoming_height;
+                self.blockchain.write().await.add_block(block).await?;
                 Ok(())
             } else {
                 match self.pull_state_from(leader_address.to_string()).await {
@@ -697,24 +701,6 @@ impl NodeService {
         } else {
             Err(BlockOpsError::MissingHeader)?
         }
-    }
-
-    pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), NodeServiceError> {
-        let blockchain = self.blockchain.write().await;
-        for input in &transaction.msg_inputs {
-            let tx_hash = hex::encode(input.msg_previous_tx_hash.clone());
-            blockchain.utxos.remove(&(tx_hash, input.msg_previous_out_index)).await?;
-        }
-        for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
-            let utxo = UTXO {
-                transaction_hash: hex::encode(hash_transaction(transaction).await),
-                output_index: output_index as u32,
-                amount: output.msg_amount,
-                pk: output.msg_to.clone(),
-            };
-            blockchain.utxos.put(&utxo).await?;
-        }
-        Ok(())
     }
 
     pub async fn pull_state_from(&self, ip: String) -> Result<(), NodeServiceError> {

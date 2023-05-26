@@ -59,6 +59,24 @@ pub enum BlockStorageError {
 }
 
 #[derive(Debug, Error)]
+pub enum StakePoolStorageError {
+    #[error("Unable to serialize SP")]
+    SerializationError,
+    #[error("Unable to deserialize SP")]
+    DeserializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to read from DB")]
+    ReadError,
+    #[error("Pool doesen't exist")]
+    NonexistentPool,
+    #[error(transparent)]
+    SledError(sled::Error),
+    #[error(transparent)]
+    SledTransactionError(#[from] sled::transaction::ConflictableTransactionError<Box<StakePoolStorageError>>),
+}
+
+#[derive(Debug, Error)]
 pub enum BlockOpsError {
     #[error("Block header is missing")]
     MissingHeader,

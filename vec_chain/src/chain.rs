@@ -1,9 +1,9 @@
-use vec_storage::block_db::{BlockStorer};
-use vec_storage::utxo_db::*;
+use vec_storage::{block_db::*, utxo_db::*, pool_db::*};
 use vec_cryptography::cryptography::{NodeKeypair, Signature};
 use vec_proto::messages::{Header, Block, Transaction, TransactionOutput, TransactionInput};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
+use vec_transaction::transaction::hash_transaction;
 use hex::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{PublicKey, Verifier, Signature as EdSignature};
@@ -54,23 +54,26 @@ pub struct Chain {
     pub headers: HeaderList,
     pub blocks: Box<dyn BlockStorer>,
     pub utxos: Box<dyn UTXOStorer>,
+    pub stake_pools: Box<dyn StakePoolStorer>,
 }
 
 impl Chain {
-    pub async fn new(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOStorer>) -> Result<Chain, ChainOpsError> {
+    pub async fn new(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOStorer>, stake_pools: Box<dyn StakePoolStorer>) -> Result<Chain, ChainOpsError> {
         let chain = Chain {
             headers: HeaderList::new(),
             blocks,
             utxos,
+            stake_pools,
         };
         Ok(chain)
     }
 
-    pub async fn genesis_chain(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOStorer>) -> Result<Chain, ChainOpsError> {
+    pub async fn genesis(blocks: Box<dyn BlockStorer>, utxos: Box<dyn UTXOStorer>, stake_pools: Box<dyn StakePoolStorer>) -> Result<Chain, ChainOpsError> {
         let mut chain = Chain {
             headers: HeaderList::new(),
             blocks,
             utxos,
+            stake_pools,
         };
         chain.add_leader_block(create_genesis_block().await?).await?;
         Ok(chain)
@@ -170,7 +173,7 @@ impl Chain {
 
     pub async fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         for tx in &incoming_block.msg_transactions {
-            self.validate_transaction(tx).await?;
+            self.process_transaction(tx).await?;
         }
         Ok(())
     }
@@ -197,10 +200,6 @@ impl Chain {
         if input_sum < output_sum {
             return Err(ValidationError::InsufficientInput)?;
         }
-        for input in &tx.msg_inputs {
-            let key = (encode(&input.msg_previous_tx_hash), input.msg_previous_out_index);
-            self.utxos.remove(&key).await?;
-        }
         Ok(())
     }
     
@@ -216,6 +215,25 @@ impl Chain {
             Err(_) => Ok(false),
         }
     }
+
+    pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), ChainOpsError> {
+        for input in &transaction.msg_inputs {
+            let tx_hash = hex::encode(input.msg_previous_tx_hash.clone());
+            self.utxos.remove(&(tx_hash, input.msg_previous_out_index)).await?;
+        }
+        let transaction_hash = hex::encode(hash_transaction(transaction).await);
+        for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
+            let utxo = UTXO {
+                transaction_hash: transaction_hash.clone(),
+                output_index: output_index as u32,
+                amount: output.msg_amount,
+                pk: output.msg_to.clone(),
+            };
+            self.utxos.put(&utxo).await?;
+        }
+        Ok(())
+    }
+    
 }
 
 pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
