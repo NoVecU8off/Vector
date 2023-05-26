@@ -3,169 +3,99 @@ syntax = "proto3";
 package messages;
 
 service Node {
-
     rpc Handshake(Version) returns (Version);
-
-    rpc HandleBlock(LeaderBlock) returns (Confirmed);
-
     rpc PushState(LocalState) returns (BlockBatch);
-
-    rpc HandlePeerExchange(PeerList) returns (Confirmed);
-
+    rpc HandlePeerList(PeerList) returns (Confirmed);
     rpc HandleHeartbeat(Confirmed) returns (Confirmed);
-
-    rpc HandleTimeReq(DelayRequest) returns (DelayResponse);
-
+    rpc HandleTime(Confirmed) returns (DelayResponse);
     rpc HandleBlockPush(PushBlockRequest) returns (Confirmed);
-
     rpc HandleBlockPull(PullBlockRequest) returns (Block);
-
     rpc HandleTxPush(PushTxRequest) returns (Confirmed);
-
     rpc HandleTxPull(PullTxRequest) returns (Transaction);
-
 }
 
 message Confirmed { }
 
-message DelayRequest { }
-
 message DelayResponse {
-
     uint64 msg_time = 1;
-
 }
 
 message PushBlockRequest {
-
     string msg_block_hash = 1;
-
     string msg_ip = 2;
-
 }
 
 message PullBlockRequest {
-
     string msg_block_hash = 1;
-
     string msg_ip = 2;
-
 }
 
 message PushTxRequest {
-
     string msg_transaction_hash = 1;
-
     string msg_ip = 2;
-
 }
 
 message PullTxRequest {
-
     string msg_transaction_hash = 1;
-
     string msg_ip = 2;
-
-}
-
-message ValidatorList {
-
-    repeated string msg_validator_addresses = 1;
-    
 }
 
 message PeerList {
-
     repeated string msg_peers_addresses = 1;
-
 }
 
 message LocalState {
-
     uint64 msg_last_block_height = 1;
-
 }
 
 message Version {
-
     string msg_version = 1;
-
     bytes msg_pk = 2;
-
     uint64 msg_height = 3;
-
     string msg_ip = 4;
-
     repeated string msg_peer_list = 5;
-    
-}
-
-message LeaderBlock {
-
-    Block msg_block = 1;
-
-    string msg_leader_address = 2;
-
-}
-
-message Block {
-
-    Header msg_header = 1;
-
-    repeated Transaction msg_transactions = 2; 
-
-    bytes msg_pk = 3;
-
-    bytes msg_sig = 4;
-
 }
 
 message BlockBatch {
-
     repeated Block msg_blocks = 1;
+}
 
+message Block {
+    Header msg_header = 1;
+    repeated Transaction msg_transactions = 2; 
+    bytes msg_pk = 3;
+    bytes msg_sig = 4;
 }
 
 message Header {
-
     uint32 msg_version = 1;
-
     uint32 msg_height = 2;
-
     bytes msg_previous_hash = 3;
-
     bytes msg_root_hash = 4;
-    
     uint64 msg_timestamp = 5;
+}
 
+message StakeTransaction {
+    bytes msg_pk = 1;
+    string msg_pool_id = 2;
+    uint32 mag_amount = 3;
+    bytes msg_sig = 4;
 }
 
 message Transaction {
-
     repeated TransactionInput msg_inputs = 2;
-
     repeated TransactionOutput msg_outputs = 3;
-
     uint64 msg_timestamp = 4;
-    
 }
 
 message TransactionInput {
-
-    bytes msg_previous_tx_hash = 1;
-
+    string msg_previous_tx_hash = 1;
     uint32 msg_previous_out_index = 2;
-
     bytes msg_pk = 3;
-
     bytes msg_sig = 4;
-
 }
 
 message TransactionOutput {
-
     uint64 msg_amount = 1;
-
     bytes msg_to = 2;
-
 }

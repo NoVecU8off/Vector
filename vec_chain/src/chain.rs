@@ -182,7 +182,7 @@ impl Chain {
         let mut input_sum: u64 = 0;
         let mut inputs: Vec<UTXO> = Vec::new();
         for input in &tx.msg_inputs {
-            let utxo = self.utxos.get(&encode(&input.msg_previous_tx_hash), input.msg_previous_out_index).await?;
+            let utxo = self.utxos.get(&input.msg_previous_tx_hash, input.msg_previous_out_index).await?;
             match utxo {
                 Some(u) => {
                     input_sum += u.amount;
@@ -218,7 +218,7 @@ impl Chain {
 
     pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), ChainOpsError> {
         for input in &transaction.msg_inputs {
-            let tx_hash = hex::encode(input.msg_previous_tx_hash.clone());
+            let tx_hash = input.msg_previous_tx_hash.clone();
             self.utxos.remove(&(tx_hash, input.msg_previous_out_index)).await?;
         }
         let transaction_hash = hex::encode(hash_transaction(transaction).await);

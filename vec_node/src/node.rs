@@ -80,29 +80,7 @@ impl Node for NodeService {
         Ok(Response::new(block_batch))
     }
 
-    async fn handle_block(
-        &self,
-        request: Request<LeaderBlock>,
-    ) -> Result<Response<Confirmed>, Status> {
-        let leader_block = request.into_inner();
-        if let Some(block) = leader_block.msg_block {
-            let leader_address = leader_block.msg_leader_address;
-            match self.process_block(block, &leader_address).await {
-                Ok(_) => {
-                    info!(self.logger, "Local UTXO updated successfully");
-                    Ok(Response::new(Confirmed {}))
-                },
-                Err(e) => {
-                    error!(self.logger, "Failed to update local UTXO: {:?}", e);
-                    Err(Status::internal("Failed to update local UTXO"))
-                }
-            }
-        } else {
-            Err(Status::internal("LeaderBlock missing block"))
-        }
-    }
-
-    async fn handle_peer_exchange(
+    async fn handle_peer_list(
         &self,
         request: Request<PeerList>,
     ) -> Result<Response<Confirmed>, Status> {
@@ -128,9 +106,9 @@ impl Node for NodeService {
         Ok(Response::new(Confirmed {}))
     }
 
-    async fn handle_time_req(
+    async fn handle_time(
         &self,
-        _request: Request<DelayRequest>,
+        _request: Request<Confirmed>,
     ) -> Result<Response<DelayResponse>, Status> {
         let time = self.clock.get_time();
         let response = DelayResponse { msg_time : time };
@@ -325,8 +303,8 @@ impl NodeService {
     
     async fn synchronize_clock_with(&self, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
         let t1 = self.clock.get_time();
-        let req = Request::new(DelayRequest { } );
-        let res = client.handle_time_req(req).await?;
+        let req = Request::new(Confirmed { } );
+        let res = client.handle_time(req).await?;
         let t2 = res.into_inner().msg_time; 
         let t3 = self.clock.get_time();
         let travel_delay = (t3 - t1) as i64;
@@ -529,7 +507,7 @@ impl NodeService {
             let msg_to_sign = format!("{}{}", utxo.transaction_hash, utxo.output_index);
             let msg_sig = keypair.sign(msg_to_sign.as_bytes());
             let input = TransactionInput {
-                msg_previous_tx_hash: utxo.transaction_hash.clone().into_bytes(),
+                msg_previous_tx_hash: utxo.transaction_hash.clone(),
                 msg_previous_out_index: utxo.output_index,
                 msg_pk: pk.clone(),
                 msg_sig: msg_sig.to_bytes().to_vec(),
@@ -758,7 +736,6 @@ impl NodeService {
             .iter()
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
-    
         let mut tasks = Vec::new();
         for (ip, peer_client) in peers_data {
             let msg_clone = msg.clone();
@@ -771,7 +748,7 @@ impl NodeService {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(msg_clone);
                 if ip != cfg_ip {
-                    if let Err(err) = peer_client_lock.handle_peer_exchange(req).await {
+                    if let Err(err) = peer_client_lock.handle_peer_list(req).await {
                         error!(
                             self_clone.logger,
                             "Failed to broadcast peer list to {}: {:?}",

@@ -51,7 +51,7 @@ fn test_sign_and_verify_different_way() {
 
 fn create_random_transaction() -> Transaction {
     let input = TransactionInput {
-        msg_previous_tx_hash: (0..64).map(|_| rand::random::<u8>()).collect(),
+        msg_previous_tx_hash: "fdbb;osiajpoascpkknb wlkm;ld".to_string(),
         msg_previous_out_index: rand::random::<u32>(),
         msg_pk: (0..32).map(|_| rand::random::<u8>()).collect(),
         msg_sig: vec![],
