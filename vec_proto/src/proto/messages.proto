@@ -62,8 +62,7 @@ message BlockBatch {
 
 message Block {
     Header msg_header = 1;
-    repeated Transaction msg_transactions = 2; 
-    // repeated Delegation msg_delegations = 3;
+    repeated Transaction msg_transactions = 2;
     bytes msg_public = 4;
     bytes msg_sig = 5;
 }
