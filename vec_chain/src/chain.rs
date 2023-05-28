@@ -1,6 +1,6 @@
 use vec_storage::{block_db::*, utxo_db::*, pool_db::*};
 use vec_cryptography::cryptography::{NodeKeypair, Signature};
-use vec_proto::messages::{Header, Block, Transaction, TransactionOutput, TransactionInput};
+use vec_proto::messages::{Header, Block, Transaction, TransactionOutput};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_transaction::transaction::hash_transaction;
@@ -9,6 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use ed25519_dalek::{PublicKey, Verifier, Signature as EdSignature};
 use vec_errors::errors::*;
 use prost::Message;
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+use curve25519_dalek_ng::scalar::Scalar;
+use curve25519_dalek_ng::ristretto::CompressedRistretto;
+use merlin::Transcript;
+use rand::thread_rng;
 
 #[derive(Clone)]
 pub struct HeaderList {
@@ -179,74 +184,80 @@ impl Chain {
     }
     
     pub async fn validate_transaction(&self, tx: &Transaction) -> Result<(), ChainOpsError> {
-        let mut input_sum: u64 = 0;
-        let mut inputs: Vec<UTXO> = Vec::new();
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
         for input in &tx.msg_inputs {
+            // Verify existence of the referenced UTXO and the provided signature
             let utxo = self.utxos.get(&input.msg_previous_tx_hash, input.msg_previous_out_index).await?;
             match utxo {
                 Some(u) => {
-                    input_sum += u.amount;
-                    inputs.push(u);
+                    let msg_to_verify = format!("{}{}", u.utxo_transaction_hash, u.utxo_output_index);
+                    let pubkey = PublicKey::from_bytes(&u.utxo_public_key)?;
+                    let signature = EdSignature::from_bytes(&input.msg_sig)?;
+                    if !pubkey.verify(&msg_to_verify.as_bytes(), &signature).is_ok() {
+                        return Err(ValidationError::InvalidSignature)?;
+                    }
+                    let mut verifier_transcript = Transcript::new(b"TransactionProof");
+                    let proof = RangeProof::from_bytes(&input.msg_proof).unwrap();
+                    let compressed_ristretto = CompressedRistretto::from_slice(&input.msg_commited_value);
+                    if proof.verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &compressed_ristretto, 64).is_err() {
+                        return Err(ValidationError::IncorrectRangeProofs)?;
+                    }
                 },
                 None => return Err(ValidationError::MissingInput)?,
-            };
-        }
-        for (input, utxo) in tx.msg_inputs.iter().zip(inputs.iter()) {
-            if !Chain::verify_signature(&utxo, &input)? {
-                return Err(ValidationError::InvalidSignature)?;
             }
-        }
-        let output_sum: u64 = tx.msg_outputs.iter().map(|o| o.msg_amount).sum();
-        if input_sum < output_sum {
-            return Err(ValidationError::InsufficientInput)?;
         }
         Ok(())
     }
-    
-    pub fn verify_signature(utxo: &UTXO, input: &TransactionInput) -> Result<bool, ChainOpsError> {
-        let pub_key = PublicKey::from_bytes(&input.msg_public).map_err(|_| ChainOpsError::InvalidPublicKey)?;
-        let signature = EdSignature::from_bytes(&input.msg_sig).map_err(|_| ChainOpsError::InvalidInputSignature)?;
-        let message = format!("{}{}", utxo.transaction_hash, utxo.output_index);
-        if utxo.public != input.msg_public {
-            return Err(ValidationError::PublicKeyMismatch)?;
-        }
-        match pub_key.verify(message.as_bytes(), &signature) {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false),
-        }
-    }
 
     pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), ChainOpsError> {
+        // Remove spent UTXOs
         for input in &transaction.msg_inputs {
             let tx_hash = input.msg_previous_tx_hash.clone();
             self.utxos.remove(&(tx_hash, input.msg_previous_out_index)).await?;
         }
+        // Create new UTXOs for the transaction outputs
         let transaction_hash = hex::encode(hash_transaction(transaction).await);
         for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
             let utxo = UTXO {
-                transaction_hash: transaction_hash.clone(),
-                output_index: output_index as u32,
-                amount: output.msg_amount,
-                public: output.msg_to.clone(),
+                utxo_transaction_hash: transaction_hash.clone(),
+                utxo_output_index: output_index as u32,
+                utxo_public_key: output.msg_public.clone(),
+                utxo_commited_value: output.msg_commited_value.clone(),
+                utxo_proof: output.msg_proof.clone(),
             };
             self.utxos.put(&utxo).await?;
         }
         Ok(())
     }
-    
 }
 
 pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
     let genesis_keypair = NodeKeypair::generate_keypair();
     let address = genesis_keypair.pk;
+    let genesis_amount: u64 = 50; // Define your genesis amount here
+    let pc_gens = PedersenGens::default();
+    let bp_gens = BulletproofGens::new(64, 1);
+    let blinding = Scalar::random(&mut thread_rng());
+    let mut transcript = Transcript::new(b"TransactionRangeProof");
+    let (proof, commited_value) = RangeProof::prove_single(
+        &bp_gens, 
+        &pc_gens, 
+        &mut transcript, 
+        genesis_amount, 
+        &blinding, 
+        64
+    )
+    .unwrap();
     let output = TransactionOutput {
-        msg_amount: 1000,
+        msg_commited_value: commited_value.as_bytes().to_vec(),
+        msg_proof: proof.to_bytes().to_vec(),
         msg_to: address.to_bytes().to_vec(),
+        msg_public: genesis_keypair.pk.to_bytes().to_vec(),
     };
     let transaction = Transaction {
         msg_inputs: vec![],
         msg_outputs: vec![output],
-        msg_timestamp: 0,
     };
     let mut bytes = Vec::new();
     transaction.encode(&mut bytes).unwrap();

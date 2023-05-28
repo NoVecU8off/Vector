@@ -1,4 +1,5 @@
 use crate::clock::Clock;
+use rand::thread_rng;
 use vec_merkle::merkle::MerkleTree;
 use vec_block::block::sign_block;
 use vec_proto::messages::*;
@@ -17,6 +18,9 @@ use slog::{o, Logger, info, Drain, error};
 use tokio::time::Duration;
 use dashmap::DashMap;
 use prost::Message;
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+use curve25519_dalek_ng::scalar::Scalar;
+use merlin::Transcript;
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -487,61 +491,59 @@ impl NodeService {
     }
 
     pub async fn make_tx(&self, to: &Vec<u8>, amount: u64) -> Result<(), NodeServiceError> {
-        let (cfg_keypair, cfg_addr) = {
+        let cfg_keypair = {
             let server_config = self.config.read().await;
-            (server_config.cfg_keypair.clone(),  server_config.cfg_ip.clone())
+            server_config.cfg_keypair.clone()
         };
         let keypair = &cfg_keypair;
-        let pk = keypair.pk.as_bytes().to_vec();
-        let from = &pk;
+        let public = keypair.pk.as_bytes().to_vec();
+        let from = &public;
         let blockchain = self.blockchain.read().await;
-        let utxos = blockchain.utxos.collect_minimum_utxos(from, amount).await?;
         let mut inputs = Vec::new();
-        let mut total_input = 0;
-        let mut spent_utxo_keys = Vec::new();
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+        let secret_value = amount;
+        let blinding = Scalar::random(&mut thread_rng());
+        let mut transcript = Transcript::new(b"TransactionProof");
+        let (proof, commited_value) = RangeProof::prove_single(
+            &bp_gens, 
+            &pc_gens, 
+            &mut transcript, 
+            secret_value, 
+            &blinding, 
+            64
+        )
+        .unwrap();
+        let utxos = blockchain.utxos.find_by_pk(from).await?;
         for utxo in &utxos {
-            let msg_to_sign = format!("{}{}", utxo.transaction_hash, utxo.output_index);
+            let msg_to_sign = format!("{}{}", utxo.utxo_transaction_hash, utxo.utxo_output_index);
             let msg_sig = keypair.sign(msg_to_sign.as_bytes());
             let input = TransactionInput {
-                msg_previous_tx_hash: utxo.transaction_hash.clone(),
-                msg_previous_out_index: utxo.output_index,
-                msg_public: pk.clone(),
+                msg_previous_tx_hash: utxo.utxo_transaction_hash.clone(),
+                msg_previous_out_index: utxo.utxo_output_index,
                 msg_sig: msg_sig.to_bytes().to_vec(),
+                msg_commited_value: utxo.utxo_commited_value.clone(),
+                msg_proof: utxo.utxo_proof.clone(),
             };
             inputs.push(input);
-            total_input += utxo.amount;
-            spent_utxo_keys.push((utxo.transaction_hash.clone(), utxo.output_index));
-        }
-        {
-            let blockchain = self.blockchain.write().await;
-            for key in spent_utxo_keys {
-                blockchain.utxos.remove(&key).await?;
-            }
         }
         let output = TransactionOutput {
-            msg_amount: amount,
+            msg_commited_value: commited_value.to_bytes().to_vec(),
+            msg_proof: proof.to_bytes().to_vec(),
             msg_to: to.clone(),
+            msg_public: public,
         };
-        let mut outputs = vec![output];
-        if total_input > amount {
-            let change_output = TransactionOutput {
-                msg_amount: total_input - amount,
-                msg_to: from.clone(),
-            };
-            outputs.push(change_output);
-        }
+        let outputs = vec![output];
         let tx = Transaction {
             msg_inputs: inputs,
             msg_outputs: outputs,
-            msg_timestamp: self.clock.get_time(),
         };
-        info!(self.logger, "{}: Created transaction with {} to {:?}", cfg_addr, amount, to);
         let hash_string = hex::encode(hash_transaction(&tx).await);
-        self.broadcast_tx_hash(hash_string).await?;
+        self.broadcast_tx_hash(&hash_string).await?;
         Ok(())
     }
 
-    pub async fn broadcast_tx_hash(&self, hash_string: String) -> Result<(), NodeServiceError> {
+    pub async fn broadcast_tx_hash(&self, hash_string: &String) -> Result<(), NodeServiceError> {
         let peers_data = self.peers
                     .iter()
                     .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
@@ -598,7 +600,7 @@ impl NodeService {
             let transaction = response.into_inner();
             self.blockchain.write().await.validate_transaction(&transaction).await?;
             self.mempool.add(transaction.clone()).await;
-            self.broadcast_tx_hash(transaction_hash.to_string()).await?;
+            self.broadcast_tx_hash(&transaction_hash.to_string()).await?;
         }
         Ok(())
     }

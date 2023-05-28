@@ -108,6 +108,8 @@ pub enum ValidationError {
     MissingInput,
     #[error("Mismatched pk key")]
     PublicKeyMismatch,
+    #[error("Provided range proofs are incorrect")]
+    IncorrectRangeProofs,
 }
 
 #[derive(Debug, Error)]

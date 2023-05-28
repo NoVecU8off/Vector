@@ -76,19 +76,21 @@ message Header {
 }
 
 message Transaction {
-    repeated TransactionInput msg_inputs = 2;
-    repeated TransactionOutput msg_outputs = 3;
-    uint64 msg_timestamp = 4;
+    repeated TransactionInput msg_inputs = 1;
+    repeated TransactionOutput msg_outputs = 2;
 }
 
 message TransactionInput {
     string msg_previous_tx_hash = 1;
     uint32 msg_previous_out_index = 2;
-    bytes msg_public = 3;
-    bytes msg_sig = 4;
+    bytes msg_sig = 3;
+    bytes msg_commited_value = 4;
+    bytes msg_proof = 5;
 }
 
 message TransactionOutput {
-    uint64 msg_amount = 1;
-    bytes msg_to = 2;
+    bytes msg_commited_value = 1;
+    bytes msg_proof = 2;
+    bytes msg_to = 3;
+    bytes msg_public = 4;
 }
