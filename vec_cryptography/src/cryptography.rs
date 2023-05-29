@@ -5,18 +5,25 @@ use curve25519_dalek_ng::constants;
 use sha3::{Keccak256, Digest};
 use bs58;
 
+#[derive(Clone, Copy)]
+pub struct Signature {
+    r: CompressedEdwardsY,
+    s: Scalar,
+}
+
+#[derive(Clone)]
+pub struct LSAGSignature {
+    pub c: Scalar,
+    pub r: Vec<Scalar>,
+    pub key_image: EdwardsPoint,
+}
+
 struct Wallet {
     secret_spend_key: Scalar,
     secret_view_key: Scalar,
     public_spend_key: CompressedEdwardsY,
     public_view_key: CompressedEdwardsY,
     address: String,
-}
-
-#[derive(Clone, Copy)]
-pub struct Signature {
-    r: CompressedEdwardsY,
-    s: Scalar,
 }
 
 impl Wallet {
@@ -196,201 +203,86 @@ impl Wallet {
         Ok(expected_output.compress() == output)
     }
 
-    pub fn generate_ring_signature(&self, message: &[u8], keys: Vec<CompressedEdwardsY>, secret_index: usize) -> Result<(Vec<Scalar>, Scalar, Scalar), &'static str> {
-        if secret_index >= keys.len() {
-            return Err("Invalid secret index");
-        }
+    fn generate_lsag_signature(&self, message: &[u8], ring: &[EdwardsPoint], secret_index: usize) -> LSAGSignature {
+        let n = ring.len();
+        assert!(n > 0 && secret_index < n);
 
-        let n = keys.len();
-        let hp_r = Self::hash_points_to_point(&keys);
-
-        // Step 1: Calculate the key image
-        let key_image = self.secret_spend_key * hp_r;
-
-        // Step 2: Generate random values
+        // Сгенерировать случайное число α и случайные числа ri для i ∈ {0,1,…,n} за исключением i=π.
         let mut rng = rand::thread_rng();
-        let alpha = Scalar::random(&mut rng);
-        let mut r_values: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
-
-        // Step 3: Calculate c_values[secret_index + 1]
-        let mut c_values: Vec<Scalar> = vec![Scalar::zero(); n];
-        c_values[(secret_index + 1) % n] = Self::hash_numbers(
-            &keys,
-            &key_image,
-            message,
-            &(&constants::ED25519_BASEPOINT_TABLE * &alpha).compress(),
-            &(hp_r * alpha),
-        );
-
-        // Step 4: Calculate the remaining c_values
-        for i in (secret_index + 1)..(secret_index + n) {
-            let i = i % n;
-            let ci = c_values[i];
-            let ri = r_values[i];
-            let ki = keys[i].decompress().ok_or("Failed to decompress public key")?;
-
-            let term1 = &constants::ED25519_BASEPOINT_TABLE * &ri + ki * &ci;
-            let term2 = hp_r * ri + key_image * ci;
-
-            c_values[(i + 1) % n] = Self::hash_numbers(
-                &keys,
-                &key_image,
-                message,
-                &term1.compress(),
-                &term2,
-            );
+        let alpha: Scalar = Scalar::random(&mut rng);
+        let mut r: Vec<Scalar> = (0..n).map(|_| Scalar::random(&mut rng)).collect();
+    
+        // Вычислить образ ключа ~K = k_π * Hp(R)
+        let secret_key = self.secret_spend_key;
+        let key_image = secret_key * Self::hash_to_point(ring);
+    
+        // Вычислить c_π+1 = Hn(R, ~K, m, αG, αHp(R))
+        let mut hasher = Keccak256::new();
+        ring.iter().for_each(|point| hasher.update(point.compress().as_bytes()));
+        hasher.update(key_image.compress().as_bytes());
+        hasher.update(message);
+        hasher.update((&alpha * &constants::ED25519_BASEPOINT_TABLE).compress().as_bytes());
+        hasher.update((alpha * Self::hash_to_point(ring)).compress().as_bytes());
+    
+        let mut c: Vec<Scalar> = vec![Scalar::from_bytes_mod_order(hasher.finalize().into())];
+        c.resize(n, Scalar::zero());
+    
+        // Для i=π+1, π+2,…,n,1,2,…,π−1, вычислить ci+1 = Hn(R, ~K, m, [riG+ci Ki],[ri Hp(R)+ci ~K])
+        for i in (secret_index + 1..n).chain(0..secret_index) {
+            hasher = Keccak256::new();
+            ring.iter().for_each(|point| hasher.update(point.compress().as_bytes()));
+            hasher.update(key_image.compress().as_bytes());
+            hasher.update(message);
+            hasher.update((&r[i] * &constants::ED25519_BASEPOINT_TABLE + c[i] * ring[i]).compress().as_bytes());
+            hasher.update((r[i] * Self::hash_to_point(ring) + c[i] * key_image).compress().as_bytes());
+    
+            c[(i + 1) % n] = Scalar::from_bytes_mod_order(hasher.finalize().into());
         }
-
-        // Step 5: Calculate r_values[secret_index]
-        r_values[secret_index] = alpha - c_values[secret_index] * self.secret_spend_key;
-
-        Ok((c_values, r_values[secret_index], key_image))
+    
+         // Найти r_π, чтобы α = r_π + c_π * k_π
+        r[secret_index] = alpha - c[secret_index] * secret_key;
+    
+        // Подпись LSAG σ(m) = (c1, r1, r2, …, rn, ~K)
+        LSAGSignature {
+            c: c[0],
+            r: r,
+            key_image: key_image,
+        }
     }
-
-    pub fn verify_ring_signature(&self, message: &[u8], keys: Vec<CompressedEdwardsY>, c_values: Vec<Scalar>, r_value: Scalar, key_image: Scalar) -> Result<bool, &'static str> {
-        let n = keys.len();
-
-        let hp_r = Self::hash_points_to_point(&keys);
-        
-        let mut calculated_c_values: Vec<Scalar> = vec![Scalar::zero(); n];
-        calculated_c_values[0] = c_values[0];
-
+    
+    fn verify_lsag_signature(message: &[u8], ring: &[EdwardsPoint], signature: &LSAGSignature) -> bool {
+        let n = ring.len();
+    
+        let mut c = vec![signature.c];
+        c.resize(n, Scalar::zero());
+    
         for i in 0..n {
-            let ri = if i == 0 { r_value } else { c_values[i-1] };
-            let ci = calculated_c_values[i];
-            let ki = keys[i].decompress().ok_or("Failed to decompress public key")?;
-            
-            let term1 = &constants::ED25519_BASEPOINT_TABLE * &ri + ki * &ci;
-            let term2 = hp_r * ri + key_image * ci;
-            
-            calculated_c_values[(i + 1) % n] = Self::hash_numbers(
-                &keys,
-                &key_image,
-                message,
-                &term1.compress(),
-                &term2,
-            );
-        }
-
-        Ok(c_values[0] == calculated_c_values[0])
-    }
-
-    // Hash function Hn
-    fn hash_numbers_ver(keys: &[CompressedEdwardsY], key_image: &CompressedEdwardsY, message: &[u8], z_prime: &CompressedEdwardsY, z_double_prime: &CompressedEdwardsY) -> Scalar {
-        let mut hasher = Keccak256::new();
-        for key in keys {
-            hasher.update(key.as_bytes());
-        }
-        hasher.update(key_image.as_bytes());
-        hasher.update(message);
-        hasher.update(z_prime.as_bytes());
-        hasher.update(z_double_prime.as_bytes());
-        let hash = hasher.finalize();
-        Scalar::from_bytes_mod_order(hash.into())
-    }
-
-    // Hash function Hn
-    fn hash_numbers(keys: &[CompressedEdwardsY], key_image: &Scalar, message: &[u8], term1: &CompressedEdwardsY, term2: &Scalar) -> Scalar {
-        let mut hasher = Keccak256::new();
-        for key in keys {
-            hasher.update(key.as_bytes());
-        }
-        hasher.update(key_image.as_bytes());
-        hasher.update(message);
-        hasher.update(term1.as_bytes());
-        hasher.update(term2.as_bytes());
-        let hash = hasher.finalize();
-        Scalar::from_bytes_mod_order(hash.into())
-    }
-
-    // Hash function Hp
-    fn hash_points_to_point(keys: &[CompressedEdwardsY]) -> Scalar {
-        let mut hasher = Keccak256::new();
-        for key in keys {
-            hasher.update(key.as_bytes());
-        }
-        let hash = hasher.finalize();
-        Scalar::from_bytes_mod_order(hash.into())
-    }
-
-    // pub fn verify_ring_signature(
-    //     message: &[u8], 
-    //     ring_signature: (Vec<Scalar>, Scalar, Scalar), 
-    //     keys: Vec<CompressedEdwardsY>,
-    // ) -> Result<bool, &'static str> {
-    //     let n = keys.len();
-    //     let (c_values, secret_r, key_image) = ring_signature;
-        
-    //     let hp_r = Self::hash_points_to_point(&keys);
-
-    //     let mut computed_c_values: Vec<Scalar> = vec![Scalar::zero(); n];
-    //     for i in 0..n {
-    //         let ki = keys[i].decompress().ok_or("Failed to decompress public key")?;
-            
-    //         let term1 = &constants::ED25519_BASEPOINT_TABLE * &c_values[i] + ki * &computed_c_values[i];
-    //         let term2 = hp_r * c_values[i] + key_image * computed_c_values[i];
-            
-    //         computed_c_values[(i + 1) % n] = Self::hash_numbers(
-    //             &keys,
-    //             &key_image,
-    //             message,
-    //             &term1.compress(),
-    //             &term2,
-    //         );
-    //     }
-
-    //     // Check if the computed c_values match the original c_values
-    //     if c_values == computed_c_values {
-    //         Ok(true)
-    //     } else {
-    //         Ok(false)
-    //     }
-    // }
-
-    // pub fn verify_ring_signature(
-    //     keys: Vec<CompressedEdwardsY>,
-    //     message: &[u8],
-    //     c_values: Vec<Scalar>,
-    //     r_value: Scalar,
-    //     key_image: EdwardsPoint
-    // ) -> Result<bool, &'static str> {
-    //     let n = keys.len();
-    //     let hp_r = Self::hash_points_to_point(&keys);
-        
-    //     // Initialize vectors to hold z_prime and z_double_prime values
-    //     let mut z_prime: Vec<EdwardsPoint> = vec![EdwardsPoint::default(); n];
-    //     let mut z_double_prime: Vec<EdwardsPoint> = vec![EdwardsPoint::default(); n];
+            let mut hasher = Keccak256::new();
+            ring.iter().for_each(|point| hasher.update(point.compress().as_bytes()));
+            hasher.update(signature.key_image.compress().as_bytes());
+            hasher.update(message);
+            hasher.update((&signature.r[i] * &constants::ED25519_BASEPOINT_TABLE + c[i] * ring[i]).compress().as_bytes());
+            hasher.update((signature.r[i] * Self::hash_to_point(ring) + c[i] * signature.key_image).compress().as_bytes());
     
-    //     // Step 1: Compute z_prime and z_double_prime for all i in {1, 2, ..., n}
-    //     for i in 0..n {
-    //         let ci = c_values[i];
-    //         let ri = r_value;
-    //         let ki = keys[i].decompress().ok_or("Failed to decompress public key")?;
-            
-    //         z_prime[i] = &constants::ED25519_BASEPOINT_TABLE * &ri + ki * &ci;
-    //         z_double_prime[i] = (hp_r * ri) + (key_image * ci);
-    //     }
+            c[(i + 1) % n] = Scalar::from_bytes_mod_order(hasher.finalize().into());
+        }
     
-    //     // Compute c_prime_values
-    //     let mut c_prime_values: Vec<Scalar> = vec![Scalar::zero(); n];
-    //     for i in 0..n {
-    //         c_prime_values[(i + 1) % n] = Self::hash_numbers_ver(
-    //             &keys,
-    //             &key_image.compress(),
-    //             message,
-    //             &z_prime[i].compress(),
-    //             &z_double_prime[i].compress()
-    //         );
-    //     }
+        c[0] == signature.c
+    }
     
-    //     // Step 2: Check if c1_prime equals to c1
-    //     if c_prime_values[0] == c_values[0] {
-    //         Ok(true)
-    //     } else {
-    //         Err("Signature is not valid.")
-    //     }
-    // }
+    fn hash_to_scalar(data: &[EdwardsPoint]) -> Scalar {
+        let mut hasher = Keccak256::new();
+        data.iter().for_each(|point| hasher.update(point.compress().as_bytes()));
+        let result = hasher.finalize();
+        Scalar::from_bytes_mod_order(result.into())
+    }
+    
+    fn hash_to_point(data: &[EdwardsPoint]) -> EdwardsPoint {
+        let scalar = Self::hash_to_scalar(&data);
+        &constants::ED25519_BASEPOINT_TABLE * &scalar
+    }
 }
+
 
 //********************************************************************************************************************************************************/
 
@@ -488,29 +380,22 @@ mod tests {
     }
 
     #[test]
-    fn test_ring_signature() {
-        // Generate a wallet with random secret keys
+    fn test_lsag_signature() {
         let wallet = Wallet::generate();
+        let message = b"Hello, world!";
 
-        // Generate a list of keys
+        // Generate a ring of random public keys
         let mut rng = rand::thread_rng();
-        let mut keys: Vec<CompressedEdwardsY> = (0..9) // Generate 9 random keys
-            .map(|_| (&constants::ED25519_BASEPOINT_TABLE * &Scalar::random(&mut rng)).compress())
-            .collect();
+        let ring: Vec<EdwardsPoint> = (0..10).map(|_| &constants::ED25519_BASEPOINT_TABLE * &Scalar::random(&mut rng)).collect();
 
-        // Add the public key of the wallet to the list of keys
-        keys.push(wallet.public_spend_key);
+        // Choose a random index in the ring for our secret key
+        let secret_index = 3;
 
-        // Generate a ring signature
-        let message = b"test message";
-        let secret_index = keys.len() - 1; // The index of the wallet's public key in the keys vector
-        let (c_values, r_value, key_image) = wallet.generate_ring_signature(message, keys.clone(), secret_index)
-            .expect("Failed to generate ring signature");
+        // Generate an LSAG signature
+        let signature = wallet.generate_lsag_signature(message, &ring, secret_index);
 
-        // Verify the ring signature
-        let verified = wallet.verify_ring_signature(message, keys, c_values, r_value, key_image)
-            .expect("Failed to verify ring signature");
-        assert!(verified);
+        // Verify the LSAG signature
+        assert!(Wallet::verify_lsag_signature(message, &ring, &signature));
     }
-
+    
 }
