@@ -205,21 +205,18 @@ impl Wallet {
     }
 
     fn blsag(&self, message: &[u8], secret_index: usize, keys: Vec<RistrettoPoint>) -> BLSAGSignature {
-        // Step 1: Calculate key image
         let key_image = self.secret_spend_key * hash_to_point(&keys[secret_index]);
     
-        // Step 2: Generate random numbers
         let mut random_numbers: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
         for i in 0..keys.len() {
             if i != secret_index {
-                random_numbers.push(Scalar::random(&mut rand::thread_rng()));
+                random_numbers[i] = Scalar::random(&mut rand::thread_rng());
             }
         }
         let alpha = Scalar::random(&mut rand::thread_rng());
         let alpha_point = &constants::RISTRETTO_BASEPOINT_TABLE * &alpha;
         let alpha_mul_image = alpha * key_image;
     
-        // Step 3: Compute c[π+1]
         let mut hasher = Keccak256::new();
         hasher.update(message);
         hasher.update(alpha_point.compress().as_bytes());
@@ -229,13 +226,11 @@ impl Wallet {
         bytes.copy_from_slice(c_pi.as_slice());
         let c_pi_scalar = Scalar::from_bytes_mod_order(bytes);
     
-        // Step 4: Calculate c[i+1]
         let mut c_values: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
         c_values[secret_index] = c_pi_scalar;
 
-        // Step 4: Calculate c[i+1]
-        for i in (secret_index + 1)..(2*keys.len()) {
-            let real_i = i % keys.len();
+        for i in 0..keys.len() {
+            let real_i = (i + secret_index + 1) % keys.len();
             let rngck = &constants::RISTRETTO_BASEPOINT_TABLE * &random_numbers[real_i] + c_values[real_i] * keys[real_i];
             let rnhpck = random_numbers[real_i] * hash_to_point(&keys[real_i]) + c_values[real_i] * key_image;
             let mut hasher = Keccak512::new();
@@ -245,14 +240,12 @@ impl Wallet {
             let c_i_plus_1 = hasher.finalize();
             let mut output_bytes = [0u8;64];
             output_bytes.copy_from_slice(c_i_plus_1.as_slice());
-            c_values.push(Scalar::from_bytes_mod_order_wide(&output_bytes));
+            c_values[real_i] = Scalar::from_bytes_mod_order_wide(&output_bytes);
         }
 
-        // Step 5: Define rπ
         let r_pi = alpha - c_values[secret_index] * self.secret_spend_key; // (mod l)
         random_numbers[secret_index] = r_pi;
     
-        // Generate the signature
         let signature = BLSAGSignature {
             c_1: c_values[0],
             r_n: random_numbers,
@@ -264,14 +257,7 @@ impl Wallet {
 }
 
 fn verify_blsag(message: &[u8], signature: &BLSAGSignature, keys: Vec<RistrettoPoint>) -> bool {
-    // Step 1: Check lK˜ ?= 0.
-    if (Scalar::from_bytes_mod_order([0u8; 32]) * signature.k_i) != RistrettoPoint::identity() {
-        return false;
-    }
-
-    // Step 2: For i = 1, 2, ..., n iteratively compute, replacing n + 1 → 1,
-    let mut c_values: Vec<Scalar> = Vec::new();
-    c_values.push(signature.c_1);
+    let mut c_values: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
     for i in 0..keys.len() {
         let rngck = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.r_n[i] + c_values[i] * keys[i];
         let rnhpck = signature.r_n[i] * hash_to_point(&keys[i]) + c_values[i] * signature.k_i;
@@ -282,10 +268,9 @@ fn verify_blsag(message: &[u8], signature: &BLSAGSignature, keys: Vec<RistrettoP
         let c_i_plus_1 = hasher.finalize();
         let mut output_bytes = [0u8;64];
         output_bytes.copy_from_slice(c_i_plus_1.as_slice());
-        c_values.push(Scalar::from_bytes_mod_order_wide(&output_bytes));
+        c_values[i] = Scalar::from_bytes_mod_order_wide(&output_bytes);
     }
 
-    // Step 3: If c1 = c^0_1 then the signature is valid.
     return c_values[0] == signature.c_1;
 }
 
