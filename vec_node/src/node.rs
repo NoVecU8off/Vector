@@ -395,12 +395,11 @@ impl NodeService {
     }
 
     pub async fn get_version(&self) -> Version {
-        let (cfg_keypair, cfg_version, cfg_ip) = {
+        let (cfg_wallet, cfg_version, cfg_ip) = {
             let server_config = self.config.read().await;
-            (server_config.cfg_keypair.clone(), server_config.cfg_version.clone(), server_config.cfg_ip.clone())
+            (server_config.cfg_wallet.clone(), server_config.cfg_version.clone(), server_config.cfg_ip.clone())
         };
-        let keypair = cfg_keypair;
-        let msg_public = keypair.pk.to_bytes().to_vec();
+        let msg_public = cfg_wallet.public_spend_key_to_vec();
         Version {
             msg_version: cfg_version,
             msg_public,
@@ -411,15 +410,15 @@ impl NodeService {
     }
 
     pub async fn make_block(&self) -> Result<Block, NodeServiceError> {
-        let cfg_keypair = {
+        let cfg_wallet = {
             let server_config = self.config.read().await;
-            server_config.cfg_keypair.clone()
+            server_config.cfg_wallet.clone()
         };
         let blockchain = self.blockchain.read().await;
         let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
         let msg_height = (blockchain.chain_height() + 1) as u32;
-        let keypair = &cfg_keypair;
-        let pk = keypair.pk.to_bytes().to_vec();
+        let wallet = &cfg_wallet;
+        let pk = cfg_wallet.public_spend_key_to_vec();
         let transactions = self.mempool.get_transactions();
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
@@ -444,7 +443,7 @@ impl NodeService {
             msg_public: pk,
             msg_sig: vec![],
         };
-        let signature = sign_block(&block, keypair).await?;
+        let signature = sign_block(&block, wallet).await?;
         block.msg_sig = signature.to_vec();
         Ok(block)
     }
@@ -491,12 +490,11 @@ impl NodeService {
     }
 
     pub async fn make_tx(&self, to: &Vec<u8>, amount: u64) -> Result<(), NodeServiceError> {
-        let cfg_keypair = {
+        let cfg_wallet = {
             let server_config = self.config.read().await;
-            server_config.cfg_keypair.clone()
+            server_config.cfg_wallet.clone()
         };
-        let keypair = &cfg_keypair;
-        let public = keypair.pk.as_bytes().to_vec();
+        let public = cfg_wallet.public_spend_key_to_vec();
         let from = &public;
         let blockchain = self.blockchain.read().await;
         let mut inputs = Vec::new();
@@ -517,11 +515,11 @@ impl NodeService {
         let utxos = blockchain.utxos.find_by_pk(from).await?;
         for utxo in &utxos {
             let msg_to_sign = format!("{}{}", utxo.utxo_transaction_hash, utxo.utxo_output_index);
-            let msg_sig = keypair.sign(msg_to_sign.as_bytes());
+            let msg_sig = cfg_wallet.sign(msg_to_sign.as_bytes());
             let input = TransactionInput {
                 msg_previous_tx_hash: utxo.utxo_transaction_hash.clone(),
                 msg_previous_out_index: utxo.utxo_output_index,
-                msg_sig: msg_sig.to_bytes().to_vec(),
+                msg_sig: msg_sig.to_vec(),
                 msg_commited_value: utxo.utxo_commited_value.clone(),
                 msg_proof: utxo.utxo_proof.clone(),
             };

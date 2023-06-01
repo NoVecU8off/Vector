@@ -1,5 +1,5 @@
 use vec_storage::{block_db::*, utxo_db::*, pool_db::*};
-use vec_cryptography::cryptography::{Wallet, Signature};
+use vec_cryptography::cryptography::{Wallet, Signature, verify};
 use vec_proto::messages::{Header, Block, Transaction, TransactionOutput};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
@@ -142,11 +142,10 @@ impl Chain {
 
     async fn check_block_signature(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         let signature_vec = incoming_block.msg_sig.clone();
-        let signature = Signature::from_vec(&signature_vec);
-        let pk = PublicKey::from_bytes(&incoming_block.msg_public)
-            .map_err(|_| ChainOpsError::InvalidPublicKey)?;
+        let signature = Signature::from_vec(&signature_vec).unwrap();
+        let pub_sp_key = Wallet::public_spend_key_from_vec(&incoming_block.msg_public).unwrap();
         let message = hash_header_by_block(incoming_block)?;
-        pk.verify(&message, &signature.signature)?;
+        verify(&pub_sp_key, &message, &signature);
         Ok(())
     }
 
@@ -190,9 +189,9 @@ impl Chain {
             match utxo {
                 Some(u) => {
                     let msg_to_verify = format!("{}{}", u.utxo_transaction_hash, u.utxo_output_index);
-                    let pubkey = PublicKey::from_bytes(&u.utxo_public_key)?;
-                    let signature = EdSignature::from_bytes(&input.msg_sig)?;
-                    if !pubkey.verify(&msg_to_verify.as_bytes(), &signature).is_ok() {
+                    let pub_sp_key = Wallet::public_spend_key_from_vec(&u.utxo_public_key).unwrap();
+                    let signature = Signature::from_vec(&input.msg_sig).unwrap();
+                    if !verify(&pub_sp_key, &msg_to_verify.as_bytes(), &signature) {
                         return Err(ValidationError::InvalidSignature)?;
                     }
                     let mut verifier_transcript = Transcript::new(b"TransactionProof");
@@ -231,9 +230,9 @@ impl Chain {
 }
 
 pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
-    let genesis_keypair = NodeKeypair::generate_keypair();
-    let address = genesis_keypair.pk;
-    let genesis_amount: u64 = 50; // Define your genesis amount here
+    let genesis_wallet = Wallet::generate();
+    let address = genesis_wallet.public_spend_key;
+    let genesis_amount: u64 = 50; 
     let pc_gens = PedersenGens::default();
     let bp_gens = BulletproofGens::new(64, 1);
     let blinding = Scalar::random(&mut thread_rng());
@@ -251,7 +250,7 @@ pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
         msg_commited_value: commited_value.as_bytes().to_vec(),
         msg_proof: proof.to_bytes().to_vec(),
         msg_to: address.to_bytes().to_vec(),
-        msg_public: genesis_keypair.pk.to_bytes().to_vec(),
+        msg_public: genesis_wallet.public_spend_key_to_vec(),
     };
     let transaction = Transaction {
         msg_inputs: vec![],
@@ -271,10 +270,10 @@ pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
     let mut block = Block {
         msg_header: Some(header),
         msg_transactions: vec![transaction],
-        msg_public: genesis_keypair.pk.to_bytes().to_vec(),
+        msg_public: genesis_wallet.public_spend_key_to_vec(),
         msg_sig: vec![],
     };
-    let signature = sign_block(&block, &genesis_keypair).await?;
+    let signature = sign_block(&block, &genesis_wallet).await?;
     block.msg_sig = signature.to_vec();
     Ok(block)
 }
