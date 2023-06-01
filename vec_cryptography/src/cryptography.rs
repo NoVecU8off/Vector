@@ -217,14 +217,14 @@ impl Wallet {
         let alpha_point = &constants::RISTRETTO_BASEPOINT_TABLE * &alpha;
         let alpha_mul_image = alpha * key_image;
     
-        let mut hasher = Keccak256::new();
+        let mut hasher = Keccak512::new();
         hasher.update(message);
         hasher.update(alpha_point.compress().as_bytes());
         hasher.update(alpha_mul_image.compress().as_bytes());
         let c_pi = hasher.finalize();
-        let mut bytes = [0u8;32];
+        let mut bytes = [0u8;64];
         bytes.copy_from_slice(c_pi.as_slice());
-        let c_pi_scalar = Scalar::from_bytes_mod_order(bytes);
+        let c_pi_scalar = Scalar::from_bytes_mod_order_wide(&bytes);
     
         let mut c_values: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
         c_values[secret_index] = c_pi_scalar;
@@ -518,112 +518,79 @@ mod tests {
 // }
 
 
-// fn load_3(input: &[u8]) -> i64 {
-//     let mut result: i64 = 0;
-//     result = result | (input[0] as i64);
-//     result = result | ((input[1] as i64) << 8);
-//     result = result | ((input[2] as i64) << 16);
-//     result
-// }
+fn load_3(input: &[u8]) -> i64 {
+    let mut result = 0i64;
+    result = result | ((input[0] as i64));
+    result = result | ((input[1] as i64) << 8);
+    result = result | ((input[2] as i64) << 16);
+    result
+}
 
-// fn load_4(input: &[u8]) -> i64 {
-//     let mut result: i64 = 0;
-//     result = result | (input[0] as i64);
-//     result = result | ((input[1] as i64) << 8);
-//     result = result | ((input[2] as i64) << 16);
-//     result = result | ((input[3] as i64) << 24);
-//     result
-// }
+fn load_4(input: &[u8]) -> i64 {
+    let mut result = 0i64;
+    result = result | ((input[0] as i64));
+    result = result | ((input[1] as i64) << 8);
+    result = result | ((input[2] as i64) << 16);
+    result = result | ((input[3] as i64) << 24);
+    result
+}
 
-// fn sc_reduce32(s: &mut [u8]) {
-//     let mut s0: i64 = 2097151 & load_3(&s[0..3]);
-//     let mut s1: i64 = 2097151 & (load_4(&s[2..6]) >> 5);
-//     let mut s2: i64 = 2097151 & (load_3(&s[5..8]) >> 2);
-//     let mut s3: i64 = 2097151 & (load_4(&s[7..11]) >> 7);
-//     let mut s4: i64 = 2097151 & (load_4(&s[10..14]) >> 4);
-//     let mut s5: i64 = 2097151 & (load_3(&s[13..16]) >> 1);
-//     let mut s6: i64 = 2097151 & (load_4(&s[15..19]) >> 6);
-//     let mut s7: i64 = 2097151 & (load_3(&s[18..21]) >> 3);
-//     let mut s8: i64 = 2097151 & load_3(&s[21..24]);
-//     let mut s9: i64 = 2097151 & (load_4(&s[23..27]) >> 5);
-//     let mut s10: i64 = 2097151 & (load_3(&s[26..29]) >> 2);
-//     let mut s11: i64 = load_4(&s[28..32]) >> 7;
-//     let mut s12: i64 = 0;
-//     let mut carry: [i64; 12] = [0; 12];
+fn sc_reduce32(s: &mut [u8]) {
+    let mut s0 = 2097151 & load_3(&s[0..3]);
+    let mut s1  = 2097151 & (load_4(&s[2..6]) >> 5);
+    let mut s2  = 2097151 & (load_3(&s[5..8]) >> 2);
+    let mut s3  = 2097151 & (load_4(&s[7..11]) >> 7);
+    let mut s4  = 2097151 & (load_4(&s[10..14]) >> 4);
+    let mut s5  = 2097151 & (load_3(&s[13..16]) >> 1);
+    let mut s6  = 2097151 & (load_4(&s[15..19]) >> 6);
+    let mut s7  = 2097151 & (load_3(&s[18..21]) >> 3);
+    let mut s8  = 2097151 & load_3(&s[21..24]);
+    let mut s9  = 2097151 & (load_4(&s[23..27]) >> 5);
+    let mut s10 = 2097151 & (load_3(&s[26..29]) >> 2);
+    let mut s11 = load_4(&s[28..32]) >> 7;
+    let mut s12 = 0;
 
-//     for i in (0..11).step_by(2) {
-//         carry[i] = (s0 + (1<<20)) >> 21; 
-//         s1 += carry[i]; 
-//         s0 -= carry[i] << 21;
-//     }
+    let mut carry = vec![0i64; 12];
 
-//     for i in (1..11).step_by(2) {
-//         carry[i] = (s1 + (1<<20)) >> 21; 
-//         s2 += carry[i]; 
-//         s1 -= carry[i] << 21;
-//     }
+    let m = 1 << 20;
+    let n = 21;
+    for _ in 0..2 {
+        s0 += s12 * 666643;
+        s1 += s12 * 470296;
+        s2 += s12 * 654183;
+        s3 -= s12 * 997805;
+        s4 += s12 * 136657;
+        s5 -= s12 * 683901;
+        s12 = 0;
 
-//     s0 += s12 * 666643;
-//     s1 += s12 * 470296;
-//     s2 += s12 * 654183;
-//     s3 -= s12 * 997805;
-//     s4 += s12 * 136657;
-//     s5 -= s12 * 683901;
-//     s12 = 0;
+        carry[0]  = (s0 + m) >> n; s1 += carry[0]; s0 -= carry[0] << n;
+        carry[1]  = (s1 + m) >> n; s2 += carry[1]; s1 -= carry[1] << n;
+        carry[2]  = (s2 + m) >> n; s3 += carry[2]; s2 -= carry[2] << n;
+        carry[3]  = (s3 + m) >> n; s4 += carry[3]; s3 -= carry[3] << n;
+        carry[4]  = (s4 + m) >> n; s5 += carry[4]; s4 -= carry[4] << n;
+        carry[5]  = (s5 + m) >> n; s6 += carry[5]; s5 -= carry[5] << n;
+        carry[6]  = (s6 + m) >> n; s7 += carry[6]; s6 -= carry[6] << n;
+        carry[7]  = (s7 + m) >> n; s8 += carry[7]; s7 -= carry[7] << n;
+        carry[8]  = (s8 + m) >> n; s9 += carry[8]; s8 -= carry[8] << n;
+        carry[9]  = (s9 + m) >> n; s10 += carry[9]; s9 -= carry[9] << n;
+        carry[10] = (s10 + m) >> n; s11 += carry[10]; s10 -= carry[10] << n;
+        carry[11] = (s11 + m) >> n; s12 += carry[11]; s11 -= carry[11] << n;
+    }
 
-//     for i in 0..11 {
-//         carry[i] = s0 >> 21; 
-//         s1 += carry[i]; 
-//         s0 -= carry[i] << 21;
-//     }
+    let mut s = vec![
+        s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11
+    ];
 
-//     s0 += s12 * 666643;
-//     s1 += s12 * 470296;
-//     s2 += s12 * 654183;
-//     s3 -= s12 * 997805;
-//     s4 += s12 * 136657;
-//     s5 -= s12 * 683901;
+    for i in 0..12 {
+        s[i] += s12 * [666643, 470296, 654183, -997805, 136657, -683901][i % 6];
+        carry[i] = s[i] >> 21;
+        if i < 11 {
+            s[i + 1] += carry[i];
+        }
+        s[i] -= carry[i] << 21;
+    }
+}
 
-//     for i in 0..11 {
-//         carry[i] = s0 >> 21; 
-//         s1 += carry[i]; 
-//         s0 -= carry[i] << 21;
-//     }
-
-//     // The below assignments will require to use as u8 and checked conversion (to_u8_checked) may be helpful here to ensure we don't overflow u8
-//     s[0] = (s0 >> 0) as u8;
-//     s[1] = (s0 >> 8) as u8;
-//     s[2] = ((s0 >> 16) | (s1 << 5)) as u8;
-//     s[3] = (s1 >> 3) as u8;
-//     s[4] = (s1 >> 11) as u8;
-//     s[5] = ((s1 >> 19) | (s2 << 2)) as u8;
-//     s[6] = (s2 >> 6) as u8;
-//     s[7] = ((s2 >> 14) | (s3 << 7)) as u8;
-//     s[8] = (s3 >> 1) as u8;
-//     s[9] = (s3 >> 9) as u8;
-//     s[10] = ((s3 >> 17) | (s4 << 4)) as u8;
-//     s[11] = (s4 >> 4) as u8;
-//     s[12] = (s4 >> 12) as u8;
-//     s[13] = ((s4 >> 20) | (s5 << 1)) as u8;
-//     s[14] = (s5 >> 7) as u8;
-//     s[15] = ((s5 >> 15) | (s6 << 6)) as u8;
-//     s[16] = (s6 >> 2) as u8;
-//     s[17] = (s6 >> 10) as u8;
-//     s[18] = ((s6 >> 18) | (s7 << 3)) as u8;
-//     s[19] = (s7 >> 5) as u8;
-//     s[20] = (s7 >> 13) as u8;
-//     s[21] = s8 as u8;
-//     s[22] = (s8 >> 8) as u8;
-//     s[23] = ((s8 >> 16) | (s9 << 5)) as u8;
-//     s[24] = (s9 >> 3) as u8;
-//     s[25] = (s9 >> 11) as u8;
-//     s[26] = ((s9 >> 19) | (s10 << 2)) as u8;
-//     s[27] = (s10 >> 6) as u8;
-//     s[28] = ((s10 >> 14) | (s11 << 7)) as u8;
-//     s[29] = (s11 >> 1) as u8;
-//     s[30] = (s11 >> 9) as u8;
-//     s[31] = (s11 >> 17) as u8;
-// }
 
 // fn H_n(x: &[u8]) -> [u8; 32] {
 //     let mut hasher = Keccak256::new();
