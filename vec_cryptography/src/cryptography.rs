@@ -1,33 +1,25 @@
-use curve25519_dalek_ng::{scalar::Scalar, ristretto::RistrettoPoint};
-use curve25519_dalek_ng::ristretto::CompressedRistretto;
-use curve25519_dalek_ng::constants;
-use sha3::{Keccak256, Keccak512, Digest};
+use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
+use sha3::{Keccak256, Digest};
 use bs58;
-use curve25519_dalek_ng::traits::Identity;
 
-#[derive(Clone, Copy)]
-pub struct Signature {
-    r: CompressedRistretto,
-    s: Scalar,
-}
-
-struct Wallet {
-    secret_spend_key: Scalar,
-    secret_view_key: Scalar,
-    public_spend_key: RistrettoPoint,
-    public_view_key: RistrettoPoint,
-    address: String,
+#[derive(Debug, Clone)]
+pub struct Wallet {
+    pub secret_spend_key: Scalar,
+    pub secret_view_key: Scalar,
+    pub public_spend_key: RistrettoPoint,
+    pub public_view_key: RistrettoPoint,
+    pub address: String,
 }
 
 #[derive(Clone)]
 pub struct BLSAGSignature {
-    c_1: Scalar,
-    r_n: Vec<Scalar>,
-    k_i: RistrettoPoint,
+    i: RistrettoPoint,
+    c: Scalar,
+    s: Vec<Scalar>,
 }
 
 impl Wallet {
-    fn generate() -> Wallet {
+    pub fn generate() -> Wallet {
         let mut rng = rand::thread_rng();
 
         // Generate a random secret spend key
@@ -66,7 +58,7 @@ impl Wallet {
         }
     }
 
-    fn reconstruct(secret_spend_key: Scalar) -> Wallet {
+    pub fn reconstruct(secret_spend_key: Scalar) -> Wallet {
         // Derive the secret view key by hashing the secret spend key and reducing modulo l
         let mut hasher = Keccak256::new();
         hasher.update(secret_spend_key.as_bytes());
@@ -100,7 +92,7 @@ impl Wallet {
         }
     }
 
-    fn sign(&self, message: &[u8]) -> Signature {
+    pub fn sign(&self, message: &[u8]) -> Signature {
         let mut rng = rand::thread_rng();
     
         // Step 1: Generate a random nonce
@@ -125,30 +117,8 @@ impl Wallet {
     
         Signature { r, s }
     }
-    
-    fn verify(public_spend_key: RistrettoPoint, message: &[u8], signature: Signature) -> bool {
-        // Step 1: Decompress the R value and public key
-        let r = signature.r.decompress().unwrap();
-        let public_spend_key_point = public_spend_key;
-    
-        // Step 2: Hash the concatenation of R, the public key, and the message
-        let mut hasher = Keccak256::new();
-        hasher.update(signature.r.as_bytes());
-        hasher.update(public_spend_key.compress().as_bytes());
-        hasher.update(message);
-        let h = hasher.finalize();
-    
-        // Step 3: Convert the hash to a scalar
-        let h_scalar = Scalar::from_bits(h.into());
-    
-        // Step 4: Calculate the expected R value: R' = s * basepoint + h * public_key
-        let r_prime = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.s + public_spend_key_point * &h_scalar;
-    
-        // Step 5: Verify the signature by checking if R equals R'
-        r == r_prime
-    }
 
-    fn generate_one_time_address(&self, recipient_view_key: RistrettoPoint, recipient_spend_key: RistrettoPoint, output_index: u64) -> Result<(CompressedRistretto, CompressedRistretto), &'static str> {
+    pub fn generate_one_time_address(&self, recipient_view_key: RistrettoPoint, recipient_spend_key: RistrettoPoint, output_index: u64) -> Result<(CompressedRistretto, CompressedRistretto), &'static str> {
         // Step 0: Generate a random transaction private key
         let mut rng = rand::thread_rng();
         let tx_private_key = Scalar::random(&mut rng);
@@ -180,7 +150,7 @@ impl Wallet {
     }
     
 
-    fn check_property(&self, tx_public_key: CompressedRistretto, output_index: u64, output: CompressedRistretto) -> Result<bool, &'static str> {
+    pub fn check_property(&self, tx_public_key: CompressedRistretto, output_index: u64, output: CompressedRistretto) -> Result<bool, &'static str> {
         // Step 1: Compute pV * R, where pV is the private view key and R is the transaction public key
         let tx_public_key_point = tx_public_key.decompress().ok_or("Failed to decompress transaction public key")?;
         let pv_times_r = self.secret_view_key * tx_public_key_point;
@@ -204,122 +174,175 @@ impl Wallet {
         Ok(expected_output.compress() == output)
     }
 
-    fn blsag(&self, message: &[u8], secret_index: usize, keys: Vec<RistrettoPoint>) -> BLSAGSignature {
-        let key_image = self.secret_spend_key * hash_to_point(&keys[secret_index]);
-    
-        let mut random_numbers: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
-        for i in 0..keys.len() {
-            if i != secret_index {
-                random_numbers[i] = Scalar::random(&mut rand::thread_rng());
+    pub fn gen_blsag(&self, p: &[RistrettoPoint], m: &[u8]) -> BLSAGSignature {
+        let a = Scalar::random(&mut rand::thread_rng());
+        let n = p.len();
+
+        let mut c: Vec<Scalar> = vec![Scalar::zero(); n];
+        let mut s: Vec<Scalar> = vec![Scalar::zero(); n];
+        let mut l: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
+        let mut r: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
+
+        let mut j = 0;
+
+        for (i, rk) in p.iter().enumerate() {
+            if &self.public_spend_key == rk {
+                j = i;
+                break;
             }
         }
-        let alpha = Scalar::random(&mut rand::thread_rng());
-        let alpha_point = &constants::RISTRETTO_BASEPOINT_TABLE * &alpha;
-        let alpha_mul_image = alpha * key_image;
-    
-        let mut hasher = Keccak512::new();
-        hasher.update(message);
-        hasher.update(alpha_point.compress().as_bytes());
-        hasher.update(alpha_mul_image.compress().as_bytes());
-        let c_pi = hasher.finalize();
-        let mut bytes = [0u8;64];
-        bytes.copy_from_slice(c_pi.as_slice());
-        let c_pi_scalar = Scalar::from_bytes_mod_order_wide(&bytes);
-    
-        let mut c_values: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
-        c_values[secret_index] = c_pi_scalar;
 
-        for i in 0..keys.len() {
-            let real_i = (i + secret_index + 1) % keys.len();
-            let rngck = &constants::RISTRETTO_BASEPOINT_TABLE * &random_numbers[real_i] + c_values[real_i] * keys[real_i];
-            let rnhpck = random_numbers[real_i] * hash_to_point(&keys[real_i]) + c_values[real_i] * key_image;
-            let mut hasher = Keccak512::new();
-            hasher.update(message);
-            hasher.update(rngck.compress().as_bytes());
-            hasher.update(rnhpck.compress().as_bytes());
-            let c_i_plus_1 = hasher.finalize();
-            let mut output_bytes = [0u8;64];
-            output_bytes.copy_from_slice(c_i_plus_1.as_slice());
-            c_values[real_i] = Scalar::from_bytes_mod_order_wide(&output_bytes);
+        let image = self.secret_spend_key * hash_to_point(&p[j]);
+
+        for i in 0..n {
+            if i == j {
+                continue;
+            }
+            s[i] = Scalar::random(&mut rand::thread_rng());
         }
 
-        let r_pi = alpha - c_values[secret_index] * self.secret_spend_key; // (mod l)
-        random_numbers[secret_index] = r_pi;
-    
-        let signature = BLSAGSignature {
-            c_1: c_values[0],
-            r_n: random_numbers,
-            k_i: key_image,
-        };
-    
-        return signature;
+        let j1 = (j+1) % n;
+
+        l[j] = a * &constants::RISTRETTO_BASEPOINT_POINT;
+        r[j] = a * hash_to_point(&p[j]);
+        let mut hasher = Keccak256::new();
+            hasher.update(m);
+            hasher.update(l[j].compress().to_bytes());
+            hasher.update(r[j].compress().to_bytes());
+            let hash = hasher.finalize();
+        c[(j+1) % n] = Scalar::from_bytes_mod_order(hash.into());
+
+        for k in 0..(n-1) {
+            let i = (j1 + k) % n;
+            let ip1 = (j1 + k + 1) % n;
+            l[i] = s[i] * &constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i];
+            r[i] = s[i] * hash_to_point(&p[i]) + c[i] * image;
+            let mut hasher = Keccak256::new();
+                hasher.update(m);
+                hasher.update(l[i].compress().to_bytes());
+                hasher.update(r[i].compress().to_bytes());
+            let hash = hasher.finalize();
+            c[ip1] = Scalar::from_bytes_mod_order(hash.into());
+        }
+
+        s[j] = a - c[j] * self.secret_spend_key;
+
+        BLSAGSignature {
+            i: image,
+            c: c[0],
+            s,
+        }
     }
 }
 
-fn verify_blsag(message: &[u8], signature: &BLSAGSignature, keys: Vec<RistrettoPoint>) -> bool {
-    let mut c_values: Vec<Scalar> = vec![Scalar::zero(); keys.len()];
-    for i in 0..keys.len() {
-        let rngck = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.r_n[i] + c_values[i] * keys[i];
-        let rnhpck = signature.r_n[i] * hash_to_point(&keys[i]) + c_values[i] * signature.k_i;
-        let mut hasher = Keccak512::new();
-        hasher.update(message);
-        hasher.update(rngck.compress().as_bytes());
-        hasher.update(rnhpck.compress().as_bytes());
-        let c_i_plus_1 = hasher.finalize();
-        let mut output_bytes = [0u8;64];
-        output_bytes.copy_from_slice(c_i_plus_1.as_slice());
-        c_values[i] = Scalar::from_bytes_mod_order_wide(&output_bytes);
-    }
+pub fn verify(public_spend_key: &RistrettoPoint, message: &[u8], signature: &Signature) -> bool {
+    // Decompress the R value and public key
+    let r = signature.r.decompress().unwrap();
+    let public_spend_key_point = public_spend_key;
 
-    return c_values[0] == signature.c_1;
+    // Hash the concatenation of R, the public key, and the message
+    let mut hasher = Keccak256::new();
+    hasher.update(signature.r.as_bytes());
+    hasher.update(public_spend_key.compress().as_bytes());
+    hasher.update(message);
+    let h = hasher.finalize();
+
+    // Convert the hash to a scalar
+    let h_scalar = Scalar::from_bits(h.into());
+
+    // Calculate the expected R value: R' = s * basepoint + h * public_key
+    let r_prime = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.s + public_spend_key_point * &h_scalar;
+
+    // Verify the signature by checking if R equals R'
+    r == r_prime
 }
 
-fn to_bytes(point: &RistrettoPoint) -> [u8; 32] {
-    point.compress().to_bytes()
+pub fn verify_blsag(sig: &BLSAGSignature, p: &[RistrettoPoint], m: &[u8]) -> bool {
+    let n = p.len();
+    let c1 = sig.c;
+    let s = sig.s.clone();
+    let image = sig.i;
+    let mut l: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
+    let mut r: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
+    let mut c: Vec<Scalar> = vec![Scalar::zero(); n];
+    c[0] = c1;
+    for j in 0..n {
+        let i = j % n;
+        let ip1 = (j + 1) % n;
+        l[i] = s[i] * &constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i];
+        r[i] = s[i] * hash_to_point(&p[i]) + c[i] * image;
+        let mut hasher = Keccak256::new();
+            hasher.update(m);
+            hasher.update(l[i].compress().to_bytes());
+            hasher.update(r[i].compress().to_bytes());
+        let hash = hasher.finalize();
+        c[ip1] = Scalar::from_bytes_mod_order(hash.into());
+    }
+    if c1 == c[0] {
+        return true;
+    }
+    false
+}
+
+#[derive(Clone, Copy)]
+pub struct Signature {
+    r: CompressedRistretto,
+    s: Scalar,
+}
+
+impl Signature {
+    pub fn to_vec(&self) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(self.r.as_bytes());
+        v.extend_from_slice(self.s.as_bytes());
+        v
+    }
+
+    pub fn from_vec(v: &[u8]) -> Option<Signature> {
+        if v.len() != 64 { // Assuming both r and s are 32 bytes each
+            return None;
+        }
+        let r = CompressedRistretto::from_slice(&v[0..32]);
+        let s = Scalar::from_canonical_bytes(v[32..64].try_into().unwrap());
+        match s {
+            Some(scalar) => Some(Signature { r, s: scalar }),
+            None => None,
+        }
+    }
 }
 
 fn hash_to_point(point: &RistrettoPoint) -> RistrettoPoint {
-    let mut hasher = Keccak512::new();
-    hasher.update(to_bytes(point));
+    let mut hasher = Keccak256::new();
+    hasher.update(point.compress().to_bytes());
     let hash = hasher.finalize();
-    let mut output_bytes = [0u8; 64];
-    output_bytes.copy_from_slice(&hash.as_slice());
-    RistrettoPoint::from_uniform_bytes(&output_bytes)
+    let scalar = Scalar::from_bytes_mod_order(hash.into());
+    &constants::RISTRETTO_BASEPOINT_TABLE * &scalar
 }
 
-//********************************************************************************************************************************************************/
 //********************************************************************************************************************************************************/
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::rngs::StdRng;
-    use rand::SeedableRng;
-    use rand::Rng;
+
     #[test]
     fn test_blsag_signature() {
-        // Create a deterministic random number generator for testing
-        let mut rng: StdRng = SeedableRng::from_entropy();
 
         // Generate a few wallets
-        let wallets: Vec<Wallet> = (0..5).map(|_| Wallet::generate()).collect();
+        let wallets: Vec<Wallet> = (0..15).map(|_| Wallet::generate()).collect();
 
         // Extract public keys
         let public_keys: Vec<RistrettoPoint> = wallets.iter().map(|w| w.public_spend_key).collect();
-
-        // Secret index
-        let secret_index: usize = rng.gen_range(0..wallets.len());
 
         // Message to sign
         let message: Vec<u8> = b"This is a test message".to_vec();
 
         // Create the BLSAG signature
-        let signature: BLSAGSignature = wallets[secret_index].blsag(&message, secret_index, public_keys.clone());
+        let signature: BLSAGSignature = wallets[14].gen_blsag(&public_keys, &message);
 
         // Verify the signature
-        assert!(verify_blsag(&message, &signature, public_keys));
+        assert!(verify_blsag(&signature, &public_keys, &message));
     }
-
 
     #[test]
     fn test_wallet_generation() {
@@ -350,15 +373,15 @@ mod tests {
         let signature = wallet.sign(message);
 
         // Check if the signature is valid
-        assert!(Wallet::verify(wallet.public_spend_key, message, signature));
+        assert!(verify(&wallet.public_spend_key, message, &signature));
 
         // Check if the signature is invalid for a different message
         let different_message = b"Goodbye, World!";
-        assert!(!Wallet::verify(wallet.public_spend_key, different_message, signature));
+        assert!(!verify(&wallet.public_spend_key, different_message, &signature));
 
         // Check if the signature is invalid for a different key
         let different_wallet = Wallet::generate();
-        assert!(!Wallet::verify(different_wallet.public_spend_key, message, signature));
+        assert!(!verify(&different_wallet.public_spend_key, message, &signature));
     }
 
     #[test]
@@ -411,7 +434,6 @@ mod tests {
     }
 }
 
-//&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&/
 //&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&/
 
 // struct CLSAG {
@@ -518,84 +540,86 @@ mod tests {
 // }
 
 
-fn load_3(input: &[u8]) -> i64 {
-    let mut result = 0i64;
-    result = result | ((input[0] as i64));
-    result = result | ((input[1] as i64) << 8);
-    result = result | ((input[2] as i64) << 16);
-    result
-}
+// fn load_3(input: &[u8]) -> i64 {
+//     let mut result = 0i64;
+//     result = result | ((input[0] as i64));
+//     result = result | ((input[1] as i64) << 8);
+//     result = result | ((input[2] as i64) << 16);
+//     result
+// }
 
-fn load_4(input: &[u8]) -> i64 {
-    let mut result = 0i64;
-    result = result | ((input[0] as i64));
-    result = result | ((input[1] as i64) << 8);
-    result = result | ((input[2] as i64) << 16);
-    result = result | ((input[3] as i64) << 24);
-    result
-}
+// fn load_4(input: &[u8]) -> i64 {
+//     let mut result = 0i64;
+//     result = result | ((input[0] as i64));
+//     result = result | ((input[1] as i64) << 8);
+//     result = result | ((input[2] as i64) << 16);
+//     result = result | ((input[3] as i64) << 24);
+//     result
+// }
 
-fn sc_reduce32(s: &mut [u8]) {
-    let mut s0 = 2097151 & load_3(&s[0..3]);
-    let mut s1  = 2097151 & (load_4(&s[2..6]) >> 5);
-    let mut s2  = 2097151 & (load_3(&s[5..8]) >> 2);
-    let mut s3  = 2097151 & (load_4(&s[7..11]) >> 7);
-    let mut s4  = 2097151 & (load_4(&s[10..14]) >> 4);
-    let mut s5  = 2097151 & (load_3(&s[13..16]) >> 1);
-    let mut s6  = 2097151 & (load_4(&s[15..19]) >> 6);
-    let mut s7  = 2097151 & (load_3(&s[18..21]) >> 3);
-    let mut s8  = 2097151 & load_3(&s[21..24]);
-    let mut s9  = 2097151 & (load_4(&s[23..27]) >> 5);
-    let mut s10 = 2097151 & (load_3(&s[26..29]) >> 2);
-    let mut s11 = load_4(&s[28..32]) >> 7;
-    let mut s12 = 0;
+// fn sc_reduce32(s: &mut [u8]) -> [u8; 32] {
+//     let mut s0 = 2097151 & load_3(&s[0..3]);
+//     let mut s1  = 2097151 & (load_4(&s[2..6]) >> 5);
+//     let mut s2  = 2097151 & (load_3(&s[5..8]) >> 2);
+//     let mut s3  = 2097151 & (load_4(&s[7..11]) >> 7);
+//     let mut s4  = 2097151 & (load_4(&s[10..14]) >> 4);
+//     let mut s5  = 2097151 & (load_3(&s[13..16]) >> 1);
+//     let mut s6  = 2097151 & (load_4(&s[15..19]) >> 6);
+//     let mut s7  = 2097151 & (load_3(&s[18..21]) >> 3);
+//     let mut s8  = 2097151 & load_3(&s[21..24]);
+//     let mut s9  = 2097151 & (load_4(&s[23..27]) >> 5);
+//     let mut s10 = 2097151 & (load_3(&s[26..29]) >> 2);
+//     let mut s11 = load_4(&s[28..32]) >> 7;
+//     let mut s12 = 0;
 
-    let mut carry = vec![0i64; 12];
+//     let mut carry = vec![0i64; 12];
 
-    let m = 1 << 20;
-    let n = 21;
-    for _ in 0..2 {
-        s0 += s12 * 666643;
-        s1 += s12 * 470296;
-        s2 += s12 * 654183;
-        s3 -= s12 * 997805;
-        s4 += s12 * 136657;
-        s5 -= s12 * 683901;
-        s12 = 0;
+//     let m = 1 << 20;
+//     let n = 21;
+//     for _ in 0..2 {
+//         s0 += s12 * 666643;
+//         s1 += s12 * 470296;
+//         s2 += s12 * 654183;
+//         s3 -= s12 * 997805;
+//         s4 += s12 * 136657;
+//         s5 -= s12 * 683901;
+//         s12 = 0;
 
-        carry[0]  = (s0 + m) >> n; s1 += carry[0]; s0 -= carry[0] << n;
-        carry[1]  = (s1 + m) >> n; s2 += carry[1]; s1 -= carry[1] << n;
-        carry[2]  = (s2 + m) >> n; s3 += carry[2]; s2 -= carry[2] << n;
-        carry[3]  = (s3 + m) >> n; s4 += carry[3]; s3 -= carry[3] << n;
-        carry[4]  = (s4 + m) >> n; s5 += carry[4]; s4 -= carry[4] << n;
-        carry[5]  = (s5 + m) >> n; s6 += carry[5]; s5 -= carry[5] << n;
-        carry[6]  = (s6 + m) >> n; s7 += carry[6]; s6 -= carry[6] << n;
-        carry[7]  = (s7 + m) >> n; s8 += carry[7]; s7 -= carry[7] << n;
-        carry[8]  = (s8 + m) >> n; s9 += carry[8]; s8 -= carry[8] << n;
-        carry[9]  = (s9 + m) >> n; s10 += carry[9]; s9 -= carry[9] << n;
-        carry[10] = (s10 + m) >> n; s11 += carry[10]; s10 -= carry[10] << n;
-        carry[11] = (s11 + m) >> n; s12 += carry[11]; s11 -= carry[11] << n;
-    }
+//         carry[0]  = (s0 + m) >> n; s1 += carry[0]; s0 -= carry[0] << n;
+//         carry[1]  = (s1 + m) >> n; s2 += carry[1]; s1 -= carry[1] << n;
+//         carry[2]  = (s2 + m) >> n; s3 += carry[2]; s2 -= carry[2] << n;
+//         carry[3]  = (s3 + m) >> n; s4 += carry[3]; s3 -= carry[3] << n;
+//         carry[4]  = (s4 + m) >> n; s5 += carry[4]; s4 -= carry[4] << n;
+//         carry[5]  = (s5 + m) >> n; s6 += carry[5]; s5 -= carry[5] << n;
+//         carry[6]  = (s6 + m) >> n; s7 += carry[6]; s6 -= carry[6] << n;
+//         carry[7]  = (s7 + m) >> n; s8 += carry[7]; s7 -= carry[7] << n;
+//         carry[8]  = (s8 + m) >> n; s9 += carry[8]; s8 -= carry[8] << n;
+//         carry[9]  = (s9 + m) >> n; s10 += carry[9]; s9 -= carry[9] << n;
+//         carry[10] = (s10 + m) >> n; s11 += carry[10]; s10 -= carry[10] << n;
+//         carry[11] = (s11 + m) >> n; s12 += carry[11]; s11 -= carry[11] << n;
+//     }
 
-    let mut s = vec![
-        s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11
-    ];
+//     let mut sc = vec![
+//         s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11
+//     ];
 
-    for i in 0..12 {
-        s[i] += s12 * [666643, 470296, 654183, -997805, 136657, -683901][i % 6];
-        carry[i] = s[i] >> 21;
-        if i < 11 {
-            s[i + 1] += carry[i];
-        }
-        s[i] -= carry[i] << 21;
-    }
-}
+//     for i in 0..12 {
+//         sc[i] += s12 * [666643, 470296, 654183, -997805, 136657, -683901][i % 6];
+//         carry[i] = sc[i] >> 21;
+//         if i < 11 {
+//             sc[i + 1] += carry[i];
+//         }
+//         sc[i] -= carry[i] << 21;
+//     }
 
+//     let mut output = [0u8; 32];
+//     for (i, value) in sc.iter().enumerate() {
+//         for j in 0..8 {
+//             if i * 8 + j < 32 {
+//                 output[i * 8 + j] = (*value >> (j * 8)) as u8;
+//             }
+//         }
+//     }
 
-// fn H_n(x: &[u8]) -> [u8; 32] {
-//     let mut hasher = Keccak256::new();
-//     hasher.update(x);
-//     let mut data = hasher.finalize().to_vec();
-//     sc_reduce32(&mut data);
-//     data.try_into().expect("Wrong length after sc_reduce32")
+//     output
 // }

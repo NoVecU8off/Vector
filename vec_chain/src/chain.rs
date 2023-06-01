@@ -1,17 +1,15 @@
 use vec_storage::{block_db::*, utxo_db::*, pool_db::*};
-use vec_cryptography::cryptography::{NodeKeypair, Signature};
+use vec_cryptography::cryptography::{Wallet, Signature};
 use vec_proto::messages::{Header, Block, Transaction, TransactionOutput};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_transaction::transaction::hash_transaction;
+use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
 use hex::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
-use ed25519_dalek::{PublicKey, Verifier, Signature as EdSignature};
 use vec_errors::errors::*;
 use prost::Message;
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
-use curve25519_dalek_ng::scalar::Scalar;
-use curve25519_dalek_ng::ristretto::CompressedRistretto;
 use merlin::Transcript;
 use rand::thread_rng;
 
@@ -144,7 +142,7 @@ impl Chain {
 
     async fn check_block_signature(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         let signature_vec = incoming_block.msg_sig.clone();
-        let signature = Signature::signature_from_vec(&signature_vec);
+        let signature = Signature::from_vec(&signature_vec);
         let pk = PublicKey::from_bytes(&incoming_block.msg_public)
             .map_err(|_| ChainOpsError::InvalidPublicKey)?;
         let message = hash_header_by_block(incoming_block)?;
