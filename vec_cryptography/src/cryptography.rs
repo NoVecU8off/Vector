@@ -4,7 +4,7 @@ use rand::prelude::SliceRandom;
 use merlin::Transcript;
 use sha3::{Keccak256, Digest};
 use bs58;
-use vec_proto::messages::{TransactionOutput, TransactionInput, Transaction};
+use vec_proto::messages::{TransactionOutput, TransactionInput};
 use vec_storage::output_db::{self, OutputStorer};
 
 #[derive(Debug, Clone)]
@@ -41,15 +41,7 @@ impl Wallet {
         let public_view_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret_view_key;
 
         // Prepare the address data (public spend key + public view key)
-        let mut data = vec![];
-        data.extend(public_spend_key.compress().as_bytes());
-        data.extend(public_view_key.compress().as_bytes());
-
-        // Add the checksum (the first four bytes of the Keccak-256 hash of the address data)
-        let mut hasher = Keccak256::new();
-        hasher.update(&data);
-        let hash = hasher.finalize();
-        data.extend(&hash[0..4]);
+        let data = [public_spend_key.compress().to_bytes().as_slice(), public_view_key.compress().to_bytes().as_slice()].concat();
 
         // Encode the address data as a Base58 string
         let address = bs58::encode(&data).into_string();
@@ -117,7 +109,7 @@ impl Wallet {
     pub async fn prepare_inputs(
         &self
     ) -> (Vec<TransactionInput>, u64) {
-        let owned_db = sled::open("PATH").expect("failed to open database");
+        let owned_db = sled::open("C:/Vector/outputs").expect("failed to open database");
         let output_db = output_db::OutputDB::new(owned_db);
         let output_set = output_db.get().await.unwrap();
         let mut total_input_amount = 0;
@@ -148,11 +140,12 @@ impl Wallet {
 
     pub fn prepare_output(
         &self,
-        recipient_view_key: CompressedRistretto,
-        recipient_spend_key: CompressedRistretto,
+        recipient_address: &str,
         output_index: u64,
         amount: u64,
     ) -> TransactionOutput {
+        // 0. Derive keys from address
+        let (recipient_spend_key, recipient_view_key) = derive_keys_from_address(recipient_address).unwrap();
         // 1. Stealth address for output
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
@@ -477,6 +470,20 @@ pub fn verify(public_spend_key: &CompressedRistretto, message: &[u8], signature:
     let r_prime = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.s + public_spend_key_point.decompress().unwrap() * &h_scalar;
 
     r == r_prime
+}
+
+pub fn derive_keys_from_address(address: &str) -> Result<(CompressedRistretto, CompressedRistretto), bs58::decode::Error> {
+    // Decode the address from a Base58 string
+    let data = bs58::decode(address).into_vec()?;
+
+    // Separate the data into public_spend_key and public_view_key
+    let (public_spend_key_data, public_view_key_data) = data.split_at(32);
+
+    // Convert the byte data to CompressedRistretto
+    let public_spend_key = CompressedRistretto::from_slice(public_spend_key_data);
+    let public_view_key = CompressedRistretto::from_slice(public_view_key_data);
+
+    Ok((public_spend_key, public_view_key))
 }
 
 #[derive(Clone, Copy)]

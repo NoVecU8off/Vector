@@ -1,16 +1,12 @@
 use vec_storage::{block_db::*, output_db::*, image_db::*};
 use vec_cryptography::cryptography::{Wallet, BLSAGSignature, hash_to_point};
-use vec_proto::messages::{Header, Block, Transaction, TransactionOutput};
+use vec_proto::messages::{Header, Block, Transaction};
 use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use vec_block::block::*;
-use vec_merkle::merkle::MerkleTree;
 use hex::encode;
-use std::time::{SystemTime, UNIX_EPOCH};
 use vec_errors::errors::*;
-use prost::Message;
 use merlin::Transcript;
-use rand::thread_rng;
 use sha3::{Keccak256, Digest};
 
 #[derive(Clone)]
@@ -71,17 +67,6 @@ impl Chain {
         Ok(chain)
     }
 
-    pub async fn genesis(blocks: Box<dyn BlockStorer>, images: Box<dyn ImageStorer>, outputs: Box<dyn OutputStorer>) -> Result<Chain, ChainOpsError> {
-        let mut chain = Chain {
-            headers: HeaderList::new(),
-            blocks,
-            images,
-            outputs
-        };
-        chain.add_leader_block(create_genesis_block().await?).await?;
-        Ok(chain)
-    }
-
     pub fn chain_height(&self) -> usize {
         self.headers.headers_list_height()
     }
@@ -108,12 +93,15 @@ impl Chain {
         Ok(())
     }
 
-    pub async fn add_leader_block(&mut self, block: Block) -> Result<(), ChainOpsError> {
+    pub async fn add_genesis_block(&mut self, wallet: &Wallet, block: Block) -> Result<(), ChainOpsError> {
         let header = block
             .msg_header
             .as_ref()
             .ok_or(ChainOpsError::MissingBlockHeader)?;
         self.headers.add_header(header.clone());
+        for transaction in block.msg_transactions.iter() {
+            self.process_transaction(wallet, transaction).await?;
+        };
         let hash = hash_header_by_block(&block).unwrap().to_vec();
         self.blocks.put(hash, &block).await?;
         Ok(())
@@ -171,6 +159,23 @@ impl Chain {
         }
         Ok(())
     }
+
+    pub async fn validate_transaction(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
+        let inputs_valid = self.validate_inputs(transaction).await?;
+        let outputs_valid = self.validate_outputs(transaction)?;
+    
+        Ok(inputs_valid && outputs_valid)
+    }
+
+    pub async fn get_balance(&self) -> u64 {
+        let output_set = self.outputs.get().await.unwrap();
+        let mut total_balance = 0;
+        for owned_output in &output_set {
+            let decrypted_amount = owned_output.decrypted_amount as u64;
+            total_balance += decrypted_amount;
+        }
+        total_balance
+    }
     
     pub async fn validate_inputs(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
         for input in transaction.msg_inputs.iter() {
@@ -205,13 +210,6 @@ impl Chain {
             }
         }
         Ok(true)
-    }
-    
-    pub async fn validate_transaction(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
-        let inputs_valid = self.validate_inputs(transaction).await?;
-        let outputs_valid = self.validate_outputs(transaction)?;
-    
-        Ok(inputs_valid && outputs_valid)
     }
 
     pub fn verify_blsag(&self, sig: &BLSAGSignature, p: &[CompressedRistretto], m: &[u8]) -> bool {
@@ -265,44 +263,4 @@ impl Chain {
         }
         Ok(())
     }
-}
-
-pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {
-    let genesis_wallet = Wallet::generate();
-    let address = genesis_wallet.public_spend_key;
-    let genesis_amount: u64 = 50; 
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(64, 1);
-    let blinding = Scalar::random(&mut thread_rng());
-    let mut transcript = Transcript::new(b"TransactionRangeProof");
-    let (proof, commited_value) = RangeProof::prove_single(
-        &bp_gens, 
-        &pc_gens, 
-        &mut transcript, 
-        genesis_amount, 
-        &blinding, 
-        64
-    )
-    .unwrap();
-    
-    let transaction = Transaction {
-        msg_inputs: vec![],
-        msg_outputs: vec![],
-    };
-    let mut bytes = Vec::new();
-    transaction.encode(&mut bytes).unwrap();
-    let merkle_tree = MerkleTree::from_list(&vec![bytes]);
-    let merkle_root = merkle_tree.get_hash();
-    let header = Header {
-        msg_version: 1,
-        msg_height: 0,
-        msg_previous_hash: vec![],
-        msg_root_hash: merkle_root,
-        msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
-    };
-    let block = Block {
-        msg_header: Some(header),
-        msg_transactions: vec![transaction],
-    };
-    Ok(block)
 }

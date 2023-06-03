@@ -44,10 +44,10 @@ message LocalState {
 
 message Version {
     string msg_version = 1;
-    bytes msg_public = 2;
-    uint64 msg_height = 3;
+    string msg_address = 2;
     string msg_ip = 4;
-    repeated string msg_peer_list = 5;
+    // uint64 msg_height = 5;
+    // repeated string msg_peer_list = 6;
 }
 
 message BlockBatch {

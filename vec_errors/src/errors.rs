@@ -37,7 +37,7 @@ pub enum UTXOStorageError {
 }
 
 #[derive(Debug, Error)]
-pub enum BlockStorageError {
+pub enum PeerStorageError {
     #[error("Unable to acquire write lock")]
     WriteLockError,
     #[error("Unable to acquire read lock")]
@@ -59,21 +59,47 @@ pub enum BlockStorageError {
 }
 
 #[derive(Debug, Error)]
-pub enum StakePoolStorageError {
-    #[error("Unable to serialize SP")]
-    SerializationError,
-    #[error("Unable to deserialize SP")]
-    DeserializationError,
-    #[error("Unable to write to DB")]
-    WriteError,
-    #[error("Unable to read from DB")]
-    ReadError,
-    #[error("Pool doesen't exist")]
-    NonexistentPool,
+pub enum OutputStorageError {
+    #[error("Unable to acquire write lock")]
+    WriteLockError,
+    #[error("Unable to acquire read lock")]
+    ReadLockError,
     #[error(transparent)]
     SledError(sled::Error),
     #[error(transparent)]
-    SledTransactionError(#[from] sled::transaction::ConflictableTransactionError<Box<StakePoolStorageError>>),
+    TaskPanic(tokio::task::JoinError),
+    #[error(transparent)]
+    BlockOpsError(#[from] BlockOpsError),
+    #[error("Unable to serialize block")]
+    SerializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to deserialize block")]
+    DeserializationError,
+    #[error("Unable to read from DB")]
+    ReadError,
+}
+
+#[derive(Debug, Error)]
+pub enum BlockStorageError {
+    #[error("Unable to acquire write lock")]
+    WriteLockError,
+    #[error("Unable to acquire read lock")]
+    ReadLockError,
+    #[error(transparent)]
+    SledError(sled::Error),
+    #[error(transparent)]
+    TaskPanic(tokio::task::JoinError),
+    #[error(transparent)]
+    BlockOpsError(#[from] BlockOpsError),
+    #[error("Unable to serialize block")]
+    SerializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to deserialize block")]
+    DeserializationError,
+    #[error("Unable to read from DB")]
+    ReadError,
 }
 
 #[derive(Debug, Error)]
@@ -156,6 +182,8 @@ pub enum ChainOpsError {
     TaskPanic(tokio::task::JoinError),
     #[error(transparent)]
     UTXOStorageError(#[from] UTXOStorageError),
+    #[error(transparent)]
+    OutputStorageError(#[from] OutputStorageError),
 }
 
 #[derive(Debug, Error)]
