@@ -1,11 +1,10 @@
-use vec_storage::{block_db::*, output_db::*};
+use vec_storage::{block_db::*, output_db::*, image_db::*};
 use vec_cryptography::cryptography::{Wallet, BLSAGSignature, hash_to_point};
 use vec_proto::messages::{Header, Block, Transaction, TransactionOutput};
 use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use vec_block::block::*;
 use vec_merkle::merkle::MerkleTree;
-use vec_transaction::transaction::hash_transaction;
 use hex::encode;
 use std::time::{SystemTime, UNIX_EPOCH};
 use vec_errors::errors::*;
@@ -57,21 +56,27 @@ impl Default for HeaderList {
 pub struct Chain {
     pub headers: HeaderList,
     pub blocks: Box<dyn BlockStorer>,
+    pub images: Box<dyn ImageStorer>,
+    pub outputs: Box<dyn OutputStorer>,
 }
 
 impl Chain {
-    pub async fn new(blocks: Box<dyn BlockStorer>) -> Result<Chain, ChainOpsError> {
+    pub async fn new(blocks: Box<dyn BlockStorer>, images: Box<dyn ImageStorer>, outputs: Box<dyn OutputStorer>) -> Result<Chain, ChainOpsError> {
         let chain = Chain {
             headers: HeaderList::new(),
             blocks,
+            images,
+            outputs
         };
         Ok(chain)
     }
 
-    pub async fn genesis(blocks: Box<dyn BlockStorer>) -> Result<Chain, ChainOpsError> {
+    pub async fn genesis(blocks: Box<dyn BlockStorer>, images: Box<dyn ImageStorer>, outputs: Box<dyn OutputStorer>) -> Result<Chain, ChainOpsError> {
         let mut chain = Chain {
             headers: HeaderList::new(),
             blocks,
+            images,
+            outputs
         };
         chain.add_leader_block(create_genesis_block().await?).await?;
         Ok(chain)
@@ -162,12 +167,12 @@ impl Chain {
 
     pub async fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         for tx in &incoming_block.msg_transactions {
-            // self.process_transaction(tx).await?;
+            self.validate_transaction(tx).await?;
         }
         Ok(())
     }
     
-    pub fn verify_transaction(transaction: Transaction) {
+    pub async fn validate_inputs(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
         for input in transaction.msg_inputs.iter() {
             let signature = BLSAGSignature::from_vec(&input.msg_blsag).unwrap();
             let vec_of_u8: &Vec<Vec<u8>> = &input.msg_ring;
@@ -178,26 +183,38 @@ impl Chain {
                 .collect::<Vec<_>>();
             let ring: &[CompressedRistretto] = &vec_of_compressed;
             let message = &input.msg_message;
-
-            Self::verify_blsag(&signature, ring, message);
+            let image = input.msg_key_image.clone();
+            
+            if self.images.contains(image).await? || !self.verify_blsag(&signature, ring, message) {
+                return Ok(false);
+            }
         }
+        Ok(true)
+    }
+    
+    pub fn validate_outputs(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
         for output in transaction.msg_outputs.iter() {
             let pc_gens = PedersenGens::default();
             let bp_gens = BulletproofGens::new(64, 1);
             let mut verifier_transcript = Transcript::new(b"Transaction");
-
-            let proof = RangeProof::from_bytes(&output.msg_proof);
+            let proof = RangeProof::from_bytes(&output.msg_proof).map_err(|_| ChainOpsError::DeserializationError)?;
             let committed_value = CompressedRistretto::from_slice(&output.msg_commitment);
-            let result = proof.expect("REASON").verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &committed_value, 32);
-
-            match result {
-                Ok(()) => println!("Proof verified successfully"),
-                Err(e) => println!("Failed to verify proof: {:?}", e),
+    
+            if proof.verify_single(&bp_gens, &pc_gens, &mut verifier_transcript, &committed_value, 32).is_err() {
+                return Ok(false);
             }
-        }   
+        }
+        Ok(true)
+    }
+    
+    pub async fn validate_transaction(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
+        let inputs_valid = self.validate_inputs(transaction).await?;
+        let outputs_valid = self.validate_outputs(transaction)?;
+    
+        Ok(inputs_valid && outputs_valid)
     }
 
-    pub fn verify_blsag(sig: &BLSAGSignature, p: &[CompressedRistretto], m: &[u8]) -> bool {
+    pub fn verify_blsag(&self, sig: &BLSAGSignature, p: &[CompressedRistretto], m: &[u8]) -> bool {
         let n = p.len();
         let c1 = sig.c;
         let s = sig.s.clone();
@@ -225,21 +242,29 @@ impl Chain {
         false
     }
 
-    // pub async fn process_transaction(&self, transaction: &Transaction) -> Result<(), ChainOpsError> {
-    //     // Remove spent UTXOs
-    //     for input in &transaction.msg_inputs {
- 
-    //     }
-    //     // Create new UTXOs for the transaction outputs
-    //     let transaction_hash = hex::encode(hash_transaction(transaction).await);
-    //     for (output_index, output) in transaction.msg_outputs.iter().enumerate() {
-    //         let output = Output {
-                
-    //         };
-    //         // self.outputs.put(&utxo).await?;
-    //     }
-    //     Ok(())
-    // }
+    pub async fn process_transaction(&self, wallet: &Wallet, transaction: &Transaction) -> Result<(), ChainOpsError> {
+        for output in &transaction.msg_outputs {
+            let index = output.msg_index;
+            let key = CompressedRistretto::from_slice(&output.msg_output_key);
+            let stealth = CompressedRistretto::from_slice(&output.msg_stealth_address);
+
+            if wallet.check_property(key, index, stealth) {
+                let decrypted_amount = wallet.decrypt_amount(key, index, &output.msg_amount);
+                let owned_output = OwnedOutput {
+                    output: Output {
+                        stealth: output.msg_stealth_address.clone(),
+                        output_key: output.msg_output_key.clone(),
+                        amount: output.msg_amount.clone(),
+                        commitment: output.msg_commitment.clone(),
+                        range_proof: output.msg_proof.clone(),
+                    },
+                    decrypted_amount,
+                };
+                self.outputs.put(&owned_output).await?;
+            }
+        }
+        Ok(())
+    }
 }
 
 pub async fn create_genesis_block() -> Result<Block, ChainOpsError> {

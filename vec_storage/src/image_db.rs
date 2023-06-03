@@ -1,26 +1,41 @@
-use sled::{Db, IVec};
-use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
+use sled::Db;
+use curve25519_dalek_ng::ristretto::CompressedRistretto;
+use async_trait::async_trait;
+use vec_errors::errors::*;
 
-pub struct KeyImageDB {
+pub struct ImageDB {
     db: Db,
 }
 
-impl KeyImageDB {
+#[async_trait]
+pub trait ImageStorer: Send + Sync {
+    async fn put(&self, key_image: Vec<u8>) -> Result<(), UTXOStorageError>;
+    async fn contains(&self, key_image: Vec<u8>) -> Result<bool, UTXOStorageError>;
+}
+
+impl ImageDB {
     pub fn new(db: Db) -> Self {
-        KeyImageDB {
+        ImageDB {
             db,
         }
     }
+}
 
-    pub fn put(&self, key_image: CompressedRistretto) -> sled::Result<()> {
+#[async_trait]
+impl ImageStorer for ImageDB {
+    async fn put(&self, key_image: Vec<u8>) -> Result<(), UTXOStorageError> {
+        let db = self.db.clone();
+        let key_image = CompressedRistretto::from_slice(&key_image);
         let key_image_bytes = key_image.as_bytes();
-        self.db.insert(key_image_bytes, &[])?;
+        db.insert(key_image_bytes, &[]).map_err(|_| UTXOStorageError::WriteError)?;
         Ok(())
     }
 
-    pub fn contains(&self, key_image: CompressedRistretto) -> sled::Result<bool> {
+    async fn contains(&self, key_image: Vec<u8>) -> Result<bool, UTXOStorageError> {
+        let db = self.db.clone();
+        let key_image = CompressedRistretto::from_slice(&key_image);
         let key_image_bytes = key_image.as_bytes();
-        match self.db.get(key_image_bytes)? {
+        match db.get(key_image_bytes).map_err(|_| UTXOStorageError::ReadError)? {
             Some(_) => Ok(true),
             None => Ok(false),
         }

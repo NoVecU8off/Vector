@@ -15,7 +15,7 @@ pub struct Output {
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct OwnedOutput {
     pub output: Output,
-    pub decrypted_amount: u32,
+    pub decrypted_amount: u64,
 }
 
 #[async_trait]

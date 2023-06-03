@@ -10,7 +10,7 @@ enum UserType {
 }
 
 enum Command {
-    SendTransaction { to: Vec<u8>, amount: i64 },
+    SendTransaction { pvk: string, psk: string, amount: i64 },
     GetBalance,
     Stop,
 }
@@ -79,15 +79,8 @@ async fn main() {
             let server_future = tokio::spawn(async move {
                 loop {
                     match rx.recv().await {
-                        Some(Command::SendTransaction { to, amount}) => {
-                            match nsv.make_tx(&to, amount as u64).await {
-                                Ok(_) => {
-                                    println!("Error broadcasting transaction");
-                                }
-                                Err(e) => {
-                                    println!("Error creating and broadcasting transaction: {:?}", e);
-                                }
-                            }
+                        Some(Command::SendTransaction { pvk, psk, amount}) => {
+                            // HERE I WANT TO CALL MAKE TRANSACTION
                         },
                         Some(Command::GetBalance) => {
                             // handle balance command

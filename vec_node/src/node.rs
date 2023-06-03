@@ -1,24 +1,23 @@
-use crate::clock::Clock;
-use rand::thread_rng;
+use vec_block::block::hash_header_by_block;
 use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
+use vec_cryptography::cryptography::Wallet;
 use vec_chain::chain::Chain;
-use vec_storage::{block_db::*, output_db::*};
+use vec_storage::{block_db::*, output_db::*, image_db::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
 use vec_errors::errors::*;
+use curve25519_dalek_ng::ristretto::CompressedRistretto;
 use std::{sync::Arc, net::SocketAddr};
 use tonic::{transport::{Server, Channel}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
+use tokio::time::Duration;
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use dashmap::DashMap;
 use prost::Message;
-use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
-use curve25519_dalek_ng::scalar::Scalar;
-use merlin::Transcript;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
@@ -199,17 +198,18 @@ impl NodeService {
         };
         info!(logger, "NodeService {} created", server_cfg.cfg_ip);
         let peers = DashMap::new();
-        let block_db = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
-        let output_db_th_oi = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
-        let output_db_pk = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let block_db = sled::open("C:/Vector/blocks").map_err(|_| NodeServiceError::SledOpenError)?;
+        let output_db = sled::open("C:/Vector/outputs").map_err(|_| NodeServiceError::SledOpenError)?;
+        let image_db = sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
         
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
-        
+        let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
+        let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
+
         let mempool = Arc::new(Mempool::new());
-        let blockchain = Chain::new(blocks)
+        let blockchain = Chain::new(blocks, images, outputs)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
-        let clock = Arc::new(Clock::new());
         let config = Arc::new(RwLock::new(server_cfg.clone()));
         Ok(NodeService {
             config,
@@ -234,6 +234,13 @@ impl NodeService {
             self.bootstrap_network(ips_to_bootstrap).await?;
         }
         Ok(())
+    }
+
+    async fn timer(&self) {
+        loop {
+            self.make_block().await;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
     }
     
     pub async fn setup_server(&self, node_service: NodeService, cfg_ip: SocketAddr) -> Result<(), NodeServiceError> {
@@ -336,7 +343,7 @@ impl NodeService {
         }
     }
 
-    pub async fn make_block(&self) -> Result<Block, NodeServiceError> {
+    pub async fn make_block(&self) -> Result<(), NodeServiceError> {
         let blockchain = self.blockchain.read().await;
         let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
         let msg_height = (blockchain.chain_height() + 1) as u32;
@@ -362,7 +369,16 @@ impl NodeService {
             msg_header: Some(header),
             msg_transactions: transactions,
         };
-        Ok(block)
+        self.blockchain.write().await.add_block(block.clone()).await?;
+        let hash_string = hex::encode(hash_header_by_block(&block)?);
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            match self_clone.broadcast_block_hash(hash_string).await {
+                Ok(_) => println!("Transaction hash broadcasted successfully!"),
+                Err(e) => eprintln!("Failed to broadcast transaction hash: {}", e),
+            }
+        });
+        Ok(())
     }
 
     pub async fn broadcast_block_hash(&self, hash_string: String) -> Result<(), NodeServiceError> {
@@ -406,7 +422,52 @@ impl NodeService {
         Ok(())
     }
 
-    pub async fn broadcast_tx_hash(&self, hash_string: &String) -> Result<(), NodeServiceError> {
+    // Currently only one output to destination point
+    pub async fn make_transaction(
+        &self, 
+        recipient_view_key_string: String, 
+        recipient_spend_key_string: String,
+        a: u64
+    ) -> Result<(), NodeServiceError> { // Note the change in return type to accommodate an error case
+        let wallet = {
+            let server_config = self.config.read().await;
+            server_config.cfg_wallet.clone()
+        };
+        let recipient_view_key = CompressedRistretto::from_slice(&bs58::decode(recipient_view_key_string).into_vec().unwrap());
+        let recipient_spend_key = CompressedRistretto::from_slice(&bs58::decode(recipient_spend_key_string).into_vec().unwrap());
+
+        let (inputs, total_input_amount) = wallet.prepare_inputs().await;
+
+        // Add a check for insufficient funds
+        if total_input_amount < a {
+            return Err(NodeServiceError::InsufficientBalance);
+        }
+
+        let mut outputs = Vec::new();
+        if total_input_amount > a {
+            let change = total_input_amount - a;
+            let change = wallet.prepare_change_output(change, 2);
+            outputs.push(change);
+        }    
+        let output = wallet.prepare_output(recipient_view_key, recipient_spend_key, 1, a);
+        outputs.push(output);
+        let transaction = Transaction {
+            msg_inputs: inputs,
+            msg_outputs: outputs,
+        };
+        let self_clone = self.clone();
+        tokio::spawn(async move {
+            match self_clone.broadcast_tx_hash(&transaction).await {
+                Ok(_) => println!("Transaction hash broadcasted successfully!"),
+                Err(e) => eprintln!("Failed to broadcast transaction hash: {}", e),
+            }
+        });
+        Ok(())
+    }
+
+    pub async fn broadcast_tx_hash(&self, transaction: &Transaction) -> Result<(), NodeServiceError> {
+        let hash = hash_transaction(transaction).await;
+        let hash_string = hex::encode(hash);
         let peers_data = self.peers
                     .iter()
                     .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
@@ -461,9 +522,9 @@ impl NodeService {
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
-            self.blockchain.write().await.verify_transaction(&transaction).await?;
+            self.blockchain.write().await.validate_transaction(&transaction).await?;
             self.mempool.add(transaction.clone()).await;
-            self.broadcast_tx_hash(&transaction_hash.to_string()).await?;
+            self.broadcast_tx_hash(&transaction).await?;
         }
         Ok(())
     }
@@ -472,9 +533,9 @@ impl NodeService {
         if let Some(client_arc_mutex) = self.peers.get(sender_ip) {
             let client_arc = client_arc_mutex.clone();
             let mut client = client_arc.lock().await;
-            let my_ip = {
+            let (my_ip, wallet) = {
                 let server_config = self.config.read().await;
-                server_config.cfg_ip.to_string()
+                (server_config.cfg_ip.to_string(), server_config.cfg_wallet.clone())
             };
             let message = PullBlockRequest {
                 msg_block_hash: block_hash.to_string(),
@@ -482,27 +543,27 @@ impl NodeService {
             };
             let response = client.handle_block_pull(message).await?;
             let block = response.into_inner();
-            self.process_incoming_block(block).await?;
+            self.process_incoming_block(&wallet, block).await?;
             self.broadcast_block_hash(block_hash.to_string()).await?;
         }
         Ok(())
     }
 
-    pub async fn process_incoming_block_batch(&self, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
+    pub async fn process_incoming_block_batch(&self, wallet: &Wallet, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
-            self.process_incoming_block(block).await?;
+            self.process_incoming_block(wallet, block).await?;
         }
         Ok(())
     }
 
-    pub async fn process_incoming_block(&self, block: Block) -> Result<(), NodeServiceError> {
+    pub async fn process_incoming_block(&self, wallet: &Wallet, block: Block) -> Result<(), NodeServiceError> {
         let local_height = {
             let server_config = self.config.read().await;
             server_config.cfg_height
         };
         if let Some(header) = block.clone().msg_header {
             for transaction in &block.msg_transactions {
-                self.blockchain.write().await.process_transaction(transaction).await?;
+                self.blockchain.write().await.process_transaction(wallet, transaction).await?;
             }
             let mut server_config = self.config.write().await;
             let incoming_height = header.msg_height as u64;
@@ -516,7 +577,7 @@ impl NodeService {
         }
     }
 
-    pub async fn process_block(&self, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
+    pub async fn process_block(&self, wallet: &Wallet, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
         let local_height = {
             let server_config = self.config.read().await;
             server_config.cfg_height
@@ -525,14 +586,14 @@ impl NodeService {
             let incoming_height = header.msg_height as u64;
             if incoming_height == local_height + 1 {
                 for transaction in &block.msg_transactions {
-                    self.blockchain.write().await.process_transaction(&transaction).await?;
+                    self.blockchain.write().await.process_transaction(wallet, &transaction).await?;
                 }
                 let mut server_config = self.config.write().await;
                 server_config.cfg_height = incoming_height;
                 self.blockchain.write().await.add_block(block).await?;
                 Ok(())
             } else {
-                match self.pull_state_from(leader_address.to_string()).await {
+                match self.pull_state_from(wallet, leader_address.to_string()).await {
                     Ok(_) => Err(NodeServiceError::PullStateError),
                     Err(e) => Err(e),
                 }
@@ -542,7 +603,7 @@ impl NodeService {
         }
     }
 
-    pub async fn pull_state_from(&self, ip: String) -> Result<(), NodeServiceError> {
+    pub async fn pull_state_from(&self, wallet: &Wallet, ip: String) -> Result<(), NodeServiceError> {
         let cfg_ip = {
             let server_config = self.config.read().await;
             server_config.cfg_ip.clone()
@@ -554,7 +615,7 @@ impl NodeService {
                     info!(self.logger, "{}: new validator peer added: {}", cfg_ip, ip);
                     let client_arc = Arc::new(Mutex::new(client));
                     let mut client_lock = client_arc.lock().await;
-                    self.pull_state_from_client(&mut client_lock).await?;
+                    self.pull_state_from_client(wallet, &mut client_lock).await?;
                 },
                 Err(e) => {
                     error!(self.logger, "Failed to dial remote node: {:?}", e);
@@ -564,12 +625,12 @@ impl NodeService {
         } else {
             let client = self.peers.get(&ip).ok_or(NodeServiceError::PeerNotFound)?.clone();
             let mut client_lock = client.lock().await;
-            self.pull_state_from_client(&mut client_lock).await?;
+            self.pull_state_from_client(wallet, &mut client_lock).await?;
         }
         Ok(())
     }       
     
-    pub async fn pull_state_from_client(&self, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+    pub async fn pull_state_from_client(&self, wallet: &Wallet, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
         let height = {
             let server_config = self.config.read().await;
             server_config.cfg_height
@@ -577,7 +638,7 @@ impl NodeService {
         let request = Request::new(LocalState { msg_last_block_height: height });
         let response = client.push_state(request).await?;
         let block_batch = response.into_inner();
-        self.process_incoming_block_batch(block_batch).await?;
+        self.process_incoming_block_batch(wallet, block_batch).await?;
         Ok(())
     }
     

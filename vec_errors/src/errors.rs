@@ -118,6 +118,8 @@ pub enum ChainOpsError {
     IndexTooHigh,
     #[error("Missing block's header")]
     MissingBlockHeader,
+    #[error("Failed to deserialize")]
+    DeserializationError,
     #[error(transparent)]
     BlockStorageError(#[from] BlockStorageError),
     #[error("Couldn't find block with hash: {0}")]
@@ -142,6 +144,8 @@ pub enum ChainOpsError {
     InvalidPublicKeyInTransactionInput,
     #[error("Invalid transaction's signature")]
     InvalidTransactionSignature,
+    #[error("Falied to verify transaction due to it's inpusts and/or outputs")]
+    InvalidTransaction,
     #[error("Invalid transaction's input signature")]
     InvalidInputSignature,
     #[error(transparent)]
@@ -186,6 +190,8 @@ pub enum NodeServiceError {
     ConnectionFailed,
     #[error("Can not pull from non-validator node")]
     PullFromNonValidatorNode,
+    #[error("Total owned outputs amount is less then requested")]
+    InsufficientBalance,
     #[error("Pull from the leader failed")]
     PullStateError,
     #[error(transparent)]

@@ -2673,8 +2673,8 @@ name = "vec_node"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "bs58",
  "bulletproofs",
- "curve25519-dalek",
  "curve25519-dalek-ng",
  "dashmap",
  "ed25519-dalek",

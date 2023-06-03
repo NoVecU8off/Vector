@@ -23,15 +23,13 @@ impl ServerConfig {
             cfg_height: 0,
         }
     }
+}
 
-    pub async fn default_n() -> Self {
-        ServerConfig {
-            cfg_version: "1".to_string(),
-            cfg_ip: get_ip().await.expect("Failed to get IP"),
-            cfg_wallet: Wallet::generate(),
-            cfg_height: 0,
-        }
-    }
+async fn get_ip() -> Result<String, ServerConfigError> {
+    let response = reqwest::get("https://api.ipify.org").await?;
+    let ip = response.text().await?;
+    let ip_port = format!("{}:8088", ip);
+    Ok(ip_port)
 }
 
 // #[allow(dead_code)]
@@ -50,10 +48,3 @@ impl ServerConfig {
 //     let config: ServerConfig = deserialize(&serialized_data).map_err(ServerConfigError::FailedToDeserializeConfig)?;
 //     Ok(config)
 // }
-
-async fn get_ip() -> Result<String, ServerConfigError> {
-    let response = reqwest::get("https://api.ipify.org").await?;
-    let ip = response.text().await?;
-    let ip_port = format!("{}:8088", ip);
-    Ok(ip_port)
-}

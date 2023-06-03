@@ -6,7 +6,6 @@ use sha3::{Keccak256, Digest};
 use bs58;
 use vec_proto::messages::{TransactionOutput, TransactionInput, Transaction};
 use vec_storage::output_db::{self, OutputStorer};
-use prost::Message;
 
 #[derive(Debug, Clone)]
 pub struct Wallet {
@@ -98,27 +97,18 @@ impl Wallet {
         }
     }
 
+    // Ordinary signing function (was made for understanding)
     pub fn sign(&self, message: &[u8]) -> Signature {
         let mut rng = rand::thread_rng();
-    
-        // Step 1: Generate a random nonce
         let nonce = Scalar::random(&mut rng);
-    
-        // Step 2: Calculate the point R = nonce * basepoint
         let r_ep = &constants::RISTRETTO_BASEPOINT_TABLE * &nonce;
         let r = r_ep.compress();
-    
-        // Step 3: Hash the concatenation of R, the public key, and the message
         let mut hasher = Keccak256::new();
         hasher.update(r_ep.compress().as_bytes());
         hasher.update(self.public_spend_key.as_bytes());
         hasher.update(message);
         let h = hasher.finalize();
-    
-        // Step 4: Convert the hash to a scalar
         let h_scalar = Scalar::from_bits(h.into());
-    
-        // Step 5: Calculate s = nonce - hash * secret_key
         let s = nonce - h_scalar * self.secret_spend_key;
     
         Signature { r, s }
@@ -144,10 +134,12 @@ impl Wallet {
             let s_addrs_vec: Vec<Vec<u8>> = s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect(); // <- ring
             let m = b"Message example";
             let blsag = self.gen_blsag(&s_addrs, m, &ristretto_stealth); // <- blsag
+            let image = blsag.i;
             let input = TransactionInput {
                 msg_ring: s_addrs_vec,
                 msg_blsag: blsag.to_vec(),
                 msg_message: m.to_vec(),
+                msg_key_image: image.to_bytes().to_vec(),
             };
             inputs.push(input);
         }
@@ -158,37 +150,32 @@ impl Wallet {
         &self,
         recipient_view_key: CompressedRistretto,
         recipient_spend_key: CompressedRistretto,
+        output_index: u64,
         amount: u64,
     ) -> TransactionOutput {
-        let output_index: u64 = 1;
+        // 1. Stealth address for output
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
-        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress(); // <-- output key
+        // 1.2 Output key
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress(); // <-- output key rG
         let recipient_view_key_point = recipient_view_key.decompress().unwrap();
-        let q = r * recipient_view_key_point;
-        let mut q_bytes = q.compress().as_bytes().to_vec();
-        q_bytes.extend(&output_index.to_le_bytes());
+        let q = r * recipient_view_key_point; // rKvt
+        let q_bytes = q.compress().to_bytes();
         let mut hasher = Keccak256::new();
-        hasher.update(&q_bytes);
+            hasher.update(&q_bytes);
+            hasher.update(&output_index.to_le_bytes());
         let hash = hasher.finalize();
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let recipient_spend_key_point = recipient_spend_key.decompress().unwrap();
         let stealth = (hs_times_g + recipient_spend_key_point).compress(); // <-- stealth addr
-        let amount_in_scalars = Scalar::from(amount).to_bytes(); 
-        let amount_in_scalars_8 = amount_in_scalars[0..8].try_into().unwrap();
-        let amount_mask_label = b"amount";
-        let mut hasher  = Keccak256::new();
-        hasher.update(amount_mask_label);
-        hasher.update(q.compress().to_bytes());
-        hasher.update(output_index.to_le_bytes());
-        let hash = hasher.finalize();
-        let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
-        let encrypted_amount = xor8(amount_in_scalars_8, hash_8); // <-- encrypted amount
+        // 2. Encrypted amount
+        let encrypted_amount = self.encrypt_amount(&q_bytes, output_index, amount); // <-- encrypted amount
+        // 3. Range proof and commitment
         let pc_gens = PedersenGens::default();
         let bp_gens = BulletproofGens::new(64, 1);
         let blinding = Scalar::random(&mut rand::thread_rng());
-        let mut prover_transcript = Transcript::new(b"doctest example");
+        let mut prover_transcript = Transcript::new(b"Transaction");
         let secret = amount;
         let (proof, commitment) = RangeProof::prove_single( // <-- <-- range proof and commitment
             &bp_gens,
@@ -205,6 +192,7 @@ impl Wallet {
             msg_proof: proof.to_bytes().to_vec(),
             msg_commitment: commitment.to_bytes().to_vec(),
             msg_amount: encrypted_amount.to_vec(),
+            msg_index: output_index,
         }
     }
 
@@ -213,30 +201,25 @@ impl Wallet {
         change: u64,
         output_index: u64,
     ) -> TransactionOutput {
+        // 1. Stealth address
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
+        // 1.1 Output key
         let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress(); // <-- output key
         let view_key_point = &self.public_view_key.decompress().unwrap();
-        let q = r * view_key_point;
-        let mut q_bytes = q.compress().as_bytes().to_vec();
-        q_bytes.extend(&output_index.to_le_bytes());
+        let q = r * view_key_point; // rKvt
+        let q_bytes = q.compress().to_bytes();
         let mut hasher = Keccak256::new();
-        hasher.update(&q_bytes);
+            hasher.update(&q_bytes);
+            hasher.update(&output_index.to_le_bytes());
         let hash = hasher.finalize();
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let spend_key_point = &self.public_spend_key.decompress().unwrap();
         let stealth = (hs_times_g + spend_key_point).compress(); // <-- stealth addr
-        let change_in_scalars = Scalar::from(change).to_bytes(); 
-        let change_s_8 = change_in_scalars[0..8].try_into().unwrap();
-        let change_mask_label = b"amount";
-        let mut hasher  = Keccak256::new();
-        hasher.update(change_mask_label);
-        hasher.update(q.compress().to_bytes());
-        hasher.update(output_index.to_le_bytes());
-        let hash = hasher.finalize();
-        let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
-        let encrypted_amount = xor8(change_s_8, hash_8); // <-- encrypted amount
+        // 2. Encrypted amount
+        let encrypted_amount = self.encrypt_amount(&q_bytes, output_index, change); // <-- encrypted amount
+        // 3. Range proof and commitment
         let pc_gens = PedersenGens::default();
         let bp_gens = BulletproofGens::new(64, 1);
         let blinding = Scalar::random(&mut rand::thread_rng());
@@ -257,37 +240,74 @@ impl Wallet {
             msg_proof: proof.to_bytes().to_vec(),
             msg_commitment: commitment.to_bytes().to_vec(),
             msg_amount: encrypted_amount.to_vec(),
+            msg_index: output_index,
         }
     }
 
-    pub async fn make_transaction(&self, recipient_view_key: CompressedRistretto, recipient_spend_key: CompressedRistretto, a: u64) -> Transaction {
-        let (inputs, total_input_amount) = self.prepare_inputs().await;
-        let mut outputs = Vec::new();
-        if total_input_amount > a {
-            let change = total_input_amount - a;
-            let change = self.prepare_change_output(change, 2);
-            outputs.push(change);
-        }    
-        let output = self.prepare_output(recipient_view_key, recipient_spend_key, a);
-        outputs.push(output);
-        Transaction {
-            msg_inputs: inputs,
-            msg_outputs: outputs,
-        }
-    }
-
-    pub fn check_property(&self, output_key: CompressedRistretto, output_index: u64, tx_address: CompressedRistretto) -> bool {
+    pub fn check_property(&self, output_key: CompressedRistretto, output_index: u64, stealth: CompressedRistretto) -> bool {
+        // This is a shared secret
         let q = self.secret_view_key * output_key.decompress().unwrap();
-        let mut q_bytes = q.compress().as_bytes().to_vec();
-        q_bytes.extend(&output_index.to_le_bytes());
+        let q_bytes = q.compress().as_bytes().to_vec();
         let mut hasher = Keccak256::new();
-        hasher.update(&q_bytes);
+            hasher.update(&q_bytes);
+            hasher.update(output_index.to_le_bytes());
         let hash = hasher.finalize();
         let hash_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_scalar;
-        let expectation = hs_g + self.public_spend_key.decompress().unwrap();
+        // This should be publick spend key of the checker
+        let result = stealth.decompress().unwrap() - hs_g;
     
-        expectation.compress() == tx_address
+        result.compress() == self.public_spend_key
+    }
+
+    pub fn encrypt_amount(
+        &self,
+        q_bytes: &[u8],
+        output_index: u64,
+        amount: u64,
+    ) -> [u8; 8] {
+        let mut hasher = Keccak256::new();
+            hasher.update(q_bytes);
+            hasher.update(output_index.to_le_bytes());
+        let hash_qi = hasher.finalize();
+        let mut hasher = Keccak256::new();
+            hasher.update(b"amount");
+            hasher.update(hash_qi);
+        let hash = hasher.finalize();
+        let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
+        let amount_in_scalars = Scalar::from(amount).to_bytes(); 
+        let amount_in_scalars_8 = amount_in_scalars[0..8].try_into().unwrap();
+        let encrypted_amount = xor8(
+            amount_in_scalars_8, 
+            hash_8);
+
+        encrypted_amount
+    }
+
+    pub fn decrypt_amount(
+        &self,
+        output_key: CompressedRistretto,
+        output_index: u64,
+        encrypted_amount: &[u8],
+    ) -> u64 {
+        let q = self.secret_view_key * output_key.decompress().unwrap();
+        let q_bytes = q.compress().as_bytes().to_vec();
+        let mut hasher  = Keccak256::new();
+            hasher.update(q_bytes);
+            hasher.update(output_index.to_le_bytes());
+        let hash_qi = hasher.finalize();
+        let mut hasher = Keccak256::new();
+            hasher.update(b"amount");
+            hasher.update(hash_qi);
+        let hash = hasher.finalize();
+        let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
+        let decrypted_amount = xor8(
+            encrypted_amount.try_into().unwrap(), 
+            hash_8
+        );
+        let value = u64::from_le_bytes(decrypted_amount);
+
+        value
     }
 
     pub fn gen_blsag(&self, p: &[CompressedRistretto], m: &[u8], stealth: &CompressedRistretto) -> BLSAGSignature {

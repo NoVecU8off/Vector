@@ -76,6 +76,7 @@ message TransactionInput {
     repeated bytes msg_ring = 1;
     bytes msg_blsag = 2;
     bytes msg_message = 3;
+    bytes msg_key_image = 5;
 }
 
 message TransactionOutput {
@@ -83,5 +84,6 @@ message TransactionOutput {
     bytes msg_output_key = 2;
     bytes msg_proof = 4; 
     bytes msg_commitment = 5; 
-    bytes msg_amount = 6; 
+    bytes msg_amount = 6;
+    uint64 msg_index = 7;
 }
