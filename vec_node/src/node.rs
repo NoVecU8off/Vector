@@ -4,7 +4,7 @@ use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_cryptography::cryptography::Wallet;
 use vec_chain::chain::Chain;
-use vec_storage::{block_db::*, output_db::*, image_db::*};
+use vec_storage::{block_db::*, output_db::*, image_db::*, ip_db::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
@@ -27,6 +27,7 @@ pub struct NodeService {
     pub peers: DashMap<String, Arc<Mutex<NodeClient<Channel>>>>,
     pub mempool: Arc<Mempool>,
     pub blockchain: Arc<RwLock<Chain>>,
+    pub ips: Arc<IpDB>,
     pub logger: Logger,
 }
 
@@ -39,10 +40,11 @@ impl Node for NodeService {
         info!(self.logger, "Starting handshaking");
         let version = request.into_inner();
         let version_clone = version.clone();
-        let ip = version.msg_ip.clone();
-        info!(self.logger, "Recieved version, address: {}", ip);
-        let connected_ips = self.get_ip_list();
-        if !self.contains(&ip, &connected_ips).await {
+        let addr: String = version.msg_address.clone();
+        let ip: String = version.msg_ip;
+        info!(self.logger, "Recieved version, address: {}", addr);
+        let connected_addrs = self.get_addr_list();
+        if !self.contains(&addr, &connected_addrs).await {
             match make_node_client(&ip).await {
                 Ok(c) => {
                     info!(self.logger, "Created node client successfully");
@@ -53,7 +55,7 @@ impl Node for NodeService {
                 }
             }
         } else {
-            info!(self.logger, "Address already connected: {}", ip);
+            info!(self.logger, "Address already connected: {}", addr);
         }
         let reply = self.get_version().await;
         Ok(Response::new(reply))
@@ -209,11 +211,14 @@ impl NodeService {
         info!(logger, "Output DB was created in C:/Vector/outputs");
         let image_db = sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
         info!(logger, "Image DB was created in C:/Vector/images");
+        let ip_db = sled::open("C:/Vector/ips").map_err(|_| NodeServiceError::SledOpenError)?;
+        // info!(logger, "Image DB was created in C:/Vector/ips");
         
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
         let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
         let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
-
+        // let ips: Box<dyn PeerStorer> = Box::new(IpDB::new(ip_db));
+        let ips: Arc<IpDB> = Arc::new(IpDB::new(ip_db));
         let mempool = Arc::new(Mempool::new());
         let blockchain = Chain::new(blocks, images, outputs)
             .await
@@ -225,6 +230,7 @@ impl NodeService {
             peers,
             logger,
             mempool,
+            ips,
             blockchain: Arc::new(RwLock::new(blockchain)),
         })
     }
@@ -268,17 +274,12 @@ impl NodeService {
 
     pub async fn bootstrap_network(&self, ips: Vec<String>) -> Result<(), NodeServiceError> {
         let mut tasks = Vec::new();
-        let connected_peers = self.get_ip_list();
         for ip in ips {
             info!(self.logger, "Trying to bootstrap with {:?}", ip);
-            if self.contains(&ip, &connected_peers).await {
-                info!(self.logger, "This user {:?} is already connected", ip);
-                continue;
-            }
             let node_service_clone = self.clone();
-            let addr_clone = ip.clone();
+            let ip_clone = ip.clone();
             let task = tokio::spawn(async move {
-                match node_service_clone.dial_remote_node(&addr_clone).await {
+                match node_service_clone.dial_remote_node(&ip_clone).await {
                     Ok((c, v)) => {
                         node_service_clone.add_peer(c, v).await;
                         info!(node_service_clone.logger, "Successfully bootstraped with {:?}", ip);
@@ -294,18 +295,18 @@ impl NodeService {
         Ok(())
     }
 
-    pub async fn contains(&self, ip: &str, connected_ips: &[String]) -> bool {
-        let cfg_ip = {
+    pub async fn contains(&self, addr: &str, connected_addrs: &[String]) -> bool {
+        let wallet = {
             let server_config = self.config.read().await;
-            server_config.cfg_ip.to_string()
+            server_config.cfg_wallet.clone()
         };
-        if cfg_ip == ip {
+        if wallet.address == addr {
             return false;
         }
-        connected_ips.iter().any(|connected_addr| ip == connected_addr)
+        connected_addrs.iter().any(|connected_addr| addr == connected_addr)
     }
 
-    pub fn get_ip_list(&self) -> Vec<String> {
+    pub fn get_addr_list(&self) -> Vec<String> {
         self.peers
             .iter()
             .map(|entry| entry.key().clone())
@@ -327,16 +328,12 @@ impl NodeService {
     }
 
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
-        let cfg_ip = {
-            let server_config = self.config.read().await;
-            server_config.cfg_ip.to_string()
-        };
-        let remote_ip = v.msg_ip.clone();
-        if !self.peers.contains_key(&remote_ip) {
-            self.peers.insert(remote_ip.clone(), Arc::new(c.into()));
-            info!(self.logger, "{}: new validator peer added: {}", cfg_ip, remote_ip);
+        let remote_address = v.msg_address.clone();
+        if !self.peers.contains_key(&remote_address) {
+            self.peers.insert(remote_address.clone(), Arc::new(c.into()));
+            info!(self.logger, "New validator peer added: {}", remote_address);
         } else {
-            info!(self.logger, "{}: peer already exists: {}", cfg_ip, remote_ip);
+            info!(self.logger, "Peer already exists: {}", remote_address);
         }
     }
 
@@ -396,11 +393,11 @@ impl NodeService {
     pub async fn broadcast_block_hash(&self, hash_string: String) -> Result<(), NodeServiceError> {
         info!(self.logger, "Broadcasting block hash {:?}", hash_string);
         let peers_data = self.peers
-                    .iter()
-                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-                    .collect::<Vec<_>>();
+            .iter()
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .collect::<Vec<_>>();
         let mut tasks = Vec::new();
-        for (ip, peer_client) in peers_data {
+        for (addr, peer_client) in peers_data {
             let hash_clone = hash_string.clone();
             let self_clone = self.clone();
             let cfg_ip = {
@@ -416,16 +413,14 @@ impl NodeService {
                 if let Err(e) = peer_client_lock.handle_block_push(message).await {
                     error!(
                         self_clone.logger, 
-                        "{}: Broadcast error: {:?}", 
-                        cfg_ip, 
+                        "Broadcast error: {:?}",
                         e
                     );
                 } else {
                     info!(
                         self_clone.logger, 
-                        "{}: Broadcasted hash to: {:?}", 
-                        cfg_ip, 
-                        ip
+                        "Broadcasted hash to: {:?}", 
+                        addr
                     );
                 }
             });
@@ -485,7 +480,7 @@ impl NodeService {
                     .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
                     .collect::<Vec<_>>();
         let mut tasks = Vec::new();
-        for (ip, peer_client) in peers_data {
+        for (addr, peer_client) in peers_data {
             let hash_clone = hash_string.clone();
             let self_clone = self.clone();
             let cfg_ip = {
@@ -501,16 +496,14 @@ impl NodeService {
                 if let Err(e) = peer_client_lock.handle_tx_push(message).await {
                     error!(
                         self_clone.logger, 
-                        "{}: Broadcast error: {:?}", 
-                        cfg_ip, 
+                        "Broadcast error: {:?}",
                         e
                     );
                 } else {
                     info!(
                         self_clone.logger, 
-                        "{}: Broadcasted hash to: {:?}", 
-                        cfg_ip, 
-                        ip
+                        "Broadcasted hash to: {:?}",
+                        addr
                     );
                 }
             });
@@ -664,46 +657,42 @@ impl NodeService {
     }
     
     pub async fn broadcast_peer_list(&self) -> Result<(), ValidatorServiceError> {
-        let cfg_ip = {
+        let wallet = {
             let server_config = self.config.read().await;
-            server_config.cfg_ip.clone()
+            server_config.cfg_wallet.clone()
         };
-        info!(self.logger, "{}: broadcasting peer list", cfg_ip);
-        let my_ip = &cfg_ip;
-        let mut peers_ips: Vec<String> = self.get_ip_list();
-        peers_ips.push(my_ip.clone());
+        info!(self.logger, "Broadcasting peer list");
+        let my_addr = &wallet.address;
+        let mut peers_addrs: Vec<String> = self.get_addr_list();
+        peers_addrs.push(my_addr.clone());
         let msg = PeerList {
-            msg_peers_addresses: peers_ips,
+            msg_peers_addresses: peers_addrs,
         };
         let peers_data: Vec<_> = self.peers
             .iter()
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
         let mut tasks = Vec::new();
-        for (ip, peer_client) in peers_data {
+        for (addr, peer_client) in peers_data {
             let msg_clone = msg.clone();
             let self_clone = self.clone();
-            let cfg_ip = {
-                let server_config = self_clone.config.read().await;
-                server_config.cfg_ip.clone()
-            };
+            let my_addr_clone = my_addr.clone();
             let task = tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.lock().await;
                 let req = Request::new(msg_clone);
-                if ip != cfg_ip {
+                if addr != my_addr_clone {
                     if let Err(err) = peer_client_lock.handle_peer_list(req).await {
                         error!(
                             self_clone.logger,
                             "Failed to broadcast peer list to {}: {:?}",
-                            ip,
+                            addr,
                             err
                         );
                     } else {
                         info!(
                             self_clone.logger,
-                            "{}: broadcasted peer list to {}",
-                            cfg_ip,
-                            ip
+                            "Broadcasted peer list to {}",
+                            addr
                         );
                     }
                 }

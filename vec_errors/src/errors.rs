@@ -233,6 +233,8 @@ pub enum NodeServiceError {
     #[error(transparent)]
     MissingBlockHeader(#[from] ChainOpsError),
     #[error(transparent)]
+    PeerStorageError(#[from] PeerStorageError),
+    #[error(transparent)]
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]
     TaskPanic(#[from] tokio::task::JoinError), 
