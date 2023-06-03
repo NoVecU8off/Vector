@@ -1,11 +1,10 @@
 use crate::clock::Clock;
 use rand::thread_rng;
 use vec_merkle::merkle::MerkleTree;
-use vec_block::block::sign_block;
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
 use vec_chain::chain::Chain;
-use vec_storage::{block_db::*, utxo_db::*, pool_db::*};
+use vec_storage::{block_db::*, output_db::*};
 use vec_mempool::mempool::*;
 use vec_server::server::*;
 use vec_transaction::transaction::hash_transaction;
@@ -15,12 +14,12 @@ use tonic::{transport::{Server, Channel}, Status, Request, Response};
 use tokio::sync::{Mutex, RwLock};
 use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
-use tokio::time::Duration;
 use dashmap::DashMap;
 use prost::Message;
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use curve25519_dalek_ng::scalar::Scalar;
 use merlin::Transcript;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -29,7 +28,6 @@ pub struct NodeService {
     pub mempool: Arc<Mempool>,
     pub blockchain: Arc<RwLock<Chain>>,
     pub logger: Logger,
-    pub clock: Arc<Clock>,
 }
 
 #[tonic::async_trait]
@@ -98,23 +96,6 @@ impl Node for NodeService {
                 Err(Status::internal("Failed to update peer_list"))
             }
         }
-    }    
-
-    async fn handle_heartbeat(
-        &self,
-        _request: Request<Confirmed>,
-    ) -> Result<Response<Confirmed>, Status> {
-        info!(self.logger, "Received health check request");
-        Ok(Response::new(Confirmed {}))
-    }
-
-    async fn handle_time(
-        &self,
-        _request: Request<Confirmed>,
-    ) -> Result<Response<DelayResponse>, Status> {
-        let time = self.clock.get_time();
-        let response = DelayResponse { msg_time : time };
-        Ok(Response::new(response))
     }
 
     async fn handle_tx_push(
@@ -219,14 +200,13 @@ impl NodeService {
         info!(logger, "NodeService {} created", server_cfg.cfg_ip);
         let peers = DashMap::new();
         let block_db = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
-        let utxo_db_th_oi = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
-        let utxo_db_pk = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
-        let pool_db_id = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let output_db_th_oi = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        let output_db_pk = sled::open("PATH!!!").map_err(|_| NodeServiceError::SledOpenError)?;
+        
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
-        let utxos: Box<dyn UTXOStorer> = Box::new(UTXODB::new(utxo_db_th_oi, utxo_db_pk));
-        let pools: Box<dyn StakePoolStorer> = Box::new(StakePoolDB::new(pool_db_id));
+        
         let mempool = Arc::new(Mempool::new());
-        let blockchain = Chain::new(blocks, utxos, pools)
+        let blockchain = Chain::new(blocks)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let clock = Arc::new(Clock::new());
@@ -237,7 +217,6 @@ impl NodeService {
             logger,
             mempool,
             blockchain: Arc::new(RwLock::new(blockchain)),
-            clock,
         })
     }
 
@@ -254,8 +233,6 @@ impl NodeService {
         if !ips_to_bootstrap.is_empty() {
             self.bootstrap_network(ips_to_bootstrap).await?;
         }
-        self.start_clock().await;
-        self.start_heartbeat().await;
         Ok(())
     }
     
@@ -265,56 +242,6 @@ impl NodeService {
             .serve(cfg_ip)
             .await
             .map_err(NodeServiceError::TonicTransportError)
-    }
-
-    async fn start_heartbeat(&self) {
-        loop {
-            let mut to_remove = Vec::new();
-            {
-                let peers_data = self.peers
-                    .iter()
-                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-                    .collect::<Vec<_>>();
-                for (ip, peer_client) in peers_data {
-                    let mut client = peer_client.lock().await;
-                    match client.handle_heartbeat(Request::new(Confirmed {})).await {
-                        Ok(_) => {
-                            info!(self.logger, "Node {} is alive", ip);
-                        }
-                        Err(_) => {
-                            info!(self.logger, "Removing non-responsive node {}", ip);
-                            to_remove.push(ip.clone());
-                        }
-                    }
-                }
-            }
-            {
-                for ip in to_remove {
-                    self.peers.remove(&ip);
-                }
-            }
-            tokio::time::sleep(Duration::from_secs(30)).await;
-        }
-    }
-
-    pub async fn start_clock(&self) {
-        self.clock.start().await;
-    }
-    
-    async fn synchronize_clock_with(&self, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
-        let t1 = self.clock.get_time();
-        let req = Request::new(Confirmed { } );
-        let res = client.handle_time(req).await?;
-        let t2 = res.into_inner().msg_time; 
-        let t3 = self.clock.get_time();
-        let travel_delay = (t3 - t1) as i64;
-        let average_delay = travel_delay / 2;
-        let relative_offset = (t2 - t1) as i64;
-        let offset = relative_offset - average_delay;
-        if offset >= 0 {
-            self.clock.add_to_time(offset as u64);
-        }
-        Ok(())
     }
 
     pub async fn bootstrap_network(&self, ips: Vec<String>) -> Result<(), NodeServiceError> {
@@ -410,15 +337,9 @@ impl NodeService {
     }
 
     pub async fn make_block(&self) -> Result<Block, NodeServiceError> {
-        let cfg_wallet = {
-            let server_config = self.config.read().await;
-            server_config.cfg_wallet.clone()
-        };
         let blockchain = self.blockchain.read().await;
         let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
         let msg_height = (blockchain.chain_height() + 1) as u32;
-        let wallet = &cfg_wallet;
-        let pk = cfg_wallet.public_spend_key_to_vec();
         let transactions = self.mempool.get_transactions();
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
@@ -435,16 +356,12 @@ impl NodeService {
             msg_height,
             msg_previous_hash,
             msg_root_hash: merkle_root,
-            msg_timestamp: self.clock.get_time(),
+            msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
         };
-        let mut block = Block {
+        let block = Block {
             msg_header: Some(header),
             msg_transactions: transactions,
-            msg_public: pk,
-            msg_sig: vec![],
         };
-        let signature = sign_block(&block, wallet).await?;
-        block.msg_sig = signature.to_vec();
         Ok(block)
     }
 
@@ -486,58 +403,6 @@ impl NodeService {
             tasks.push(task);
         }
         try_join_all(tasks).await.map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
-        Ok(())
-    }
-
-    pub async fn make_tx(&self, to: &Vec<u8>, amount: u64) -> Result<(), NodeServiceError> {
-        let cfg_wallet = {
-            let server_config = self.config.read().await;
-            server_config.cfg_wallet.clone()
-        };
-        let public = cfg_wallet.public_spend_key_to_vec();
-        let from = &public;
-        let blockchain = self.blockchain.read().await;
-        let mut inputs = Vec::new();
-        let pc_gens = PedersenGens::default();
-        let bp_gens = BulletproofGens::new(64, 1);
-        let secret_value = amount;
-        let blinding = Scalar::random(&mut thread_rng());
-        let mut transcript = Transcript::new(b"TransactionProof");
-        let (proof, commited_value) = RangeProof::prove_single(
-            &bp_gens, 
-            &pc_gens, 
-            &mut transcript, 
-            secret_value, 
-            &blinding, 
-            64
-        )
-        .unwrap();
-        let utxos = blockchain.utxos.find_by_pk(from).await?;
-        for utxo in &utxos {
-            let msg_to_sign = format!("{}{}", utxo.utxo_transaction_hash, utxo.utxo_output_index);
-            let msg_sig = cfg_wallet.sign(msg_to_sign.as_bytes());
-            let input = TransactionInput {
-                msg_previous_tx_hash: utxo.utxo_transaction_hash.clone(),
-                msg_previous_out_index: utxo.utxo_output_index,
-                msg_sig: msg_sig.to_vec(),
-                msg_commited_value: utxo.utxo_commited_value.clone(),
-                msg_proof: utxo.utxo_proof.clone(),
-            };
-            inputs.push(input);
-        }
-        let output = TransactionOutput {
-            msg_commited_value: commited_value.to_bytes().to_vec(),
-            msg_proof: proof.to_bytes().to_vec(),
-            msg_to: to.clone(),
-            msg_public: public,
-        };
-        let outputs = vec![output];
-        let tx = Transaction {
-            msg_inputs: inputs,
-            msg_outputs: outputs,
-        };
-        let hash_string = hex::encode(hash_transaction(&tx).await);
-        self.broadcast_tx_hash(&hash_string).await?;
         Ok(())
     }
 
@@ -596,7 +461,7 @@ impl NodeService {
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
-            self.blockchain.write().await.validate_transaction(&transaction).await?;
+            self.blockchain.write().await.verify_transaction(&transaction).await?;
             self.mempool.add(transaction.clone()).await;
             self.broadcast_tx_hash(&transaction_hash.to_string()).await?;
         }

@@ -1,6 +1,12 @@
 use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
+use rand::prelude::SliceRandom;
+use merlin::Transcript;
 use sha3::{Keccak256, Digest};
 use bs58;
+use vec_proto::messages::{TransactionOutput, TransactionInput, Transaction};
+use vec_storage::output_db::{self, OutputStorer};
+use prost::Message;
 
 #[derive(Debug, Clone)]
 pub struct Wallet {
@@ -13,9 +19,9 @@ pub struct Wallet {
 
 #[derive(Clone)]
 pub struct BLSAGSignature {
-    i: CompressedRistretto,
-    c: Scalar,
-    s: Vec<Scalar>,
+    pub i: CompressedRistretto,
+    pub c: Scalar,
+    pub s: Vec<Scalar>,
 }
 
 impl Wallet {
@@ -118,91 +124,194 @@ impl Wallet {
         Signature { r, s }
     }
 
-    pub fn generate_one_time_address(&self, recipient_view_key: CompressedRistretto, recipient_spend_key: CompressedRistretto, output_index: u64) -> Result<(CompressedRistretto, CompressedRistretto), &'static str> {
-        // Step 0: Generate a random transaction private key
+    pub async fn prepare_inputs(
+        &self
+    ) -> (Vec<TransactionInput>, u64) {
+        let owned_db = sled::open("PATH").expect("failed to open database");
+        let output_db = output_db::OutputDB::new(owned_db);
+        let output_set = output_db.get().await.unwrap();
+        let mut total_input_amount = 0;
+        let mut inputs = Vec::new();
+        for owned_output in &output_set {
+            let decrypted_amount = owned_output.decrypted_amount as u64;
+                total_input_amount += decrypted_amount;
+            let owned_stealth_addr = &owned_output.output.stealth;
+            let ristretto_stealth = Wallet::public_spend_key_from_vec(&owned_stealth_addr).unwrap();
+            let wallets: Vec<Wallet> = (0..9).map(|_| Wallet::generate()).collect();
+            let mut s_addrs: Vec<CompressedRistretto> = wallets.iter().map(|w| w.public_spend_key).collect();
+                s_addrs.push(ristretto_stealth);
+                s_addrs.shuffle(&mut rand::thread_rng());
+            let s_addrs_vec: Vec<Vec<u8>> = s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect(); // <- ring
+            let m = b"Message example";
+            let blsag = self.gen_blsag(&s_addrs, m, &ristretto_stealth); // <- blsag
+            let input = TransactionInput {
+                msg_ring: s_addrs_vec,
+                msg_blsag: blsag.to_vec(),
+                msg_message: m.to_vec(),
+            };
+            inputs.push(input);
+        }
+        (inputs, total_input_amount)
+    }
+
+    pub fn prepare_output(
+        &self,
+        recipient_view_key: CompressedRistretto,
+        recipient_spend_key: CompressedRistretto,
+        amount: u64,
+    ) -> TransactionOutput {
+        let output_index: u64 = 1;
         let mut rng = rand::thread_rng();
-        let tx_private_key = Scalar::random(&mut rng);
-        let dec_public_tx_key = &constants::RISTRETTO_BASEPOINT_TABLE * &tx_private_key;
-        let public_tx_key = dec_public_tx_key.compress();
-    
-        // Step 1: Compute r * PV, where r is the transaction private key and PV is the recipient's public view key
+        let r = Scalar::random(&mut rng);
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress(); // <-- output key
         let recipient_view_key_point = recipient_view_key.decompress().unwrap();
-        let r_times_pv = tx_private_key * recipient_view_key_point;
-    
-        // Step 2: Append the output index i to r * PV
-        let mut r_times_pv_bytes = r_times_pv.compress().as_bytes().to_vec();
-        r_times_pv_bytes.extend(&output_index.to_le_bytes());
-    
-        // Step 3: Hash (r * PV | i) using Keccak-256 and reduce modulo l
+        let q = r * recipient_view_key_point;
+        let mut q_bytes = q.compress().as_bytes().to_vec();
+        q_bytes.extend(&output_index.to_le_bytes());
         let mut hasher = Keccak256::new();
-        hasher.update(&r_times_pv_bytes);
-        let hashed_key = hasher.finalize();
-        let hs = Scalar::from_bytes_mod_order(hashed_key.into());
-    
-        // Step 4: Compute Hs(r * PV | i) * G, where G is the base point of the elliptic curve
-        let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hs;
-    
-        // Step 5: Add the recipient's public spend key PS to Hs(r * PV | i) * G to compute the final one-time address X
+        hasher.update(&q_bytes);
+        let hash = hasher.finalize();
+        let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
+        let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let recipient_spend_key_point = recipient_spend_key.decompress().unwrap();
-        let one_time_address = hs_times_g + recipient_spend_key_point;
-    
-        Ok((one_time_address.compress(), public_tx_key))
-    }
-    
+        let stealth = (hs_times_g + recipient_spend_key_point).compress(); // <-- stealth addr
+        let amount_in_scalars = Scalar::from(amount).to_bytes(); 
+        let amount_in_scalars_8 = amount_in_scalars[0..8].try_into().unwrap();
+        let amount_mask_label = b"amount";
+        let mut hasher  = Keccak256::new();
+        hasher.update(amount_mask_label);
+        hasher.update(q.compress().to_bytes());
+        hasher.update(output_index.to_le_bytes());
+        let hash = hasher.finalize();
+        let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
+        let encrypted_amount = xor8(amount_in_scalars_8, hash_8); // <-- encrypted amount
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+        let blinding = Scalar::random(&mut rand::thread_rng());
+        let mut prover_transcript = Transcript::new(b"doctest example");
+        let secret = amount;
+        let (proof, commitment) = RangeProof::prove_single( // <-- <-- range proof and commitment
+            &bp_gens,
+            &pc_gens,
+            &mut prover_transcript,
+            secret,
+            &blinding,
+            32,
+        ).unwrap();
 
-    pub fn check_property(&self, tx_public_key: CompressedRistretto, output_index: u64, output: CompressedRistretto) -> Result<bool, &'static str> {
-        // Step 1: Compute pV * R, where pV is the private view key and R is the transaction public key
-        let tx_public_key_point = tx_public_key.decompress().ok_or("Failed to decompress transaction public key")?;
-        let pv_times_r = self.secret_view_key * tx_public_key_point;
-    
-        // Step 2: Append the output index i to pV * R
-        let mut pv_times_r_bytes = pv_times_r.compress().as_bytes().to_vec();
-        pv_times_r_bytes.extend(&output_index.to_le_bytes());
-    
-        // Step 3: Hash (pV * R | i) using Keccak-256 and reduce modulo l
+        TransactionOutput {
+            msg_stealth_address: stealth.to_bytes().to_vec(),
+            msg_output_key: output_key.to_bytes().to_vec(),
+            msg_proof: proof.to_bytes().to_vec(),
+            msg_commitment: commitment.to_bytes().to_vec(),
+            msg_amount: encrypted_amount.to_vec(),
+        }
+    }
+
+    pub fn prepare_change_output(
+        &self,
+        change: u64,
+        output_index: u64,
+    ) -> TransactionOutput {
+        let mut rng = rand::thread_rng();
+        let r = Scalar::random(&mut rng);
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress(); // <-- output key
+        let view_key_point = &self.public_view_key.decompress().unwrap();
+        let q = r * view_key_point;
+        let mut q_bytes = q.compress().as_bytes().to_vec();
+        q_bytes.extend(&output_index.to_le_bytes());
         let mut hasher = Keccak256::new();
-        hasher.update(&pv_times_r_bytes);
-        let hashed_key = hasher.finalize();
-        let hs = Scalar::from_bytes_mod_order(hashed_key.into());
-    
-        // Step 4: Compute Hs(pV * R | i) * G, where G is the base point of the elliptic curve
-        let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hs;
-    
-        // Step 5: Add the own public spend key PS to Hs(pV * R | i) * G to compute the expected output X
-        let expected_output = hs_times_g + self.public_spend_key.decompress().unwrap();
-    
-        Ok(expected_output.compress() == output)
+        hasher.update(&q_bytes);
+        let hash = hasher.finalize();
+        let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
+        let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
+        let spend_key_point = &self.public_spend_key.decompress().unwrap();
+        let stealth = (hs_times_g + spend_key_point).compress(); // <-- stealth addr
+        let change_in_scalars = Scalar::from(change).to_bytes(); 
+        let change_s_8 = change_in_scalars[0..8].try_into().unwrap();
+        let change_mask_label = b"amount";
+        let mut hasher  = Keccak256::new();
+        hasher.update(change_mask_label);
+        hasher.update(q.compress().to_bytes());
+        hasher.update(output_index.to_le_bytes());
+        let hash = hasher.finalize();
+        let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
+        let encrypted_amount = xor8(change_s_8, hash_8); // <-- encrypted amount
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+        let blinding = Scalar::random(&mut rand::thread_rng());
+        let mut prover_transcript = Transcript::new(b"Transaction");
+        let secret = change;
+        let (proof, commitment) = RangeProof::prove_single( // <-- <-- range proof and commitment
+            &bp_gens,
+            &pc_gens,
+            &mut prover_transcript,
+            secret,
+            &blinding,
+            32,
+        ).unwrap();
+
+        TransactionOutput {
+            msg_stealth_address: stealth.to_bytes().to_vec(),
+            msg_output_key: output_key.to_bytes().to_vec(),
+            msg_proof: proof.to_bytes().to_vec(),
+            msg_commitment: commitment.to_bytes().to_vec(),
+            msg_amount: encrypted_amount.to_vec(),
+        }
     }
 
-    pub fn gen_blsag(&self, p: &[CompressedRistretto], m: &[u8]) -> BLSAGSignature {
+    pub async fn make_transaction(&self, recipient_view_key: CompressedRistretto, recipient_spend_key: CompressedRistretto, a: u64) -> Transaction {
+        let (inputs, total_input_amount) = self.prepare_inputs().await;
+        let mut outputs = Vec::new();
+        if total_input_amount > a {
+            let change = total_input_amount - a;
+            let change = self.prepare_change_output(change, 2);
+            outputs.push(change);
+        }    
+        let output = self.prepare_output(recipient_view_key, recipient_spend_key, a);
+        outputs.push(output);
+        Transaction {
+            msg_inputs: inputs,
+            msg_outputs: outputs,
+        }
+    }
+
+    pub fn check_property(&self, output_key: CompressedRistretto, output_index: u64, tx_address: CompressedRistretto) -> bool {
+        let q = self.secret_view_key * output_key.decompress().unwrap();
+        let mut q_bytes = q.compress().as_bytes().to_vec();
+        q_bytes.extend(&output_index.to_le_bytes());
+        let mut hasher = Keccak256::new();
+        hasher.update(&q_bytes);
+        let hash = hasher.finalize();
+        let hash_scalar = Scalar::from_bytes_mod_order(hash.into());
+        let hs_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_scalar;
+        let expectation = hs_g + self.public_spend_key.decompress().unwrap();
+    
+        expectation.compress() == tx_address
+    }
+
+    pub fn gen_blsag(&self, p: &[CompressedRistretto], m: &[u8], stealth: &CompressedRistretto) -> BLSAGSignature {
         let a = Scalar::random(&mut rand::thread_rng());
         let n = p.len();
-
         let mut c: Vec<Scalar> = vec![Scalar::zero(); n];
         let mut s: Vec<Scalar> = vec![Scalar::zero(); n];
         let mut l: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
         let mut r: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
-
         let mut j = 0;
-
         for (i, rk) in p.iter().enumerate() {
-            if &self.public_spend_key == rk {
+            if stealth == rk {
                 j = i;
                 break;
             }
         }
-
         let image = (self.secret_spend_key * hash_to_point(&p[j])).compress();
-
         for i in 0..n {
             if i == j {
                 continue;
             }
             s[i] = Scalar::random(&mut rand::thread_rng());
         }
-
         let j1 = (j+1) % n;
-
         l[j] = a * &constants::RISTRETTO_BASEPOINT_POINT;
         r[j] = a * hash_to_point(&p[j]);
         let mut hasher = Keccak256::new();
@@ -211,7 +320,6 @@ impl Wallet {
             hasher.update(r[j].compress().to_bytes());
             let hash = hasher.finalize();
         c[(j+1) % n] = Scalar::from_bytes_mod_order(hash.into());
-
         for k in 0..(n-1) {
             let i = (j1 + k) % n;
             let ip1 = (j1 + k + 1) % n;
@@ -224,7 +332,6 @@ impl Wallet {
             let hash = hasher.finalize();
             c[ip1] = Scalar::from_bytes_mod_order(hash.into());
         }
-
         s[j] = a - c[j] * self.secret_spend_key;
 
         BLSAGSignature {
@@ -243,6 +350,7 @@ impl Wallet {
         v.extend_from_slice(self.public_spend_key.as_bytes());
         v.extend_from_slice(self.public_view_key.as_bytes());
         v.extend_from_slice(self.address.as_bytes());
+
         v
     }
 
@@ -255,6 +363,7 @@ impl Wallet {
         let public_spend_key = CompressedRistretto::from_slice(&v[64..96]);
         let public_view_key = CompressedRistretto::from_slice(&v[96..128]);
         let address = String::from_utf8(v[128..].to_vec()).unwrap();
+
         Some(Wallet { 
             secret_spend_key, 
             secret_view_key, 
@@ -314,6 +423,7 @@ impl BLSAGSignature {
         for scalar in &self.s {
             v.extend_from_slice(scalar.as_bytes());
         }
+
         v
     }
 
@@ -330,59 +440,23 @@ impl BLSAGSignature {
             let end = start + 32;
             s.push(Scalar::from_canonical_bytes(v[start..end].try_into().unwrap()).unwrap());
         }
+
         Some(BLSAGSignature { i, c, s })
     }
 }
 
-
-
 pub fn verify(public_spend_key: &CompressedRistretto, message: &[u8], signature: &Signature) -> bool {
-    // Decompress the R value and public key
     let r = signature.r.decompress().unwrap();
     let public_spend_key_point = public_spend_key;
-
-    // Hash the concatenation of R, the public key, and the message
     let mut hasher = Keccak256::new();
     hasher.update(signature.r.to_bytes());
     hasher.update(public_spend_key.to_bytes());
     hasher.update(message);
     let h = hasher.finalize();
-
-    // Convert the hash to a scalar
     let h_scalar = Scalar::from_bits(h.into());
-
-    // Calculate the expected R value: R' = s * basepoint + h * public_key
     let r_prime = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.s + public_spend_key_point.decompress().unwrap() * &h_scalar;
 
-    // Verify the signature by checking if R equals R'
     r == r_prime
-}
-
-pub fn verify_blsag(sig: &BLSAGSignature, p: &[CompressedRistretto], m: &[u8]) -> bool {
-    let n = p.len();
-    let c1 = sig.c;
-    let s = sig.s.clone();
-    let image = sig.i;
-    let mut l: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
-    let mut r: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
-    let mut c: Vec<Scalar> = vec![Scalar::zero(); n];
-    c[0] = c1;
-    for j in 0..n {
-        let i = j % n;
-        let ip1 = (j + 1) % n;
-        l[i] = s[i] * &constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i].decompress().unwrap();
-        r[i] = s[i] * hash_to_point(&p[i]) + c[i] * image.decompress().unwrap();
-        let mut hasher = Keccak256::new();
-            hasher.update(m);
-            hasher.update(l[i].compress().to_bytes());
-            hasher.update(r[i].compress().to_bytes());
-        let hash = hasher.finalize();
-        c[ip1] = Scalar::from_bytes_mod_order(hash.into());
-    }
-    if c1 == c[0] {
-        return true;
-    }
-    false
 }
 
 #[derive(Clone, Copy)]
@@ -396,6 +470,7 @@ impl Signature {
         let mut v = Vec::new();
         v.extend_from_slice(self.r.as_bytes());
         v.extend_from_slice(self.s.as_bytes());
+
         v
     }
 
@@ -412,7 +487,7 @@ impl Signature {
     }
 }
 
-fn hash_to_point(point: &CompressedRistretto) -> RistrettoPoint {
+pub fn hash_to_point(point: &CompressedRistretto) -> RistrettoPoint {
     let mut hasher = Keccak256::new();
     hasher.update(point.to_bytes());
     let hash = hasher.finalize();
@@ -420,30 +495,21 @@ fn hash_to_point(point: &CompressedRistretto) -> RistrettoPoint {
     &constants::RISTRETTO_BASEPOINT_TABLE * &scalar
 }
 
+// XOR function for 8 bytes
+pub fn xor8(a: [u8; 8], b: [u8; 8]) -> [u8; 8] {
+    let mut c = [0u8; 8];
+    for i in 0..8 {
+        c[i] = a[i] ^ b[i];
+    }
+
+    c
+}
+
 //********************************************************************************************************************************************************/
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_blsag_signature() {
-
-        // Generate a few wallets
-        let wallets: Vec<Wallet> = (0..15).map(|_| Wallet::generate()).collect();
-
-        // Extract public keys
-        let public_keys: Vec<CompressedRistretto> = wallets.iter().map(|w| w.public_spend_key).collect();
-
-        // Message to sign
-        let message: Vec<u8> = b"This is a test message".to_vec();
-
-        // Create the BLSAG signature
-        let signature: BLSAGSignature = wallets[14].gen_blsag(&public_keys, &message);
-
-        // Verify the signature
-        assert!(verify_blsag(&signature, &public_keys, &message));
-    }
 
     #[test]
     fn test_wallet_generation() {
@@ -469,69 +535,23 @@ mod tests {
     fn test_wallet_signature() {
         let wallet = Wallet::generate();
         let message = b"Hello, World!";
-
-        // Sign the message
         let signature = wallet.sign(message);
-
-        // Check if the signature is valid
         assert!(verify(&wallet.public_spend_key, message, &signature));
-
-        // Check if the signature is invalid for a different message
         let different_message = b"Goodbye, World!";
         assert!(!verify(&wallet.public_spend_key, different_message, &signature));
-
-        // Check if the signature is invalid for a different key
         let different_wallet = Wallet::generate();
         assert!(!verify(&different_wallet.public_spend_key, message, &signature));
     }
 
     #[test]
     fn test_wallet_reconstruction() {
-        // Generate a new wallet
         let wallet = Wallet::generate();
-        
-        // Reconstruct the wallet using only the secret spend key
         let reconstructed_wallet = Wallet::reconstruct(wallet.secret_spend_key);
-
-        // Check if the reconstructed wallet matches the original
         assert_eq!(wallet.secret_spend_key, reconstructed_wallet.secret_spend_key);
         assert_eq!(wallet.secret_view_key, reconstructed_wallet.secret_view_key);
         assert_eq!(*wallet.public_spend_key.as_bytes(), *reconstructed_wallet.public_spend_key.as_bytes());
         assert_eq!(*wallet.public_view_key.as_bytes(), *reconstructed_wallet.public_view_key.as_bytes());
         assert_eq!(wallet.address, reconstructed_wallet.address);
-    }
-
-    #[test]
-    fn test_address_generation_and_checking() {
-        let sender_wallet = Wallet::generate();
-        let recipient_wallet = Wallet::generate();
-        let malicious_wallet = Wallet::generate();
-
-        assert_ne!(sender_wallet.secret_spend_key, recipient_wallet.secret_spend_key, "Sender and recipient spend keys should not be equal");
-        assert_ne!(sender_wallet.secret_view_key, recipient_wallet.secret_view_key, "Sender and recipient view keys should not be equal");
-        assert_ne!(sender_wallet.public_spend_key, recipient_wallet.public_spend_key, "Sender and recipient public spend keys should not be equal");
-        assert_ne!(sender_wallet.public_view_key, recipient_wallet.public_view_key, "Sender and recipient public view keys should not be equal");
-
-        let output_index = 0;
-        let (one_time_address, public_tx_key) = sender_wallet
-            .generate_one_time_address(
-                recipient_wallet.public_view_key, 
-                recipient_wallet.public_spend_key, 
-                output_index
-            ).unwrap();
-
-        assert_ne!(one_time_address, sender_wallet.public_spend_key, "One-time address should not be equal to the sender's public spend key");
-        assert_ne!(one_time_address, recipient_wallet.public_spend_key, "One-time address should not be equal to the recipient's public spend key");
-
-        // Check if the recipient can recognize the output as belonging to him
-        let is_recipient = recipient_wallet.check_property(public_tx_key, output_index, one_time_address).unwrap();
-
-        assert!(is_recipient, "The recipient could not recognize the output as belonging to him");
-
-        // Now check if a malicious wallet can falsely claim the output
-        let is_malicious = malicious_wallet.check_property(public_tx_key, output_index, one_time_address).unwrap();
-
-        assert!(!is_malicious, "The malicious wallet should not be able to claim the output");
     }
 }
 

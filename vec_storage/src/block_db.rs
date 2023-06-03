@@ -1,6 +1,5 @@
 use hex::encode;
 use vec_proto::messages::{Block};
-use vec_block::block::*;
 use vec_errors::errors::*;
 use async_trait::async_trait;
 use sled::Db;
@@ -8,7 +7,7 @@ use prost::Message;
 
 #[async_trait]
 pub trait BlockStorer: Send + Sync {
-    async fn put(&self, block: &Block) -> Result<(), BlockStorageError>;
+    async fn put(&self, hash: Vec<u8>, block: &Block) -> Result<(), BlockStorageError>;
     async fn get(&self, hash: &str) -> Result<Option<Block>, BlockStorageError>;
 }
 
@@ -26,8 +25,7 @@ impl BlockDB {
 
 #[async_trait]
 impl BlockStorer for BlockDB {
-    async fn put(&self, block: &Block) -> Result<(), BlockStorageError> {
-        let hash = hash_header_by_block(block)?;
+    async fn put(&self, hash: Vec<u8>, block: &Block) -> Result<(), BlockStorageError> {
         let hash_str = encode(hash);
         let mut block_data = vec![];
         block.encode(&mut block_data).map_err(|_| BlockStorageError::SerializationError)?;

@@ -6,8 +6,6 @@ service Node {
     rpc Handshake(Version) returns (Version);
     rpc PushState(LocalState) returns (BlockBatch);
     rpc HandlePeerList(PeerList) returns (Confirmed);
-    rpc HandleHeartbeat(Confirmed) returns (Confirmed);
-    rpc HandleTime(Confirmed) returns (DelayResponse);
     rpc HandleBlockPush(PushBlockRequest) returns (Confirmed);
     rpc HandleBlockPull(PullBlockRequest) returns (Block);
     rpc HandleTxPush(PushTxRequest) returns (Confirmed);
@@ -15,10 +13,6 @@ service Node {
 }
 
 message Confirmed { }
-
-message DelayResponse {
-    uint64 msg_time = 1;
-}
 
 message PushBlockRequest {
     string msg_block_hash = 1;
@@ -63,8 +57,6 @@ message BlockBatch {
 message Block {
     Header msg_header = 1;
     repeated Transaction msg_transactions = 2;
-    bytes msg_public = 4;
-    bytes msg_sig = 5;
 }
 
 message Header {
@@ -72,25 +64,24 @@ message Header {
     uint32 msg_height = 2;
     bytes msg_previous_hash = 3;
     bytes msg_root_hash = 4;
-    uint64 msg_timestamp = 5;
+    uint64 msg_timestamp = 5; 
 }
 
 message Transaction {
-    repeated TransactionInput msg_inputs = 1;
-    repeated TransactionOutput msg_outputs = 2;
+    repeated TransactionInput msg_inputs = 2;
+    repeated TransactionOutput msg_outputs = 3;
 }
 
 message TransactionInput {
-    string msg_previous_tx_hash = 1;
-    uint32 msg_previous_out_index = 2;
-    bytes msg_sig = 3;
-    bytes msg_commited_value = 4;
-    bytes msg_proof = 5;
+    repeated bytes msg_ring = 1;
+    bytes msg_blsag = 2;
+    bytes msg_message = 3;
 }
 
 message TransactionOutput {
-    bytes msg_commited_value = 1;
-    bytes msg_proof = 2;
-    bytes msg_to = 3;
-    bytes msg_public = 4;
+    bytes msg_stealth_address = 1; 
+    bytes msg_output_key = 2;
+    bytes msg_proof = 4; 
+    bytes msg_commitment = 5; 
+    bytes msg_amount = 6; 
 }

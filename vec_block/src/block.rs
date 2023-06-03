@@ -1,26 +1,8 @@
 use vec_proto::messages::{Block, Header};
 use vec_merkle::merkle::{MerkleTree};
-use vec_cryptography::cryptography::{Wallet, Signature, verify};
-use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
 use sha3::{Keccak256, Digest};
 use vec_errors::errors::*;
 use prost::Message;
-
-pub async fn sign_block(block: &Block, wallet: &Wallet) -> Result<Signature, BlockOpsError> {
-    let hash = hash_header_by_block(block)?;
-    let signature = wallet.sign(&hash);
-    Ok(signature)
-}
-
-pub async fn verify_block(block: &Block, signature: &Signature, public_key: &CompressedRistretto) -> Result<bool, BlockOpsError> {
-    let hash = hash_header_by_block(block)?;
-    Ok(verify(public_key, &hash, signature))
-}
-
-pub fn verify_block_sync(block: &Block, signature: &Signature, public_key: &CompressedRistretto) -> Result<bool, BlockOpsError> {
-    let hash = hash_header_by_block(block)?;
-    Ok(verify(public_key, &hash, signature))
-}
 
 pub async fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
     let transaction_data: Vec<Vec<u8>> = block.msg_transactions
