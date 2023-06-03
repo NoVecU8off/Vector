@@ -212,7 +212,7 @@ impl NodeService {
         let image_db = sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
         info!(logger, "Image DB was created in C:/Vector/images");
         let ip_db = sled::open("C:/Vector/ips").map_err(|_| NodeServiceError::SledOpenError)?;
-        // info!(logger, "Image DB was created in C:/Vector/ips");
+        info!(logger, "Image DB was created in C:/Vector/ips");
         
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
         let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
@@ -251,14 +251,15 @@ impl NodeService {
         }
         let self_clone = self.clone();
         tokio::spawn(async move {
+            info!(self_clone.logger, "Starting block creation loop");
             self_clone.block_creation_loop().await
         });
         Ok(())
     }
 
-    async fn block_creation_loop(&self) {
+    pub async fn block_creation_loop(&self) {
         loop {
-            tokio::time::sleep(Duration::from_secs(120)).await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
             info!(self.logger, "Trying to create new block");
             self.make_block().await.unwrap();
         }
@@ -781,6 +782,37 @@ impl NodeService {
         info!(self.logger, "Balance requested");
         let chain_lock = self.blockchain.read().await;
         chain_lock.get_balance().await
+    }
+
+    pub async fn connect_to(&self, ip: &str) -> Result<(), NodeServiceError> {
+        info!(self.logger, "Trying to bootstrap with {:?}", ip);
+        let node_service_clone = self.clone();
+        let ip_clone = ip.clone();
+        match node_service_clone.dial_remote_node(&ip_clone).await {
+            Ok((c, v)) => {
+                node_service_clone.add_peer(c, v).await;
+                info!(node_service_clone.logger, "Successfully bootstraped with {:?}", ip);
+            }
+                Err(e) => {
+                error!(node_service_clone.logger, "Failed bootstrap and dial: {:?}", e);
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn get_address(&self) -> Result<String, NodeServiceError> {
+        let wallet = {
+            let server_config = self.config.read().await;
+            server_config.cfg_wallet.clone()
+        };
+        let address = wallet.address;
+        Ok(address)
+    }
+
+    pub async fn get_height(&self) -> Result<usize, NodeServiceError> {
+        let chain_lock = self.blockchain.read().await;
+        let height = chain_lock.chain_height();
+        Ok(height)
     }
 }
 

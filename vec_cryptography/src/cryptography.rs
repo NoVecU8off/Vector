@@ -67,15 +67,7 @@ impl Wallet {
         let public_view_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret_view_key;
 
         // Prepare the address data (public spend key + public view key)
-        let mut data = vec![];
-        data.extend(public_spend_key.compress().as_bytes());
-        data.extend(public_view_key.compress().as_bytes());
-
-        // Add the checksum (the first four bytes of the Keccak-256 hash of the address data)
-        let mut hasher = Keccak256::new();
-        hasher.update(&data);
-        let hash = hasher.finalize();
-        data.extend(&hash[0..4]);
+        let data = [public_spend_key.compress().to_bytes().as_slice(), public_view_key.compress().to_bytes().as_slice()].concat();
 
         // Encode the address data as a Base58 string
         let address = bs58::encode(&data).into_string();
@@ -559,6 +551,18 @@ mod tests {
     }
 
     #[test]
+    fn test_reconstruct_wallet() {
+        let original_wallet = Wallet::generate();
+        let reconstructed_wallet = Wallet::reconstruct(original_wallet.secret_spend_key);
+
+        assert_eq!(original_wallet.secret_spend_key, reconstructed_wallet.secret_spend_key);
+        assert_eq!(original_wallet.secret_view_key, reconstructed_wallet.secret_view_key);
+        assert_eq!(original_wallet.public_spend_key, reconstructed_wallet.public_spend_key);
+        assert_eq!(original_wallet.public_view_key, reconstructed_wallet.public_view_key);
+        assert_eq!(original_wallet.address, reconstructed_wallet.address);
+    }
+
+    #[test]
     fn test_wallet_signature() {
         let wallet = Wallet::generate();
         let message = b"Hello, World!";
@@ -579,6 +583,28 @@ mod tests {
         assert_eq!(*wallet.public_spend_key.as_bytes(), *reconstructed_wallet.public_spend_key.as_bytes());
         assert_eq!(*wallet.public_view_key.as_bytes(), *reconstructed_wallet.public_view_key.as_bytes());
         assert_eq!(wallet.address, reconstructed_wallet.address);
+    }
+
+    #[test]
+    fn test_encrypt_decrypt_amount() {
+        let output_index: u64 = 1;
+        let amount: u64 = 5000;
+
+        // Generate a wallet
+        let my_wallet = Wallet::generate();
+        let re_wallet = Wallet::generate();
+        let r = Scalar::random(&mut rand::thread_rng());
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
+        let q = &r * &re_wallet.public_view_key.decompress().unwrap();
+        let q_bytes = q.compress().to_bytes();
+        // Encrypt the amount
+        let encrypted_amount = my_wallet.encrypt_amount(&q_bytes, output_index, amount);
+
+        // We're using same values as input, normally this should be a received output key and encrypted amount
+        let decrypted_amount = re_wallet.decrypt_amount(output_key, output_index, &encrypted_amount);
+
+        // Test if decrypted amount equals original amount
+        assert_eq!(decrypted_amount, amount, "Decrypted amount does not match the original amount");
     }
 }
 

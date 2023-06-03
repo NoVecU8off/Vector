@@ -7,6 +7,9 @@ enum Command {
     SendTransaction { address: String, amount: u64 },
     GetBalance,
     Genesis,
+    ConnectTo { ip: String },
+    GetAddress,
+    GetHeight,
 }
 
 #[tokio::main]
@@ -59,10 +62,26 @@ async fn main() {
                     let balance = nsv.get_balance().await;
                     println!("Balance: {}", balance);
                 },
+                Some(Command::GetHeight) => {
+                    let height = nsv.get_height().await.unwrap();
+                    println!("Height: {}", height);
+                },
                 Some(Command::Genesis) => {
                     match nsv.make_genesis_block().await {
                         Ok(_) => println!("Genesis block created successfully"),
                         Err(e) => eprintln!("Failed to create genesis block: {}", e),
+                    }
+                },
+                Some(Command::ConnectTo { ip }) => {
+                    match nsv.connect_to(&ip).await {
+                        Ok(_) => println!("Successfully connected to {}", ip),
+                        Err(e) => eprintln!("Failed to connect: {}", e),
+                    }
+                },
+                Some(Command::GetAddress) => {
+                    match nsv.get_address().await {
+                        Ok(address) => println!("Address: {}", address),
+                        Err(e) => eprintln!("Failed to get address: {}", e),
                     }
                 },
                 None => {
@@ -88,11 +107,26 @@ async fn main() {
                             println!("Invalid 'send' command format. It should be 'send <pvk> <psk> amount <amount>'");
                         }
                     },
-                    "get balance" => {
+                    cmd if cmd.starts_with("connect to") => {
+                        let parts: Vec<&str> = cmd.split_whitespace().collect();
+                        if parts.len() == 3 {
+                            let ip = parts[2].to_string();
+                            let _ = tx.send(Command::ConnectTo { ip }).await;
+                        } else {
+                            println!("Invalid 'connect to' command format. It should be 'connect to <ip>'");
+                        }
+                    },
+                    "balance" => {
                         let _ = tx.send(Command::GetBalance).await;
+                    },
+                    "height" => {
+                        let _ = tx.send(Command::GetHeight).await;
                     },
                     "genesis" => {
                         let _ = tx.send(Command::Genesis).await;
+                    },
+                    "address" => {
+                        let _ = tx.send(Command::GetAddress).await;
                     },
                     _ => {
                         println!("Invalid command");

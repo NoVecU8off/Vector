@@ -34,7 +34,7 @@ impl HeaderList {
         if self.headers_list_len() == 0 {
             0
         } else {
-            self.headers_list_len() - 1
+            self.headers_list_len()
         }
     }
 
@@ -263,4 +263,11 @@ impl Chain {
         }
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+
 }
