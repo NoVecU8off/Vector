@@ -1,6 +1,4 @@
-use vec_cryptography::cryptography::{Wallet, Signature};
 use vec_proto::messages::{Transaction};
-use ed25519_dalek::PublicKey;
 use sha3::{Digest, Sha3_256};
 use prost::Message;
 
