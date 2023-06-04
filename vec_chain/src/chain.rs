@@ -24,21 +24,13 @@ impl HeaderList {
     }
 
     pub fn get_header_by_index(&self, index: usize) -> Result<&Header, ChainOpsError> {
-        if index >= self.headers_list_height() {
+        if index >= self.headers_in_chain() {
             return Err(ChainOpsError::IndexTooHigh);
         }
         Ok(&self.headers[index])
     }
 
-    pub fn headers_list_height(&self) -> usize {
-        if self.headers_list_len() == 0 {
-            0
-        } else {
-            self.headers_list_len()
-        }
-    }
-
-    pub fn headers_list_len(&self) -> usize {
+    pub fn headers_in_chain(&self) -> usize {
         self.headers.len()
     }
 }
@@ -67,20 +59,19 @@ impl Chain {
         Ok(chain)
     }
 
-    pub fn chain_height(&self) -> usize {
-        self.headers.headers_list_height()
-    }
-
     pub fn chain_len(&self) -> usize {
-        self.headers.headers_list_len()
+        self.headers.headers_in_chain()
     }
 
-    pub async fn add_block(&mut self, block: Block) -> Result<(), ChainOpsError> {
+    pub async fn add_block(&mut self, wallet: &Wallet, block: Block) -> Result<(), ChainOpsError> {
         let header = block
             .msg_header
             .as_ref()
             .ok_or(ChainOpsError::MissingBlockHeader)?;
         self.validate_block(&block).await?;
+        for transaction in block.msg_transactions.iter() {
+            self.process_transaction(wallet, transaction).await?;
+        };
         self.headers.add_header(header.clone());
         let hash = hash_header_by_block(&block).unwrap().to_vec();
         self.blocks.put(hash, &block).await?;
@@ -107,36 +98,33 @@ impl Chain {
         Ok(())
     }
 
-    pub async fn get_block_by_hash(&self, hash: &[u8]) -> Result<Block, ChainOpsError> {
-        let hash_hex = encode(hash);
-        match self.blocks.get(&hash_hex).await {
+    pub async fn get_block_by_hash(&self, hash: Vec<u8>) -> Result<Block, ChainOpsError> {
+        match self.blocks.get(hash.clone()).await {
             Ok(Some(block)) => Ok(block),
-            Ok(None) => Err(ChainOpsError::BlockNotFound(hash_hex)),
+            Ok(None) => Err(ChainOpsError::BlockNotFound(hex::encode(hash))),
             Err(err) => Err(err.into()),
         }
     }
     
-    pub async fn get_block_by_height(&self, height: usize) -> Result<Block, ChainOpsError> {
+    pub async fn get_block_by_index(&self, index: usize) -> Result<Block, ChainOpsError> {
         if self.chain_len() == 0 {
             return Err(ChainOpsError::ChainIsEmpty);
         }
-        if self.chain_height() < height {
-            return Err(ChainOpsError::HeightTooHigh { height, max_height: self.chain_height() });
-        }
-        let header = self.headers.get_header_by_index(height)?;
+        let header = self.headers.get_header_by_index(index)?;
         let hash = hash_header(header).await?;
-        let block = self.get_block_by_hash(&hash).await?;
+        let block = self.get_block_by_hash(hash).await?;
         Ok(block)
     }
 
-    async fn check_previous_block_hash(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
+    pub async fn check_previous_block_hash(&self, incoming_block: &Block) -> Result<bool, ChainOpsError> {
         if self.chain_len() > 0 {
-            let last_block = self.get_block_by_height(self.chain_height()).await?;
-            let last_block_hash = hash_header_by_block(&last_block)?.to_vec();
+            let previous_index = self.chain_len() - 1;
+            let previous_block = self.get_block_by_index(previous_index).await?;
+            let previous_hash = hash_header_by_block(&previous_block)?.to_vec();
             if let Some(header) = incoming_block.msg_header.as_ref() {
-                if last_block_hash != header.msg_previous_hash {
+                if previous_hash != header.msg_previous_hash {
                     return Err(ChainOpsError::InvalidPreviousBlockHash {
-                        expected: encode(last_block_hash),
+                        expected: encode(previous_hash),
                         got: encode(header.msg_previous_hash.clone()),
                     });
                 }
@@ -144,13 +132,17 @@ impl Chain {
                 return Err(ChainOpsError::MissingBlockHeader);
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     pub async fn get_previous_hash_in_chain(&self) -> Result<Vec<u8>, ChainOpsError> {
-        let last_block = self.get_block_by_height(self.chain_height()).await?;
-        let last_block_hash = hash_header_by_block(&last_block)?.to_vec();
-        Ok(last_block_hash)
+        if self.chain_len() == 0 {
+            return Err(ChainOpsError::MissingGenesisBlock);
+        }
+        let previous_index = self.chain_len() - 1;
+        let previous_block = self.get_block_by_index(previous_index).await?;
+        let previous_hash = hash_header_by_block(&previous_block)?.to_vec();
+        Ok(previous_hash)
     }
 
     pub async fn check_transactions_in_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
@@ -269,5 +261,22 @@ impl Chain {
 mod tests {
     use super::*;
 
+    async fn create_test_chain() -> Result<Chain, ChainOpsError> {
+        let block_db = sled::open("C:/Vector/blocks").unwrap();
+        let output_db = sled::open("C:/Vector/outputs").unwrap();
+        let image_db = sled::open("C:/Vector/images").unwrap();
+        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
+        let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
+        let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
+        let chain = Chain::new(blocks, images, outputs).await.unwrap();
+        Ok(chain)
+    }
 
+    #[tokio::test]
+    async fn test_chain_new() {
+        let result = create_test_chain().await;
+        assert!(result.is_ok());
+        let chain = result.unwrap();
+        assert_eq!(chain.chain_len(), 0);
+    }
 }

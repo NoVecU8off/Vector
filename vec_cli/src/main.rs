@@ -10,43 +10,18 @@ enum Command {
     ConnectTo { ip: String },
     GetAddress,
     GetHeight,
+    MakeBlock,
 }
 
 #[tokio::main]
 async fn main() {
     let mut rl = DefaultEditor::new().unwrap();
-    let mut nodes_to_bootstrap = Vec::new();
-    loop {
-        let readline = rl.readline("Type in ip address to pre-connect (or 'done' to proceed): ");
-        match readline {
-            Ok(line) => {
-                let line = line.trim();
-                if line == "done" {
-                    break;
-                } else {
-                    nodes_to_bootstrap.push(line.to_string());
-                }
-            },
-            Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
-                return;
-            },
-            Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
-                return;
-            },
-            Err(err) => {
-                println!("Error: {:?}", err);
-                return;
-            },
-        }
-    }
     let scv = ServerConfig::default_v().await;
     let nsv = NodeService::new(scv).await.unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let mut nsv_clone = nsv.clone();
     tokio::spawn(async move {
-        nsv_clone.start(nodes_to_bootstrap).await
+        nsv_clone.start().await
     });
 
     let server_future = tokio::spawn(async move {
@@ -56,6 +31,12 @@ async fn main() {
                     match nsv.make_transaction(&address, amount as u64).await {
                         Ok(_) => println!("Transaction broadcasted successfully"),
                         Err(e) => eprintln!("Failed to broadcast transaction: {}", e),
+                    }
+                },
+                Some(Command::MakeBlock) => {
+                    match nsv.make_block().await {
+                        Ok(_) => println!("Block created successfully"),
+                        Err(e) => eprintln!("Failed to create block: {}", e),
                     }
                 },
                 Some(Command::GetBalance) => {
@@ -118,6 +99,9 @@ async fn main() {
                     },
                     "balance" => {
                         let _ = tx.send(Command::GetBalance).await;
+                    },
+                    "block" => {
+                        let _ = tx.send(Command::MakeBlock).await;
                     },
                     "height" => {
                         let _ = tx.send(Command::GetHeight).await;

@@ -15,22 +15,22 @@ service Node {
 message Confirmed { }
 
 message PushBlockRequest {
-    string msg_block_hash = 1;
+    bytes msg_block_hash = 1;
     string msg_ip = 2;
 }
 
 message PullBlockRequest {
-    string msg_block_hash = 1;
+    bytes msg_block_hash = 1;
     string msg_ip = 2;
 }
 
 message PushTxRequest {
-    string msg_transaction_hash = 1;
+    bytes msg_transaction_hash = 1;
     string msg_ip = 2;
 }
 
 message PullTxRequest {
-    string msg_transaction_hash = 1;
+    bytes msg_transaction_hash = 1;
     string msg_ip = 2;
 }
 

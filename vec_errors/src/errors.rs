@@ -146,10 +146,14 @@ pub enum ChainOpsError {
     MissingBlockHeader,
     #[error("Failed to deserialize")]
     DeserializationError,
+    #[error("Local chain is missing genesis block")]
+    MissingGenesisBlock,
     #[error(transparent)]
     BlockStorageError(#[from] BlockStorageError),
     #[error("Couldn't find block with hash: {0}")]
     BlockNotFound(String),
+    #[error("Block has no transactions")]
+    NoTransactions,
     #[error("Chain is empty")]
     ChainIsEmpty,
     #[error("Given height {height} is out of bounds, max height is: {max_height}")]
@@ -214,8 +218,12 @@ pub enum NodeServiceError {
     MakeNodeClientError,
     #[error("Peer not found")]
     PeerNotFound,
+    #[error("Peer list is empty, no one to broadcast to")]
+    NoRecipient,
     #[error("Connection failed")]
     ConnectionFailed,
+    #[error("No transactions in block")]
+    NoTransactions,
     #[error("Can not pull from non-validator node")]
     PullFromNonValidatorNode,
     #[error("Total owned outputs amount is less then requested")]
@@ -231,7 +239,7 @@ pub enum NodeServiceError {
     #[error(transparent)]
     ValidatorServiceError(#[from] ValidatorServiceError),
     #[error(transparent)]
-    MissingBlockHeader(#[from] ChainOpsError),
+    ChainOpsError(#[from] ChainOpsError),
     #[error(transparent)]
     PeerStorageError(#[from] PeerStorageError),
     #[error(transparent)]

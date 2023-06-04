@@ -2563,7 +2563,6 @@ dependencies = [
 name = "vec_chain"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-std",
  "bulletproofs",
  "curve25519-dalek-ng",
@@ -2574,8 +2573,8 @@ dependencies = [
  "prost",
  "protobuf",
  "rand 0.8.5",
- "rayon",
  "sha3 0.10.8",
+ "sled",
  "thiserror",
  "tokio",
  "vec_block",
