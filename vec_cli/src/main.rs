@@ -88,12 +88,12 @@ async fn main() {
                 match command {
                     cmd if cmd.starts_with("send") => {
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
-                        if parts.len() == 5 {
+                        if parts.len() == 4 {
                             let address = parts[1].to_string();
                             let amount = parts[3].parse::<u64>().unwrap_or(0);
                             let _ = tx.send(Command::SendTransaction { address, amount }).await;
                         } else {
-                            println!("Invalid 'send' command format. It should be 'send <pvk> <psk> amount <amount>'");
+                            println!("Invalid 'send' command format. It should be 'send <address> amount <amount>'");
                         }
                     },
                     cmd if cmd.starts_with("connect to") => {

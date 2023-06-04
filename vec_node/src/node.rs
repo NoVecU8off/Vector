@@ -462,6 +462,7 @@ impl NodeService {
             msg_inputs: inputs,
             msg_outputs: outputs,
         };
+        self.mempool.add(transaction.clone()).await;
         info!(self.logger, "Created transaction, trying to broadcast");
         let self_clone = self.clone();
         tokio::spawn(async move {
@@ -477,9 +478,12 @@ impl NodeService {
         let hash = hash_transaction(transaction).await;
         info!(self.logger, "Broadcasting transaction hash {:?}", hex::encode(&hash));
         let peers_data = self.peers
-                    .iter()
-                    .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
-                    .collect::<Vec<_>>();
+            .iter()
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .collect::<Vec<_>>();
+        if peers_data.is_empty() {
+            return Err(NodeServiceError::NoRecipient);
+        }
         let mut tasks = Vec::new();
         for (addr, peer_client) in peers_data {
             let hash_clone = hash.clone();
