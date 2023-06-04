@@ -15,6 +15,14 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    pub async fn new(ip: String) -> Self {
+        ServerConfig {
+            cfg_version: "1".to_string(),
+            cfg_ip: ip,
+            cfg_wallet: Wallet::generate(),
+            cfg_height: 0,
+        }
+    }
     pub async fn default_v() -> Self {
         ServerConfig {
             cfg_version: "1".to_string(),

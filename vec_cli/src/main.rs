@@ -16,6 +16,14 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let mut rl = DefaultEditor::new().unwrap();
+    // let readline = rl.readline("Please enter your IP <192.168.0.120:xxxx>: ");
+    // let ip = match readline {
+    //     Ok(line) => line.trim().to_string(),
+    //     Err(_) => {
+    //         eprintln!("Failed to read IP");
+    //         return;
+    //     },
+    // };
     let scv = ServerConfig::default_v().await;
     let nsv = NodeService::new(scv).await.unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);

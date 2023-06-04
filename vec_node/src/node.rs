@@ -343,9 +343,9 @@ impl NodeService {
         let msg_height = (blockchain.chain_len()) as u32;
         info!(self.logger, "Getting new block's height {}", msg_height);
         let transactions = self.mempool.get_transactions();
-        if transactions.is_empty() {
-            return Err(NodeServiceError::NoTransactions);
-        }
+        // if transactions.is_empty() {
+        //     return Err(NodeServiceError::NoTransactions);
+        // }
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
             .map(|transaction| {
@@ -367,7 +367,18 @@ impl NodeService {
             msg_header: Some(header),
             msg_transactions: transactions,
         };
-        self.blockchain.write().await.add_block(&wallet, block.clone()).await?; // &&&
+        drop(blockchain);
+        info!(self.logger, "Locking");
+        let mut chain = self.blockchain.write().await;
+        info!(self.logger, "Locked");
+        match chain.add_block(&wallet, block.clone()).await {
+            Ok(_) => {
+                info!(self.logger, "Block was verified and added to the chain");
+            }
+            Err(e) => {
+                error!(self.logger, "Failed to add the block to the chain: {:?}", e);
+            }
+        }
         let hash = hash_header_by_block(&block)?;
         info!(self.logger, "New block {:?} was created and added to the chain", hex::encode(&hash));
         if !self.peers.is_empty() {
