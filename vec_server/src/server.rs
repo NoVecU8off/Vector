@@ -11,7 +11,6 @@ pub struct ServerConfig {
     pub cfg_version: String,
     pub cfg_ip: String,
     pub cfg_wallet: Wallet,
-    pub cfg_height: u64,
 }
 
 impl ServerConfig {
@@ -20,7 +19,6 @@ impl ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: ip,
             cfg_wallet: Wallet::generate(),
-            cfg_height: 0,
         }
     }
     pub async fn default_v() -> Self {
@@ -28,7 +26,6 @@ impl ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),
             cfg_wallet: Wallet::generate(),
-            cfg_height: 0,
         }
     }
 }

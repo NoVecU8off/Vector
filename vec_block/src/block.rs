@@ -26,7 +26,7 @@ pub fn hash_header_by_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
     let mut hasher = Keccak256::new();
     if let Some(header) = block.msg_header.as_ref() {
         hasher.update(header.msg_version.to_be_bytes());
-        hasher.update(header.msg_height.to_be_bytes());
+        hasher.update(header.msg_index.to_be_bytes());
         hasher.update(&header.msg_previous_hash);
         hasher.update(&header.msg_root_hash);
         hasher.update(header.msg_timestamp.to_be_bytes());
@@ -41,7 +41,7 @@ pub fn hash_header_by_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
 pub async fn hash_header(header: &Header) -> Result<Vec<u8>, BlockOpsError> {
     let mut hasher = Keccak256::new();
     hasher.update(header.msg_version.to_be_bytes());
-    hasher.update(header.msg_height.to_be_bytes());
+    hasher.update(header.msg_index.to_be_bytes());
     hasher.update(&header.msg_previous_hash);
     hasher.update(&header.msg_root_hash);
     hasher.update(header.msg_timestamp.to_be_bytes());
@@ -53,7 +53,7 @@ pub async fn hash_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
     let mut hasher = Keccak256::new();
     if let Some(header) = block.msg_header.as_ref() {
         hasher.update(header.msg_version.to_be_bytes());
-        hasher.update(header.msg_height.to_be_bytes());
+        hasher.update(header.msg_index.to_be_bytes());
         hasher.update(&header.msg_previous_hash);
         hasher.update(&header.msg_root_hash);
         hasher.update(header.msg_timestamp.to_be_bytes());

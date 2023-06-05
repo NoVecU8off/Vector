@@ -39,7 +39,7 @@ message PeerList {
 }
 
 message LocalState {
-    uint64 msg_last_block_height = 1;
+    uint64 msg_max_local_index = 1;
 }
 
 message Version {
@@ -61,7 +61,7 @@ message Block {
 
 message Header {
     uint32 msg_version = 1;
-    uint32 msg_height = 2;
+    uint64 msg_index = 2;
     bytes msg_previous_hash = 3;
     bytes msg_root_hash = 4;
     uint64 msg_timestamp = 5;

@@ -26,7 +26,6 @@ pub struct NodeService {
     pub peers: Arc<DashMap<String, Arc<Mutex<NodeClient<Channel>>>>>,
     pub mempool: Arc<Mempool>,
     pub blockchain: Arc<RwLock<Chain>>,
-    // pub ips: Arc<IpDB>,
     pub logger: Logger,
 }
 
@@ -64,16 +63,18 @@ impl Node for NodeService {
         &self,
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status> {
-        let current_state = request.into_inner();
-        let requested_height = current_state.msg_last_block_height;
+        let state = request.into_inner();
+        let requester_index = state.msg_max_local_index;
         let mut blocks = Vec::new();
-        let chain_lock = self.blockchain.read().await;
-        for height in (requested_height + 1)..=chain_lock.chain_len() as u64 {
-            match chain_lock.get_block_by_index(height as usize).await {
-                Ok(block) => blocks.push(block),
+        let chain_rlock = self.blockchain.read().await;
+        for index in (requester_index + 1)..=chain_rlock.max_index().await.unwrap() as u64 {
+            match chain_rlock.blocks.get_by_index(index).await {
+                Ok(Some(block)) => blocks.push(block),
+                Ok(None) => {
+                    return Err(Status::internal(format!("No block at height {}", index)));
+                }
                 Err(e) => {
-                    error!(self.logger, "Failed to get block at height {}: {:?}", height, e);
-                    return Err(Status::internal(format!("Failed to get block at height {}", height)));
+                    return Err(Status::internal(format!("Failed to get block at height {}, {:?}", index, e)));
                 }
             }
         }
@@ -206,15 +207,14 @@ impl NodeService {
             Logger::root(drain, o!())
         };
         let peers = Arc::new(DashMap::new());
-        let block_db = sled::open("C:/Vector/blocks").map_err(|_| NodeServiceError::SledOpenError)?;
+        let block_db = sled::open("C:/Vector/blocks_db").map_err(|_| NodeServiceError::SledOpenError)?;
+        let index_db = sled::open("C:/Vector/index_db").map_err(|_| NodeServiceError::SledOpenError)?;
         let output_db = sled::open("C:/Vector/outputs").map_err(|_| NodeServiceError::SledOpenError)?;
         let image_db = sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
-        // let ip_db = sled::open("C:/Vector/ips").map_err(|_| NodeServiceError::SledOpenError)?;
         
-        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
+        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db, index_db));
         let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
         let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
-        // let ips: Arc<IpDB> = Arc::new(IpDB::new(ip_db));
         let mempool = Arc::new(Mempool::new());
         let blockchain = Chain::new(blocks, images, outputs)
             .await
@@ -339,7 +339,7 @@ impl NodeService {
         let chain_rlock = self.blockchain.read().await;
         let msg_previous_hash = chain_rlock.get_previous_hash_in_chain().await?;
         info!(self.logger, "Got previoush hash");
-        let msg_height = (chain_rlock.chain_len()) as u32;
+        let msg_index = chain_rlock.max_index().await.unwrap() + 1;
 
 
         let transactions = self.mempool.get_transactions();
@@ -357,7 +357,7 @@ impl NodeService {
         let merkle_root = merkle_tree.get_hash();
         let header = Header {
             msg_version: 1,
-            msg_height,
+            msg_index,
             msg_previous_hash,
             msg_root_hash: merkle_root,
             msg_timestamp: 0,
@@ -556,7 +556,7 @@ impl NodeService {
             };
             let response = client.handle_block_pull(message).await?;
             let block = response.into_inner();
-            self.process_incoming_block(&wallet, block).await?;
+            self.process_block(&wallet, block, sender_ip).await?;
             self.broadcast_block_hash(block_hash).await?;
         }
         Ok(())
@@ -570,49 +570,33 @@ impl NodeService {
     }
 
     pub async fn process_incoming_block(&self, wallet: &Wallet, block: Block) -> Result<(), NodeServiceError> {
-        let local_height = {
-            let server_config = self.config.read().await;
-            server_config.cfg_height
-        };
-        info!(self.logger, "Processing recieved block");
-        if let Some(header) = block.clone().msg_header {
-            for transaction in &block.msg_transactions {
-                info!(self.logger, "Processing transactions");
-                self.blockchain.write().await.process_transaction(wallet, transaction).await?;
-            }
-            let mut server_config = self.config.write().await;
-            let incoming_height = header.msg_height as u64;
-            if local_height < incoming_height {
-                server_config.cfg_height = incoming_height;
-            }
-            self.blockchain.write().await.add_block(wallet, block).await?;
-            info!(self.logger, "New block was added");
-            Ok(())
-        } else {
-            Err(BlockOpsError::MissingHeader)?
+        info!(self.logger, "Processing recieved block");      
+        for transaction in &block.msg_transactions {
+            self.blockchain.write().await.process_transaction(wallet, &transaction).await?;
         }
+        self.blockchain.write().await.add_block(wallet, block).await?;
+        info!(self.logger, "New block added");
+        Ok(())
     }
 
-    pub async fn process_block(&self, wallet: &Wallet, block: Block, leader_address: &str) -> Result<(), NodeServiceError> {
-        let local_height = {
-            let server_config = self.config.read().await;
-            server_config.cfg_height
-        };
+    pub async fn process_block(&self, wallet: &Wallet, block: Block, sender_ip: &str) -> Result<(), NodeServiceError> {
+        let chain_rlock = self.blockchain.read().await;
+        let local_index = chain_rlock.max_index().await.unwrap();
+        drop(chain_rlock);
         info!(self.logger, "Processing block");
         if let Some(header) = block.msg_header.clone() {
-            let incoming_height = header.msg_height as u64;
-            if incoming_height == local_height + 1 {
+            if header.msg_index < local_index {
+                Err(NodeServiceError::BlockIndexTooLow)
+            } else if header.msg_index == local_index + 1 {
                 for transaction in &block.msg_transactions {
                     self.blockchain.write().await.process_transaction(wallet, &transaction).await?;
                 }
-                let mut server_config = self.config.write().await;
-                server_config.cfg_height = incoming_height;
                 self.blockchain.write().await.add_block(wallet, block).await?;
                 info!(self.logger, "New block added");
                 Ok(())
             } else {
                 info!(self.logger, "You are not synchronized, starting synchronisation");
-                match self.pull_state_from(wallet, leader_address.to_string()).await {
+                match self.pull_blocks_from(wallet, sender_ip.to_string()).await {
                     Ok(_) => Err(NodeServiceError::PullStateError),
                     Err(e) => Err(e),
                 }
@@ -621,8 +605,9 @@ impl NodeService {
             Err(BlockOpsError::MissingHeader)?
         }
     }
+    
 
-    pub async fn pull_state_from(&self, wallet: &Wallet, ip: String) -> Result<(), NodeServiceError> {
+    pub async fn pull_blocks_from(&self, wallet: &Wallet, ip: String) -> Result<(), NodeServiceError> {
         if !self.peers.contains_key(&ip) {
             info!(self.logger, "Provided ip was not found in peer list ({:?}), sending dial request", ip);
             match self.dial_remote_node(&ip).await {
@@ -642,17 +627,17 @@ impl NodeService {
             let client = self.peers.get(&ip).ok_or(NodeServiceError::PeerNotFound)?.clone();
             let mut client_lock = client.lock().await;
             self.pull_state_from_client(wallet, &mut client_lock).await?;
+            drop(client_lock);
         }
         Ok(())
     }       
     
     pub async fn pull_state_from_client(&self, wallet: &Wallet, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
-        let height = {
-            let server_config = self.config.read().await;
-            server_config.cfg_height
-        };
-        info!(self.logger, "Sending request with current state {:?}", height);
-        let request = Request::new(LocalState { msg_last_block_height: height });
+        let chain_rlock = self.blockchain.read().await;
+        let msg_max_local_index = chain_rlock.max_index().await.unwrap();
+        drop(chain_rlock);
+        info!(self.logger, "Sending request with current index {:?}", msg_max_local_index);
+        let request = Request::new(LocalState { msg_max_local_index });
         let response = client.push_state(request).await?;
         let block_batch = response.into_inner();
         self.process_incoming_block_batch(wallet, block_batch).await?;
@@ -727,7 +712,7 @@ impl NodeService {
         let merkle_root = merkle_tree.get_hash();
         let header = Header {
             msg_version: 1,
-            msg_height: 0 as u32,
+            msg_index: 0 as u64,
             msg_previous_hash: vec![],
             msg_root_hash: merkle_root,
             msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
@@ -812,9 +797,9 @@ impl NodeService {
         Ok(address)
     }
 
-    pub async fn get_height(&self) -> Result<usize, NodeServiceError> {
+    pub async fn get_last_index(&self) -> Result<u64, NodeServiceError> {
         let chain_lock = self.blockchain.read().await;
-        let height = chain_lock.chain_len();
+        let height = chain_lock.max_index().await.unwrap();
         Ok(height)
     }
 }

@@ -1,6 +1,6 @@
 use vec_storage::{block_db::*, output_db::*, image_db::*};
 use vec_cryptography::cryptography::{Wallet, BLSAGSignature, hash_to_point};
-use vec_proto::messages::{Header, Block, Transaction};
+use vec_proto::messages::{Block, Transaction};
 use curve25519_dalek_ng::{traits::Identity, constants, scalar::Scalar, ristretto::RistrettoPoint, ristretto::CompressedRistretto};
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use vec_block::block::*;
@@ -9,40 +9,7 @@ use vec_errors::errors::*;
 use merlin::Transcript;
 use sha3::{Keccak256, Digest};
 
-#[derive(Clone)]
-pub struct HeaderList {
-    headers: Vec<Header>,
-}
-
-impl HeaderList {
-    pub fn new() -> Self {
-        HeaderList { headers: Vec::new() }
-    }
-
-    pub fn add_header(&mut self, h: Header) {
-        self.headers.push(h);
-    }
-
-    pub fn get_header_by_index(&self, index: usize) -> Result<&Header, ChainOpsError> {
-        if index >= self.headers_in_chain() {
-            return Err(ChainOpsError::IndexTooHigh);
-        }
-        Ok(&self.headers[index])
-    }
-
-    pub fn headers_in_chain(&self) -> usize {
-        self.headers.len()
-    }
-}
-
-impl Default for HeaderList {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub struct Chain {
-    pub headers: HeaderList,
     pub blocks: Box<dyn BlockStorer>,
     pub images: Box<dyn ImageStorer>,
     pub outputs: Box<dyn OutputStorer>,
@@ -51,7 +18,6 @@ pub struct Chain {
 impl Chain {
     pub async fn new(blocks: Box<dyn BlockStorer>, images: Box<dyn ImageStorer>, outputs: Box<dyn OutputStorer>) -> Result<Chain, ChainOpsError> {
         let chain = Chain {
-            headers: HeaderList::new(),
             blocks,
             images,
             outputs
@@ -59,8 +25,12 @@ impl Chain {
         Ok(chain)
     }
 
-    pub fn chain_len(&self) -> usize {
-        self.headers.headers_in_chain()
+    pub async fn max_index(&self) -> Result<u64, BlockStorageError> {
+        match self.blocks.get_highest_index().await {
+            Ok(Some(index)) => Ok(index),
+            Ok(None) => Ok(0), // or return a default value
+            Err(e) => Err(e),
+        }
     }
 
     pub async fn add_block(&mut self, wallet: &Wallet, block: Block) -> Result<(), ChainOpsError> {
@@ -72,9 +42,9 @@ impl Chain {
         for transaction in block.msg_transactions.iter() {
             self.process_transaction(wallet, transaction).await?;
         };
-        self.headers.add_header(header.clone());
         let hash = hash_header_by_block(&block).unwrap().to_vec();
-        self.blocks.put(hash, &block).await?;
+        let index = header.msg_index;
+        self.blocks.put_block(index, hash, &block).await?;
         Ok(())
     }
 
@@ -89,12 +59,12 @@ impl Chain {
             .msg_header
             .as_ref()
             .ok_or(ChainOpsError::MissingBlockHeader)?;
-        self.headers.add_header(header.clone());
         for transaction in block.msg_transactions.iter() {
             self.process_transaction(wallet, transaction).await?;
         };
         let hash = hash_header_by_block(&block).unwrap().to_vec();
-        self.blocks.put(hash, &block).await?;
+        let index = header.msg_index;
+        self.blocks.put_block(index, hash, &block).await?;
         Ok(())
     }
 
@@ -106,21 +76,22 @@ impl Chain {
         }
     }
     
-    pub async fn get_block_by_index(&self, index: usize) -> Result<Block, ChainOpsError> {
-        if self.chain_len() == 0 {
-            return Err(ChainOpsError::ChainIsEmpty);
-        }
-        let header = self.headers.get_header_by_index(index)?;
-        let hash = hash_header(header).await?;
-        let block = self.get_block_by_hash(hash).await?;
-        Ok(block)
-    }
+    // pub async fn get_block_by_index(&self, index: u64) -> Result<Block, ChainOpsError> {
+    //     if self.max_index().await? == 0 {
+    //         return Err(ChainOpsError::ChainIsEmpty);
+    //     }
+    //     let hash = self.blocks.get_hash_by_index(index).await?;
+    //     let block = self.get_block_by_hash(hash).await?;
+    //     Ok(block)
+    // }
 
     pub async fn check_previous_block_hash(&self, incoming_block: &Block) -> Result<bool, ChainOpsError> {
-        if self.chain_len() > 0 {
-            let previous_index = self.chain_len() - 1;
-            let previous_block = self.get_block_by_index(previous_index).await?;
-            let previous_hash = hash_header_by_block(&previous_block)?.to_vec();
+        let previous_index = self.max_index().await?;
+        if previous_index > 0 {
+            let previous_hash = match self.blocks.get_hash_by_index(previous_index).await? {
+                Some(hash) => hash,
+                None => return Err(ChainOpsError::MissingBlockHash),
+            };
             if let Some(header) = incoming_block.msg_header.as_ref() {
                 if previous_hash != header.msg_previous_hash {
                     return Err(ChainOpsError::InvalidPreviousBlockHash {
@@ -136,12 +107,11 @@ impl Chain {
     }
 
     pub async fn get_previous_hash_in_chain(&self) -> Result<Vec<u8>, ChainOpsError> {
-        if self.chain_len() == 0 {
-            return Err(ChainOpsError::MissingGenesisBlock);
-        }
-        let previous_index = self.chain_len() - 1;
-        let previous_block = self.get_block_by_index(previous_index).await?;
-        let previous_hash = hash_header_by_block(&previous_block)?.to_vec();
+        let previous_index = self.max_index().await?;
+        let previous_hash = match self.blocks.get_hash_by_index(previous_index).await? {
+            Some(hash) => hash,
+            None => return Err(ChainOpsError::MissingBlockHash),
+        };
         Ok(previous_hash)
     }
 
@@ -263,9 +233,10 @@ mod tests {
 
     async fn create_test_chain() -> Result<Chain, ChainOpsError> {
         let block_db = sled::open("C:/Vector/blocks").unwrap();
+        let index_db = sled::open("C:/Vector/indexes").unwrap();
         let output_db = sled::open("C:/Vector/outputs").unwrap();
         let image_db = sled::open("C:/Vector/images").unwrap();
-        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db));
+        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db, index_db));
         let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
         let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
         let chain = Chain::new(blocks, images, outputs).await.unwrap();
@@ -277,6 +248,6 @@ mod tests {
         let result = create_test_chain().await;
         assert!(result.is_ok());
         let chain = result.unwrap();
-        assert_eq!(chain.chain_len(), 0);
+        assert_eq!(chain.max_index().await.unwrap(), 0);
     }
 }

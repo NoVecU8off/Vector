@@ -152,6 +152,8 @@ pub enum ChainOpsError {
     BlockStorageError(#[from] BlockStorageError),
     #[error("Couldn't find block with hash: {0}")]
     BlockNotFound(String),
+    #[error("Missing hash by requested block index")]
+    MissingBlockHash,
     #[error("Block has no transactions")]
     NoTransactions,
     #[error("Chain is empty")]
@@ -216,6 +218,8 @@ pub enum NodeServiceError {
     ShutdownError,
     #[error("Failed make node client")]
     MakeNodeClientError,
+    #[error("Incoming block's index is lower than expected")]
+    BlockIndexTooLow,
     #[error("Peer not found")]
     PeerNotFound,
     #[error("Peer list is empty, no one to broadcast to")]

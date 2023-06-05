@@ -9,7 +9,7 @@ enum Command {
     Genesis,
     ConnectTo { ip: String },
     GetAddress,
-    GetHeight,
+    GetIndex,
     MakeBlock,
 }
 
@@ -51,8 +51,8 @@ async fn main() {
                     let balance = nsv.get_balance().await;
                     println!("Balance: {}", balance);
                 },
-                Some(Command::GetHeight) => {
-                    let height = nsv.get_height().await.unwrap();
+                Some(Command::GetIndex) => {
+                    let height = nsv.get_last_index().await.unwrap();
                     println!("Height: {}", height);
                 },
                 Some(Command::Genesis) => {
@@ -111,8 +111,8 @@ async fn main() {
                     "block" => {
                         let _ = tx.send(Command::MakeBlock).await;
                     },
-                    "height" => {
-                        let _ = tx.send(Command::GetHeight).await;
+                    "index" => {
+                        let _ = tx.send(Command::GetIndex).await;
                     },
                     "genesis" => {
                         let _ = tx.send(Command::Genesis).await;
