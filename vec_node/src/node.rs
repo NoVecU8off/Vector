@@ -336,16 +336,13 @@ impl NodeService {
             let server_config = self.config.read().await;
             server_config.cfg_wallet.clone()
         };
-        info!(self.logger, "Making block");
-        let blockchain = self.blockchain.read().await;
-        let msg_previous_hash = blockchain.get_previous_hash_in_chain().await?;
-        info!(self.logger, "Got prev hash {:?}", hex::encode(msg_previous_hash.clone()));
-        let msg_height = (blockchain.chain_len()) as u32;
-        info!(self.logger, "Getting new block's height {}", msg_height);
+        let chain_rlock = self.blockchain.read().await;
+        let msg_previous_hash = chain_rlock.get_previous_hash_in_chain().await?;
+        info!(self.logger, "Got previoush hash");
+        let msg_height = (chain_rlock.chain_len()) as u32;
+
+
         let transactions = self.mempool.get_transactions();
-        // if transactions.is_empty() {
-        //     return Err(NodeServiceError::NoTransactions);
-        // }
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
             .map(|transaction| {
@@ -354,6 +351,8 @@ impl NodeService {
                 bytes
             })
             .collect();
+
+
         let merkle_tree = MerkleTree::from_list(&transaction_data);
         let merkle_root = merkle_tree.get_hash();
         let header = Header {
@@ -361,31 +360,28 @@ impl NodeService {
             msg_height,
             msg_previous_hash,
             msg_root_hash: merkle_root,
-            msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            msg_timestamp: 0,
+            msg_nonce: 0,
         };
         let block = Block {
-            msg_header: Some(header),
+            msg_header: Some(header.clone()),
             msg_transactions: transactions,
         };
-        drop(blockchain);
-        info!(self.logger, "Locking");
-        let mut chain = self.blockchain.write().await;
-        info!(self.logger, "Locked");
-        match chain.add_block(&wallet, block.clone()).await {
-            Ok(_) => {
-                info!(self.logger, "Block was verified and added to the chain");
-            }
-            Err(e) => {
-                error!(self.logger, "Failed to add the block to the chain: {:?}", e);
-            }
-        }
-        let hash = hash_header_by_block(&block)?;
-        info!(self.logger, "New block {:?} was created and added to the chain", hex::encode(&hash));
-        if !self.peers.is_empty() {
-            self.broadcast_block_hash(hash).await?;
-        } else {
-            return Err(NodeServiceError::NoRecipient);
-        }
+        // // Simpledummy mining
+        // let difficulty = 2;
+        // let target = vec![0; difficulty as usize];
+        // loop {
+        //     let hash_result = hash_block(&block).await?;
+        //     if &hash_result[..difficulty as usize] == target.as_slice() {
+        //         break;
+        //     }
+        //     header.msg_nonce += 1;
+        //     block.msg_header = Some(header.clone());
+        // }
+        drop(chain_rlock);
+        let mut chain_wlock = self.blockchain.write().await;
+        chain_wlock.add_block(&wallet, block.clone()).await?;
+        drop(chain_wlock);
         Ok(())
     }
 
@@ -536,6 +532,9 @@ impl NodeService {
             self.blockchain.write().await.validate_transaction(&transaction).await?;
             info!(self.logger, "Recieved transaction was successfully validated");
             self.mempool.add(transaction.clone()).await;
+            if self.mempool.len() == 6 {
+                self.make_block().await?;
+            }
             info!(self.logger, "And was added to the mempool, starting broadcasting");
             self.broadcast_tx_hash(&transaction).await?;
         }
@@ -732,13 +731,15 @@ impl NodeService {
             msg_previous_hash: vec![],
             msg_root_hash: merkle_root,
             msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            msg_nonce: 0,
         };
         let block = Block {
             msg_header: Some(header),
             msg_transactions: transactions,
         };
-        self.blockchain.write().await.add_genesis_block(&wallet, block).await?;
-        info!(self.logger, "Genesis block with tx successfully created");
+        self.blockchain.write().await.add_genesis_block(&wallet, block.clone()).await?;
+        let hash = hex::encode(hash_header_by_block(&block)?);
+        info!(self.logger, "Genesis block {:?} with tx successfully created", hash);
         Ok(())
     }
 
