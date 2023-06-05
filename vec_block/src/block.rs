@@ -50,20 +50,65 @@ pub async fn hash_header(header: &Header) -> Result<Vec<u8>, BlockOpsError> {
 }
 
 pub async fn hash_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
+    let mut bytes = Vec::new();
+    block.encode(&mut bytes).unwrap();
     let mut hasher = Keccak256::new();
-    if let Some(header) = block.msg_header.as_ref() {
-        hasher.update(header.msg_version.to_be_bytes());
-        hasher.update(header.msg_index.to_be_bytes());
-        hasher.update(&header.msg_previous_hash);
-        hasher.update(&header.msg_root_hash);
-        hasher.update(header.msg_timestamp.to_be_bytes());
-        hasher.update(&header.msg_nonce.to_le_bytes());
-    }
-    for transaction in &block.msg_transactions {
-        let mut bytes = Vec::new();
-        transaction.encode(&mut bytes).unwrap();
-        hasher.update(bytes);
-    }
+        hasher.update(&bytes);
     let hash = hasher.finalize().to_vec();
     Ok(hash)
+}
+
+pub async fn mine(mut block: Block) -> Result<u64, NodeServiceError> {
+    let difficulty = 4;
+    for nonce in 0..(u64::max_value()) {
+        block.msg_header.as_mut().unwrap().msg_nonce = nonce;
+        let hash = hash_block(&block).await?;
+        println!("nonce: {}, hash: {}", nonce, hex::encode(hash.clone()));
+        if check_difficulty(&hash, difficulty) {
+            return Ok(nonce);
+        }
+    }
+    Err(NodeServiceError::MineError)
+}
+
+fn check_difficulty(hash: &[u8], difficulty: usize) -> bool {
+    let hex_representation = hex::encode(hash);
+    let leading_zeros = hex_representation.chars().take_while(|c| *c == '0').count();
+
+    leading_zeros >= difficulty
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    fn make_block() -> Block {
+        let data = b"fkjbao;ufv;skodnvvfkmvnbkfnuvdfj";
+        let mut hasher = Keccak256::new();
+            hasher.update(data);
+        let hash = hasher.finalize().to_vec();
+        let mut hasher = Keccak256::new();
+            hasher.update(hash.clone());
+        let hash2 = hasher.finalize().to_vec();
+        let header = Header {
+            msg_version: 1,
+            msg_index: 17382,
+            msg_previous_hash: hash,
+            msg_root_hash: hash2,
+            msg_timestamp: 7456046298,
+            msg_nonce: 0,
+        };
+        let block = Block {
+            msg_header: Some(header),
+            msg_transactions: vec![]
+        };
+        block
+    }
+
+    #[tokio::test]
+    async fn test_mining() {
+        let block = make_block();
+        let _ = mine(block).await.expect("Mine function failed");
+    }
+
 }

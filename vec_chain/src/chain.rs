@@ -42,7 +42,7 @@ impl Chain {
         for transaction in block.msg_transactions.iter() {
             self.process_transaction(wallet, transaction).await?;
         };
-        let hash = hash_header_by_block(&block).unwrap().to_vec();
+        let hash = hash_block(&block).await?;
         let index = header.msg_index;
         self.blocks.put_block(index, hash, &block).await?;
         Ok(())
@@ -62,7 +62,7 @@ impl Chain {
         for transaction in block.msg_transactions.iter() {
             self.process_transaction(wallet, transaction).await?;
         };
-        let hash = hash_header_by_block(&block).unwrap().to_vec();
+        let hash = hash_block(&block).await?.to_vec();
         let index = header.msg_index;
         self.blocks.put_block(index, hash, &block).await?;
         Ok(())

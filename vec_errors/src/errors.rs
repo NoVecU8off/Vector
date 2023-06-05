@@ -222,8 +222,14 @@ pub enum NodeServiceError {
     BlockIndexTooLow,
     #[error("Peer not found")]
     PeerNotFound,
+    #[error("You are trying to connect to the lagging behind node")]
+    LaggingNode,
+    #[error("You are trying to connect to make genesis block but local chain is not empty")]
+    ChainIsNotEmpty,
     #[error("Peer list is empty, no one to broadcast to")]
     NoRecipient,
+    #[error("Failed to mine block")]
+    MineError,
     #[error("Connection failed")]
     ConnectionFailed,
     #[error("No transactions in block")]
@@ -246,6 +252,8 @@ pub enum NodeServiceError {
     ChainOpsError(#[from] ChainOpsError),
     #[error(transparent)]
     PeerStorageError(#[from] PeerStorageError),
+    #[error(transparent)]
+    BlcoStorageError(#[from] BlockStorageError),
     #[error(transparent)]
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]

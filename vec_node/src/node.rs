@@ -1,4 +1,4 @@
-use vec_block::block::hash_header_by_block;
+use vec_block::block::{hash_block, mine};
 use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::*;
 use vec_proto::messages::{node_client::NodeClient, node_server::{NodeServer, Node}};
@@ -17,7 +17,7 @@ use futures::future::try_join_all;
 use slog::{o, Logger, info, Drain, error};
 use dashmap::DashMap;
 use prost::Message;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use sha3::{Keccak256, Digest};
 
 #[derive(Clone)]
@@ -295,6 +295,9 @@ impl NodeService {
 
     pub async fn dial_remote_node(&self, ip: &str) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
         info!(self.logger, "Trying to dial with {:?}", ip);
+        let chain_rlock = self.blockchain.read().await;
+        let local_index = chain_rlock.max_index().await.unwrap();
+        drop(chain_rlock);
         let mut c = make_node_client(ip)
             .await?;
         info!(self.logger, "Node client {:?} created successfully, requesting version", ip);
@@ -303,8 +306,17 @@ impl NodeService {
             .await
             .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
-        info!(self.logger, "Dialed remote node: {}", ip);
-        Ok((c, v))
+        if v.msg_max_local_index > local_index {
+            let wallet = {
+                let server_config = self.config.read().await;
+                server_config.cfg_wallet.clone()
+            };
+            self.synchronize_with_client(&wallet, &mut c).await?;
+            info!(self.logger, "Dialed remote node: {}", ip);
+            Ok((c, v))
+        } else {
+            return Err(NodeServiceError::LaggingNode);
+        }
     }
 
     pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
@@ -323,11 +335,15 @@ impl NodeService {
             let server_config = self.config.read().await;
             (server_config.cfg_wallet.clone(), server_config.cfg_version.clone(), server_config.cfg_ip.clone())
         };
+        let chain_rlock = self.blockchain.read().await;
+        let local_index = chain_rlock.max_index().await.unwrap();
+        drop(chain_rlock);
         let msg_address = cfg_wallet.address;
         Version {
             msg_version: cfg_version,
             msg_address,
             msg_ip: cfg_ip,
+            msg_max_local_index: local_index,
         }
     }
 
@@ -340,8 +356,6 @@ impl NodeService {
         let msg_previous_hash = chain_rlock.get_previous_hash_in_chain().await?;
         info!(self.logger, "Got previoush hash");
         let msg_index = chain_rlock.max_index().await.unwrap() + 1;
-
-
         let transactions = self.mempool.get_transactions();
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
@@ -351,8 +365,6 @@ impl NodeService {
                 bytes
             })
             .collect();
-
-
         let merkle_tree = MerkleTree::from_list(&transaction_data);
         let merkle_root = merkle_tree.get_hash();
         let header = Header {
@@ -360,28 +372,24 @@ impl NodeService {
             msg_index,
             msg_previous_hash,
             msg_root_hash: merkle_root,
-            msg_timestamp: 0,
+            msg_timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs(),
             msg_nonce: 0,
         };
-        let block = Block {
+        let mut block = Block {
             msg_header: Some(header.clone()),
             msg_transactions: transactions,
         };
-        // // Simpledummy mining
-        // let difficulty = 2;
-        // let target = vec![0; difficulty as usize];
-        // loop {
-        //     let hash_result = hash_block(&block).await?;
-        //     if &hash_result[..difficulty as usize] == target.as_slice() {
-        //         break;
-        //     }
-        //     header.msg_nonce += 1;
-        //     block.msg_header = Some(header.clone());
-        // }
         drop(chain_rlock);
+        let nonce = mine(block.clone()).await?;
+        block.msg_header.as_mut().unwrap().msg_nonce = nonce;
         let mut chain_wlock = self.blockchain.write().await;
         chain_wlock.add_block(&wallet, block.clone()).await?;
         drop(chain_wlock);
+        let hash = hex::encode(hash_block(&block).await?);
+        info!(self.logger, "Genesis block {:?} with tx successfully created", hash);
         Ok(())
     }
 
@@ -438,14 +446,11 @@ impl NodeService {
             let server_config = self.config.read().await;
             server_config.cfg_wallet.clone()
         };
-
         let (inputs, total_input_amount) = wallet.prepare_inputs().await;
-
         // Add a check for insufficient funds
         if total_input_amount < a {
             return Err(NodeServiceError::InsufficientBalance);
         }
-
         let mut outputs = Vec::new();
         if total_input_amount > a {
             let change = total_input_amount - a;
@@ -562,7 +567,7 @@ impl NodeService {
         Ok(())
     }
 
-    pub async fn process_incoming_block_batch(&self, wallet: &Wallet, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
+    pub async fn process_synchronisation(&self, wallet: &Wallet, block_batch: BlockBatch) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
             self.process_incoming_block(wallet, block).await?;
         }
@@ -616,7 +621,7 @@ impl NodeService {
                     info!(self.logger, "Dial success, new peer added: {}", ip);
                     let client_arc = Arc::new(Mutex::new(client));
                     let mut client_lock = client_arc.lock().await;
-                    self.pull_state_from_client(wallet, &mut client_lock).await?;
+                    self.synchronize_with_client(wallet, &mut client_lock).await?;
                 },
                 Err(e) => {
                     error!(self.logger, "Failed to dial remote node: {:?}", e);
@@ -626,13 +631,13 @@ impl NodeService {
         } else {
             let client = self.peers.get(&ip).ok_or(NodeServiceError::PeerNotFound)?.clone();
             let mut client_lock = client.lock().await;
-            self.pull_state_from_client(wallet, &mut client_lock).await?;
+            self.synchronize_with_client(wallet, &mut client_lock).await?;
             drop(client_lock);
         }
         Ok(())
     }       
     
-    pub async fn pull_state_from_client(&self, wallet: &Wallet, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
+    pub async fn synchronize_with_client(&self, wallet: &Wallet, client: &mut NodeClient<Channel>) -> Result<(), NodeServiceError> {
         let chain_rlock = self.blockchain.read().await;
         let msg_max_local_index = chain_rlock.max_index().await.unwrap();
         drop(chain_rlock);
@@ -640,8 +645,8 @@ impl NodeService {
         let request = Request::new(LocalState { msg_max_local_index });
         let response = client.push_state(request).await?;
         let block_batch = response.into_inner();
-        self.process_incoming_block_batch(wallet, block_batch).await?;
-        info!(self.logger, "Pulled blocks from client");
+        self.process_synchronisation(wallet, block_batch).await?;
+        info!(self.logger, "Pulled and processed blocks from client");
         Ok(())
     }
     
@@ -699,6 +704,10 @@ impl NodeService {
             let server_config = self.config.read().await;
             server_config.cfg_wallet.clone()
         };
+        let chain_rlock = self.blockchain.read().await;
+        if chain_rlock.max_index().await? != 0 {
+            return Err(NodeServiceError::ChainIsNotEmpty);
+        }
         let transactions = vec![self.make_genesis_transaction(100000).await?];
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
@@ -712,21 +721,29 @@ impl NodeService {
         let merkle_root = merkle_tree.get_hash();
         let header = Header {
             msg_version: 1,
-            msg_index: 0 as u64,
+            msg_index: 1 as u64,
             msg_previous_hash: vec![],
             msg_root_hash: merkle_root,
-            msg_timestamp: SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs(),
+            msg_timestamp: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards")
+                .as_secs(),
             msg_nonce: 0,
         };
-        let block = Block {
-            msg_header: Some(header),
+        let mut block = Block {
+            msg_header: Some(header.clone()),
             msg_transactions: transactions,
         };
-        self.blockchain.write().await.add_genesis_block(&wallet, block.clone()).await?;
-        let hash = hex::encode(hash_header_by_block(&block)?);
+        drop(chain_rlock);
+        let nonce = mine(block.clone()).await?;
+        block.msg_header.as_mut().unwrap().msg_nonce = nonce;
+        let mut chain_wlock = self.blockchain.write().await;
+        chain_wlock.add_genesis_block(&wallet, block.clone()).await?;
+        drop(chain_wlock);
+        let hash = hex::encode(hash_block(&block).await?);
         info!(self.logger, "Genesis block {:?} with tx successfully created", hash);
         Ok(())
-    }
+    }    
 
     pub async fn make_genesis_transaction(&self, amount: u64) -> Result<Transaction, NodeServiceError> {
         let wallet = {

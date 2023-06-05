@@ -11,6 +11,7 @@ pub trait BlockStorer: Send + Sync {
     async fn get_by_index(&self, index: u64) -> Result<Option<Block>, BlockStorageError>;
     async fn get_hash_by_index(&self, index: u64) -> Result<Option<Vec<u8>>, BlockStorageError>;
     async fn get_highest_index(&self) -> Result<Option<u64>, BlockStorageError>;
+    async fn is_empty(&self) -> Result<bool, BlockStorageError>;
 }
 
 pub struct BlockDB {
@@ -83,5 +84,9 @@ impl BlockStorer for BlockDB {
         }
 
         Ok(max_index)
+    }
+
+    async fn is_empty(&self) -> Result<bool, BlockStorageError> {
+        Ok(self.blocks_db.iter().next().is_none())
     }
 }
