@@ -14,10 +14,10 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub async fn new(ip: String) -> Self {
+    pub async fn new(port: String) -> Self {
         ServerConfig {
             cfg_version: "1".to_string(),
-            cfg_ip: ip,
+            cfg_ip: format!("192.168.0.120:{}", port),
             cfg_wallet: Wallet::generate(),
         }
     }
