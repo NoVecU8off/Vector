@@ -419,6 +419,36 @@ impl Wallet {
     }
 }
 
+pub struct SerializableWallet {
+    secret_spend_key: [u8;32],
+    secret_view_key: [u8;32],
+    public_spend_key: [u8;32],
+    public_view_key: [u8;32],
+    address: Vec<u8>,
+}
+
+impl Wallet {
+    pub fn to_serializable(&self) -> SerializableWallet {
+        SerializableWallet {
+            secret_spend_key: self.secret_spend_key.to_bytes(),
+            secret_view_key: self.secret_view_key.to_bytes(),
+            public_spend_key: self.public_spend_key.to_bytes(),
+            public_view_key: self.public_view_key.to_bytes(),
+            address: self.address.as_bytes().to_vec(),
+        }
+    }
+
+    pub fn from_serializable(s: &SerializableWallet) -> Wallet {
+        Wallet {
+            secret_spend_key: Scalar::from_bytes_mod_order(s.secret_spend_key.into()),
+            secret_view_key: Scalar::from_bytes_mod_order(s.secret_view_key),
+            public_spend_key: CompressedRistretto::from_slice(&s.public_spend_key),
+            public_view_key: CompressedRistretto::from_slice(&s.public_view_key),
+            address: String::from_utf8(s.address.clone()).unwrap(),
+        }
+    }
+}
+
 impl BLSAGSignature {
     pub fn to_vec(&self) -> Vec<u8> {
         let mut v = Vec::new();

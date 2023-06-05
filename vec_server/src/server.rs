@@ -33,7 +33,7 @@ impl ServerConfig {
 async fn get_ip() -> Result<String, ServerConfigError> {
     let response = reqwest::get("https://api.ipify.org").await?;
     let ip = response.text().await?;
-    let ip_port = format!("{}:8088", ip);
+    let ip_port = format!("{}:8080", ip);
     Ok(ip_port)
 }
 

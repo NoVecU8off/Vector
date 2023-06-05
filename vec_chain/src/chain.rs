@@ -75,15 +75,6 @@ impl Chain {
             Err(err) => Err(err.into()),
         }
     }
-    
-    // pub async fn get_block_by_index(&self, index: u64) -> Result<Block, ChainOpsError> {
-    //     if self.max_index().await? == 0 {
-    //         return Err(ChainOpsError::ChainIsEmpty);
-    //     }
-    //     let hash = self.blocks.get_hash_by_index(index).await?;
-    //     let block = self.get_block_by_hash(hash).await?;
-    //     Ok(block)
-    // }
 
     pub async fn check_previous_block_hash(&self, incoming_block: &Block) -> Result<bool, ChainOpsError> {
         let previous_index = self.max_index().await?;
@@ -243,11 +234,44 @@ mod tests {
         Ok(chain)
     }
 
+    async fn create_test_block() -> Block {
+        // Replace this with your actual Block structure creation
+        Block::default()
+    }
+
+    async fn create_test_wallet() -> Wallet {
+        Wallet::generate()
+    }
+
     #[tokio::test]
     async fn test_chain_new() {
         let result = create_test_chain().await;
         assert!(result.is_ok());
         let chain = result.unwrap();
         assert_eq!(chain.max_index().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_max_index() {
+        let mut chain = create_test_chain().await.unwrap();
+        assert_eq!(chain.max_index().await.unwrap(), 0);
+
+        let block = create_test_block().await;
+        let wallet = create_test_wallet().await;
+        chain.add_block(&wallet, block).await.unwrap();
+        assert_eq!(chain.max_index().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_add_block() {
+        let mut chain = create_test_chain().await.unwrap();
+        let block = create_test_block().await;
+        let wallet = create_test_wallet().await;
+
+        // Adding block to the chain
+        assert!(chain.add_block(&wallet, block).await.is_ok());
+
+        // Chain should now contain the block
+        assert_eq!(chain.max_index().await.unwrap(), 1);
     }
 }

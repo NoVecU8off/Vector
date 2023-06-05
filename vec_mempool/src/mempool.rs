@@ -105,3 +105,55 @@ impl Default for Mempool {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
+    use futures::executor::block_on;
+
+    #[test]
+    fn test_mempool_new() {
+        let mempool = Mempool::new();
+        assert_eq!(mempool.len(), 0);
+    }
+
+    #[test]
+    fn test_mempool_add() {
+        let mempool = Mempool::new();
+        let transaction = create_test_transaction();
+        let result = block_on(mempool.add(transaction.clone()));
+        assert_eq!(result, true);
+        assert_eq!(block_on(mempool.has(&transaction)), true);
+    }
+
+    #[test]
+    fn test_mempool_remove() {
+        let mempool = Mempool::new();
+        let transaction = create_test_transaction();
+        let _ = block_on(mempool.add(transaction.clone()));
+        assert_eq!(block_on(mempool.has(&transaction)), true);
+        let result = block_on(mempool.remove(&transaction));
+        assert_eq!(result, true);
+        assert_eq!(block_on(mempool.has(&transaction)), false);
+    }
+
+    fn create_test_transaction() -> Transaction {
+        Transaction {
+            msg_inputs: vec![TransactionInput {
+                msg_ring: vec![vec![]],
+                msg_blsag: vec![],
+                msg_message: vec![],
+                msg_key_image: vec![],
+            }],
+            msg_outputs: vec![TransactionOutput {
+                msg_stealth_address: vec![],
+                msg_output_key: vec![],
+                msg_proof: vec![],
+                msg_commitment: vec![],
+                msg_amount: vec![],
+                msg_index: 1,
+            }],
+        }
+    }
+}

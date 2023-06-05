@@ -1,8 +1,9 @@
-use vec_proto::messages::{Block, Header};
+use vec_proto::messages::{Block, Header, Transaction, TransactionInput, TransactionOutput};
 use vec_merkle::merkle::{MerkleTree};
 use sha3::{Keccak256, Digest};
 use vec_errors::errors::*;
 use prost::Message;
+use rand::Rng;
 
 pub async fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
     let transaction_data: Vec<Vec<u8>> = block.msg_transactions
@@ -105,10 +106,59 @@ mod tests {
         block
     }
 
+    fn make_transaction() -> Transaction {
+        let transaction = Transaction {
+            msg_inputs: vec![],
+            msg_outputs: vec![],
+        };
+        transaction
+    }
+
     #[tokio::test]
     async fn test_mining() {
         let block = make_block();
         let _ = mine(block).await.expect("Mine function failed");
+    }
+
+    #[tokio::test]
+    async fn test_verify_root_hash() {
+        let mut block = make_block();
+        let transaction = make_transaction();
+        block.msg_transactions.push(transaction);
+        assert!(verify_root_hash(&block).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_hash_header_by_block() {
+        let block = make_block();
+        assert!(hash_header_by_block(&block).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_hash_header() {
+        let block = make_block();
+        if let Some(header) = block.msg_header.as_ref() {
+            assert!(hash_header(header).await.is_ok());
+        } else {
+            panic!("Block header missing");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hash_block() {
+        let block = make_block();
+        assert!(hash_block(&block).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_check_difficulty() {
+        let difficulty = 4;
+        let mut rng = rand::thread_rng();
+        let random_data: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
+        let mut hasher = Keccak256::new();
+        hasher.update(&random_data);
+        let hash = hasher.finalize();
+        assert!(check_difficulty(&hash, difficulty));
     }
 
 }
