@@ -1,16 +1,17 @@
 # Vector
 
 Welcome to Vector, my blockchain solution designed in pure Rust. This project leverages the efficiency and concurrency of Rust alongside gRPC (protobuf) for network communication, and a custom PBFT-like consensus mechanism to ensure data integrity across the network.
-(UPD: the consensus mechanism was considered useless due to its inefficiency + unscalability and was permanetly removed, currently getting inspired by Cardano's Ouroboros)
+(UPD: the consensus mechanism was considered useless due to its inefficiency + unscalability and was permanetly removed, currently using simple Proof of Work CM (Simple and Straightforward).
 
-Built on a UTXO model, Vector should provide a robust and secure environment for transactions, offering a scalable and efficient platform for developers and businesses. 
+Among its core privacy features, Vector adopts the bLSAG signature scheme and utilizes stealth (one-time) addresses, similar to Monero. It integrates these privacy-ensuring mechanisms into a custom Unspent Transaction Output (UTXO) model to create a highly secure environment for transactions. Vector's design caters to the evolving needs of developers and businesses, providing a scalable, efficient, and secure network.
 
-## Features And Goals
+## Key Features And Goals
 
-- **Pure Rust**: The project is built entirely in Rust, offering memory safety without garbage collection, and concurrent execution for optimum performance.
-- **gRPC (Protobuf)**: Google's high performance, open-source universal RPC framework is used for effective network communication.
+- **Complete Anonymity**: Vector incorporates the bLSAG signature scheme and stealth (one-time) addresses to ensure complete anonymity in all transactions, making it an ideal choice for privacy-focused applications.
+- **Pure Rust**: The project is crafted entirely in Rust, offering memory safety without the need for garbage collection and providing concurrent execution for optimal performance.
+- **gRPC (Protobuf) Communication**: Vector employs Google's high-performance, open-source universal RPC framework, gRPC (protobuf), for efficient and reliable network communication.
 - **UTXO Model**: The Unspent Transaction Output (UTXO) model is used for transaction management, ensuring high levels of security and privacy.
-- **Custom PoS consensus mechanism**: My consensus mechanism, inspired by the Cardano's Ouroboros model, guarantees data consistency and fault tolerance across the network. !(DEV IN PROCESS)
+- **PoW Consensus Mechanism**: Currently Vector works on PoW CM, but i think that I'll try to develop something like DPoS-kind consensus mechanism, we'll see. (DEV IN PROCESS)
 - **Scalability**: Designed to scale seamlessly, Vector should handle a growing number of transactions without compromising on speed or security.
 
 ## License

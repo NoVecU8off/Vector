@@ -31,7 +31,7 @@ pub fn hash_header_by_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
         hasher.update(&header.msg_previous_hash);
         hasher.update(&header.msg_root_hash);
         hasher.update(header.msg_timestamp.to_be_bytes());
-        // hasher.update(&header.msg_nonce.to_be_bytes());
+        hasher.update(&header.msg_nonce.to_be_bytes());
     } else {
         return Err(BlockOpsError::MissingHeader);
     }
@@ -107,11 +107,22 @@ mod tests {
     }
 
     fn make_transaction() -> Transaction {
-        let transaction = Transaction {
-            msg_inputs: vec![],
-            msg_outputs: vec![],
-        };
-        transaction
+        Transaction {
+            msg_inputs: vec![TransactionInput {
+                msg_ring: vec![vec![]],
+                msg_blsag: vec![],
+                msg_message: vec![],
+                msg_key_image: vec![],
+            }],
+            msg_outputs: vec![TransactionOutput {
+                msg_stealth_address: vec![],
+                msg_output_key: vec![],
+                msg_proof: vec![],
+                msg_commitment: vec![],
+                msg_amount: vec![],
+                msg_index: 1,
+            }],
+        }
     }
 
     #[tokio::test]
