@@ -14,6 +14,20 @@ Among its core privacy features, Vector adopts the bLSAG signature scheme and ut
 - **PoW Consensus Mechanism**: Currently Vector works on PoW CM, but i think that I'll try to develop something like DPoS-kind consensus mechanism, we'll see. (DEV IN PROCESS)
 - **Scalability**: Designed to scale seamlessly, Vector should handle a growing number of transactions without compromising on speed or security.
 
+## Modules and explanations:
+1. **vec_block**: There are hashing and mining functions for Block (protobuf message declared in .proto).
+2. **vec_chain**: There are validation and processing functions for the Blocks and Transactions (in other words, these are operations that locally display global changes in the state of the network).
+3. **vec_cli**: Сommand-line interface for interaction.
+4. **vec_cryptography**: Here the most important cryptographic operations take place (mathematical operations on the Edwards elliptic curve, calculation of user keys, creation of signatures and proofs).
+5. **vec_errors**: Just custom errors.
+6. **vec_mempool**: Mempool ops, nothing special.
+7. **vec_merkle**: My Merkle Tree implementation, simplistic and works fine.
+8. **vec_node**: Here the most interesting p2p operations take place (organizing client-server, gRPC communication methods, user-synchronization and pull-no-push system implementation).
+9. **vec_proto**: The heart of the code. All general types that I am working on declared here.
+10. **vec_server**: Just environment for the NodeService. It is going to change soon.
+11. **vec_storage**: Data bases for blocks, key images, ip_db (at the moment it is not used, I think about whether it is needed at all).
+12. **vec_transaction**: Environment operations (hashing) for the Transaction (there used to be a lot of code here, but it has moved, need to abolish this Workspace later).
+
 ## License
 This project is licensed under the Apache-2.0 License - see the LICENSE file for details.
 
