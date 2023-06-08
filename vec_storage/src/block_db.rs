@@ -46,12 +46,9 @@ impl BlockStorer for BlockDB {
             .encode(&mut block_data)
             .map_err(|_| BlockStorageError::SerializationError)?;
 
-        // Store block by its hash
         self.blocks_db
             .insert(&hash, block_data)
             .map_err(|_| BlockStorageError::WriteError)?;
-
-        // Store hash by the block index
         self.index_db
             .insert(&index.to_be_bytes(), IVec::from(hash))
             .map_err(|_| BlockStorageError::WriteError)?;
@@ -73,10 +70,7 @@ impl BlockStorer for BlockDB {
 
     async fn get_by_index(&self, index: u64) -> Result<Option<Block>, BlockStorageError> {
         match self.index_db.get(&index.to_be_bytes()) {
-            Ok(Some(hash)) => {
-                // Use the hash to get the block
-                self.get(hash.to_vec()).await
-            }
+            Ok(Some(hash)) => self.get(hash.to_vec()).await,
             Ok(None) => Ok(None),
             Err(_) => Err(BlockStorageError::ReadError),
         }

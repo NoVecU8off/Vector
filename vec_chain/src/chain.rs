@@ -35,7 +35,7 @@ impl Chain {
     pub async fn max_index(&self) -> Result<u64, BlockStorageError> {
         match self.blocks.get_highest_index().await {
             Ok(Some(index)) => Ok(index),
-            Ok(None) => Ok(0), // or return a default value
+            Ok(None) => Ok(0),
             Err(e) => Err(e),
         }
     }
@@ -268,7 +268,6 @@ mod tests {
     }
 
     async fn create_test_block() -> Block {
-        // Replace this with your actual Block structure creation
         Block::default()
     }
 
@@ -300,11 +299,7 @@ mod tests {
         let mut chain = create_test_chain().await.unwrap();
         let block = create_test_block().await;
         let wallet = create_test_wallet().await;
-
-        // Adding block to the chain
         assert!(chain.add_block(&wallet, block).await.is_ok());
-
-        // Chain should now contain the block
         assert_eq!(chain.max_index().await.unwrap(), 1);
     }
 }

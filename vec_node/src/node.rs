@@ -233,7 +233,6 @@ impl NodeService {
             peers,
             logger,
             mempool,
-            // ips,
             blockchain: Arc::new(RwLock::new(blockchain)),
         })
     }
@@ -466,7 +465,6 @@ impl NodeService {
         Ok(())
     }
 
-    // Currently only one output to destination point
     pub async fn make_transaction(
         &self,
         recipient_address: &str,
@@ -477,7 +475,6 @@ impl NodeService {
             server_config.cfg_wallet.clone()
         };
         let (inputs, total_input_amount) = wallet.prepare_inputs().await;
-        // Add a check for insufficient funds
         if total_input_amount < a {
             return Err(NodeServiceError::InsufficientBalance);
         }
@@ -868,13 +865,11 @@ impl NodeService {
             server_config.cfg_wallet.clone()
         };
         let output_index: u64 = 1;
-        // 1. Stealth address
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
-        // 1.1 Output key
-        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress(); // <-- output key
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
         let view_key_point = &wallet.public_view_key.decompress().unwrap();
-        let q = r * view_key_point; // rKvt
+        let q = r * view_key_point;
         let q_bytes = q.compress().to_bytes();
         let mut hasher = Keccak256::new();
         hasher.update(&q_bytes);
@@ -883,8 +878,7 @@ impl NodeService {
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let spend_key_point = &wallet.public_spend_key.decompress().unwrap();
-        let stealth = (hs_times_g + spend_key_point).compress(); // <-- stealth addr
-                                                                 // 2. Encrypted amount
+        let stealth = (hs_times_g + spend_key_point).compress();
         let encrypted_amount = wallet.encrypt_amount(&q_bytes, output_index, amount);
         let output = TransactionOutput {
             msg_stealth_address: stealth.to_bytes().to_vec(),

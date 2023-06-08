@@ -35,11 +35,9 @@ mod tests {
         let hash2_async = block_on(hash_transaction(&transaction2));
         let hash2_sync = hash_transaction_sync(&transaction2);
 
-        // Test that both async and sync functions produce the same output.
         assert_eq!(hash1_async, hash1_sync);
         assert_eq!(hash2_async, hash2_sync);
 
-        // Test that changing the transaction changes the hash.
         assert_ne!(hash1_async, hash2_async);
         assert_ne!(hash1_sync, hash2_sync);
     }

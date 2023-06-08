@@ -30,7 +30,6 @@ impl Clock {
                     millis.store(0, Ordering::SeqCst);
                     let prev_sec = sec.fetch_add(1, Ordering::SeqCst);
                     if prev_sec + 1 >= 86400 * 2 {
-                        // seconds in two days
                         sec.store(0, Ordering::SeqCst);
                         epoch.fetch_add(1, Ordering::SeqCst);
                     }
