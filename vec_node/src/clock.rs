@@ -46,3 +46,9 @@ impl Clock {
         self.millis.fetch_add(offset, Ordering::SeqCst);
     }
 }
+
+impl Default for Clock {
+    fn default() -> Self {
+        Self::new()
+    }
+}

@@ -38,7 +38,7 @@ impl PeerStorer for IpDB {
         {
             Some(ivec) => {
                 let deserialized: String =
-                    deserialize(&*ivec).map_err(|_| PeerStorageError::DeserializationError)?;
+                    deserialize(&ivec).map_err(|_| PeerStorageError::DeserializationError)?;
                 Ok(Some(deserialized))
             }
             None => Ok(None),

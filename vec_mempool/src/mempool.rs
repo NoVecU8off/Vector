@@ -18,7 +18,6 @@ impl Mempool {
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
-        info!(logger, "Mempool created");
         Mempool {
             transactions: DashMap::new(),
             logger,
@@ -41,6 +40,10 @@ impl Mempool {
 
     pub fn len(&self) -> usize {
         self.transactions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.transactions.is_empty()
     }
 
     // Checks if transaction is stored in mempool

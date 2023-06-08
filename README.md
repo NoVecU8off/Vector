@@ -24,7 +24,6 @@ Among its core privacy features, Vector adopts the bLSAG signature scheme and ut
 7. **vec_merkle**: My Merkle Tree implementation, simplistic and works fine.
 8. **vec_node**: Here the most interesting p2p operations take place (organizing client-server, gRPC communication methods, user-synchronization and pull-no-push system implementation).
 9. **vec_proto**: The heart of the code. All general types that I am working on declared here.
-10. **vec_server**: Just environment for the NodeService. It is going to change soon.
 11. **vec_storage**: Data bases for blocks, key images, ip_db (at the moment it is not used, I think about whether it is needed at all).
 12. **vec_transaction**: Environment operations (hashing) for the Transaction (there used to be a lot of code here, but it has moved, need to abolish this Workspace later).
 

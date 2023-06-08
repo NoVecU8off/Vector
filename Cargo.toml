@@ -11,6 +11,5 @@ members = [
     "vec_merkle",
     "vec_cli",
     "vec_mempool",
-    "vec_server",
     "vec_errors",
 ]

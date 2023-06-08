@@ -145,7 +145,7 @@ impl Chain {
         let output_set = self.outputs.get().await.unwrap();
         let mut total_balance = 0;
         for owned_output in &output_set {
-            let decrypted_amount = owned_output.decrypted_amount as u64;
+            let decrypted_amount = owned_output.decrypted_amount;
             total_balance += decrypted_amount;
         }
         total_balance
@@ -209,7 +209,7 @@ impl Chain {
         for j in 0..n {
             let i = j % n;
             let ip1 = (j + 1) % n;
-            l[i] = s[i] * &constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i].decompress().unwrap();
+            l[i] = s[i] * constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i].decompress().unwrap();
             r[i] = s[i] * hash_to_point(&p[i]) + c[i] * image.decompress().unwrap();
             let mut hasher = Keccak256::new();
             hasher.update(m);

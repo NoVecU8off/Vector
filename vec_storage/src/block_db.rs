@@ -50,14 +50,14 @@ impl BlockStorer for BlockDB {
             .insert(&hash, block_data)
             .map_err(|_| BlockStorageError::WriteError)?;
         self.index_db
-            .insert(&index.to_be_bytes(), IVec::from(hash))
+            .insert(index.to_be_bytes(), IVec::from(hash))
             .map_err(|_| BlockStorageError::WriteError)?;
 
         Ok(())
     }
 
     async fn get(&self, hash: Vec<u8>) -> Result<Option<Block>, BlockStorageError> {
-        match self.blocks_db.get(&hash) {
+        match self.blocks_db.get(hash) {
             Ok(Some(data)) => {
                 let block =
                     Block::decode(&*data).map_err(|_| BlockStorageError::DeserializationError)?;
@@ -69,7 +69,7 @@ impl BlockStorer for BlockDB {
     }
 
     async fn get_by_index(&self, index: u64) -> Result<Option<Block>, BlockStorageError> {
-        match self.index_db.get(&index.to_be_bytes()) {
+        match self.index_db.get(index.to_be_bytes()) {
             Ok(Some(hash)) => self.get(hash.to_vec()).await,
             Ok(None) => Ok(None),
             Err(_) => Err(BlockStorageError::ReadError),
@@ -77,7 +77,7 @@ impl BlockStorer for BlockDB {
     }
 
     async fn get_hash_by_index(&self, index: u64) -> Result<Option<Vec<u8>>, BlockStorageError> {
-        match self.index_db.get(&index.to_be_bytes()) {
+        match self.index_db.get(index.to_be_bytes()) {
             Ok(Some(hash)) => Ok(Some(hash.to_vec())),
             Ok(None) => Ok(None),
             Err(_) => Err(BlockStorageError::ReadError),

@@ -31,7 +31,7 @@ pub fn hash_header_by_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
         hasher.update(&header.msg_previous_hash);
         hasher.update(&header.msg_root_hash);
         hasher.update(header.msg_timestamp.to_be_bytes());
-        hasher.update(&header.msg_nonce.to_be_bytes());
+        hasher.update(header.msg_nonce.to_be_bytes());
     } else {
         return Err(BlockOpsError::MissingHeader);
     }
@@ -64,7 +64,6 @@ pub async fn mine(mut block: Block) -> Result<u64, NodeServiceError> {
     for nonce in 0..(u64::max_value()) {
         block.msg_header.as_mut().unwrap().msg_nonce = nonce;
         let hash = hash_block(&block).await?;
-        println!("nonce: {}, hash: {}", nonce, hex::encode(hash.clone()));
         if check_difficulty(&hash, difficulty) {
             return Ok(nonce);
         }

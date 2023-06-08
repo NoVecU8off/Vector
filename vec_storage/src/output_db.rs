@@ -21,7 +21,7 @@ pub struct OwnedOutput {
 #[async_trait]
 pub trait OutputStorer: Send + Sync {
     async fn put(&self, owned_output: &OwnedOutput) -> Result<(), OutputStorageError>;
-    async fn remove(&self, key: &Vec<u8>) -> Result<(), OutputStorageError>;
+    async fn remove(&self, key: &[u8]) -> Result<(), OutputStorageError>;
     async fn get(&self) -> Result<Vec<OwnedOutput>, OutputStorageError>;
 }
 
@@ -46,7 +46,7 @@ impl OutputStorer for OutputDB {
         Ok(())
     }
 
-    async fn remove(&self, key: &Vec<u8>) -> Result<(), OutputStorageError> {
+    async fn remove(&self, key: &[u8]) -> Result<(), OutputStorageError> {
         self.owned_db
             .remove(key)
             .map_err(|_| OutputStorageError::WriteError)?;

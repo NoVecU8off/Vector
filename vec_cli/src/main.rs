@@ -2,7 +2,6 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_cryptography::cryptography::Wallet;
 use vec_node::node::*;
-use vec_server::server::*;
 
 enum Command {
     SendTransaction { address: String, amount: u64 },
@@ -18,7 +17,16 @@ enum Command {
 async fn main() {
     let mut rl = DefaultEditor::new().unwrap();
 
-    let readline = rl.readline("Please enter port <xxxx>: ");
+    let readline = rl.readline("Do you want to run locally? (yes/no): ");
+    let run_local = match readline {
+        Ok(line) => line.trim().eq_ignore_ascii_case("yes"),
+        Err(_) => {
+            eprintln!("Failed to read response");
+            return;
+        }
+    };
+
+    let readline = rl.readline("Please enter port: ");
     let port = match readline {
         Ok(line) => line.trim().to_string(),
         Err(_) => {
@@ -26,6 +34,20 @@ async fn main() {
             return;
         }
     };
+
+    let ip: String = if run_local {
+        "192.168.0.120".to_string()
+    } else {
+        match get_ip().await {
+            Ok(res) => res,
+            Err(e) => {
+                eprintln!("Failed to get IP: {}", e);
+                return;
+            }
+        }
+    };
+
+    let address = format!("{}:{}", ip, port);
 
     let readline = rl.readline("Do you have a secret key? (yes/no): ");
     let has_secret_key = match readline {
@@ -53,8 +75,13 @@ async fn main() {
         println!("Please, save your secret key: {}", secret_key);
     }
 
-    let scv = ServerConfig::local(secret_key, port).await;
-    let nsv = NodeService::new(scv).await.unwrap();
+    let nsv = match NodeService::new(secret_key, address).await {
+        Ok(nsv) => nsv,
+        Err(e) => {
+            eprintln!("Failed to create NodeService: {}", e);
+            return;
+        }
+    };
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let mut nsv_clone = nsv.clone();
     tokio::spawn(async move { nsv_clone.start().await });
@@ -63,7 +90,7 @@ async fn main() {
         loop {
             match rx.recv().await {
                 Some(Command::SendTransaction { address, amount }) => {
-                    match nsv.make_transaction(&address, amount as u64).await {
+                    match nsv.make_transaction(&address, amount).await {
                         Ok(_) => println!("Transaction broadcasted successfully"),
                         Err(e) => eprintln!("Failed to broadcast transaction: {}", e),
                     }
@@ -77,14 +104,20 @@ async fn main() {
                     println!("Your balance: {}", balance);
                 }
                 Some(Command::GetIndex) => {
-                    let height = nsv.get_last_index().await.unwrap();
+                    let height = match nsv.get_last_index().await {
+                        Ok(height) => height,
+                        Err(e) => {
+                            eprintln!("Failed to get last index: {}", e);
+                            return;
+                        }
+                    };
                     println!("Current Block's index: {}", height);
                 }
                 Some(Command::Genesis) => match nsv.make_genesis_block().await {
                     Ok(_) => println!("Genesis block created successfully"),
                     Err(e) => eprintln!("Failed to create genesis block: {}", e),
                 },
-                Some(Command::ConnectTo { ip }) => match nsv.connect_to(&ip).await {
+                Some(Command::ConnectTo { ip }) => match nsv.connect_to(ip.clone()).await {
                     Ok(_) => println!("Successfully connected to {}", ip),
                     Err(e) => eprintln!("Failed to connect: {}", e),
                 },
@@ -109,7 +142,13 @@ async fn main() {
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
                         if parts.len() == 4 {
                             let address = parts[1].to_string();
-                            let amount = parts[3].parse::<u64>().unwrap_or(0);
+                            let amount = match parts[3].parse::<u64>() {
+                                Ok(amount) => amount,
+                                Err(_) => {
+                                    println!("Invalid amount: {}", parts[3]);
+                                    continue;
+                                }
+                            };
                             let _ = tx.send(Command::SendTransaction { address, amount }).await;
                         } else {
                             println!("Invalid 'send' command format. It should be 'send <address> amount <amount>'");
@@ -153,5 +192,10 @@ async fn main() {
             }
         }
     }
-    server_future.await.unwrap();
+    match server_future.await {
+        Ok(result) => result,
+        Err(e) => {
+            eprintln!("Server future error: {}", e);
+        }
+    }
 }

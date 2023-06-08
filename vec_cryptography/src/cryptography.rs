@@ -102,10 +102,10 @@ impl Wallet {
         let mut total_input_amount = 0;
         let mut inputs = Vec::new();
         for owned_output in &output_set {
-            let decrypted_amount = owned_output.decrypted_amount as u64;
+            let decrypted_amount = owned_output.decrypted_amount;
             total_input_amount += decrypted_amount;
             let owned_stealth_addr = &owned_output.output.stealth;
-            let ristretto_stealth = Wallet::public_spend_key_from_vec(&owned_stealth_addr).unwrap();
+            let ristretto_stealth = Wallet::public_spend_key_from_vec(owned_stealth_addr).unwrap();
             let wallets: Vec<Wallet> = (0..9).map(|_| Wallet::generate()).collect();
             let mut s_addrs: Vec<CompressedRistretto> =
                 wallets.iter().map(|w| w.public_spend_key).collect();
@@ -144,8 +144,8 @@ impl Wallet {
         let q = r * recipient_view_key_point;
         let q_bytes = q.compress().to_bytes();
         let mut hasher = Keccak256::new();
-        hasher.update(&q_bytes);
-        hasher.update(&output_index.to_le_bytes());
+        hasher.update(q_bytes);
+        hasher.update(output_index.to_le_bytes());
         let hash = hasher.finalize();
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
@@ -186,8 +186,8 @@ impl Wallet {
         let q = r * view_key_point;
         let q_bytes = q.compress().to_bytes();
         let mut hasher = Keccak256::new();
-        hasher.update(&q_bytes);
-        hasher.update(&output_index.to_le_bytes());
+        hasher.update(q_bytes);
+        hasher.update(output_index.to_le_bytes());
         let hash = hasher.finalize();
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
@@ -252,9 +252,8 @@ impl Wallet {
         let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
         let amount_in_scalars = Scalar::from(amount).to_bytes();
         let amount_in_scalars_8 = amount_in_scalars[0..8].try_into().unwrap();
-        let encrypted_amount = xor8(amount_in_scalars_8, hash_8);
 
-        encrypted_amount
+        xor8(amount_in_scalars_8, hash_8)
     }
 
     pub fn decrypt_amount(
@@ -275,9 +274,8 @@ impl Wallet {
         let hash = hasher.finalize();
         let hash_8: [u8; 8] = hash[0..8].try_into().unwrap();
         let decrypted_amount = xor8(encrypted_amount.try_into().unwrap(), hash_8);
-        let value = u64::from_le_bytes(decrypted_amount);
 
-        value
+        u64::from_le_bytes(decrypted_amount)
     }
 
     // Complete Back’s Linkable Spontaneous Anonymous Group signature
@@ -308,7 +306,7 @@ impl Wallet {
             s[i] = Scalar::random(&mut rand::thread_rng());
         }
         let j1 = (j + 1) % n;
-        l[j] = a * &constants::RISTRETTO_BASEPOINT_POINT;
+        l[j] = a * constants::RISTRETTO_BASEPOINT_POINT;
         r[j] = a * hash_to_point(&p[j]);
         let mut hasher = Keccak256::new();
         hasher.update(m);
@@ -319,7 +317,7 @@ impl Wallet {
         for k in 0..(n - 1) {
             let i = (j1 + k) % n;
             let ip1 = (j1 + k + 1) % n;
-            l[i] = s[i] * &constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i].decompress().unwrap();
+            l[i] = s[i] * constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i].decompress().unwrap();
             r[i] = s[i] * hash_to_point(&p[i]) + c[i] * image.decompress().unwrap();
             let mut hasher = Keccak256::new();
             hasher.update(m);
@@ -431,7 +429,7 @@ impl Wallet {
 
     pub fn from_serializable(s: &SerializableWallet) -> Wallet {
         Wallet {
-            secret_spend_key: Scalar::from_bytes_mod_order(s.secret_spend_key.into()),
+            secret_spend_key: Scalar::from_bytes_mod_order(s.secret_spend_key),
             secret_view_key: Scalar::from_bytes_mod_order(s.secret_view_key),
             public_spend_key: CompressedRistretto::from_slice(&s.public_spend_key),
             public_view_key: CompressedRistretto::from_slice(&s.public_view_key),
@@ -485,7 +483,7 @@ pub fn verify(
     let h = hasher.finalize();
     let h_scalar = Scalar::from_bits(h.into());
     let r_prime = &constants::RISTRETTO_BASEPOINT_TABLE * &signature.s
-        + public_spend_key_point.decompress().unwrap() * &h_scalar;
+        + public_spend_key_point.decompress().unwrap() * h_scalar;
 
     r == r_prime
 }
@@ -522,10 +520,7 @@ impl Signature {
         }
         let r = CompressedRistretto::from_slice(&v[0..32]);
         let s = Scalar::from_canonical_bytes(v[32..64].try_into().unwrap());
-        match s {
-            Some(scalar) => Some(Signature { r, s: scalar }),
-            None => None,
-        }
+        s.map(|scalar| Signature { r, s: scalar })
     }
 }
 
