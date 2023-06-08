@@ -7,7 +7,7 @@ use hex::encode;
 use merlin::Transcript;
 use sha3::{Digest, Keccak256};
 use vec_block::block::*;
-use vec_cryptography::cryptography::{hash_to_point, BLSAGSignature, Wallet};
+use vec_crypto::cryptography::{hash_to_point, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_proto::messages::{Block, Transaction};
 use vec_storage::{block_db::*, image_db::*, output_db::*};

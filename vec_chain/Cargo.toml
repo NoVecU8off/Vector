@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 vec_block = { path = "../vec_block", version = "0.1.0"}
-vec_cryptography = { path = "../vec_cryptography", version = "0.1.0"}
+vec_crypto = { path = "../vec_crypto", version = "0.1.0"}
 vec_proto = { path = "../vec_proto", version = "0.1.0"}
 vec_storage = { path = "../vec_storage", version = "0.1.0"}
 vec_transaction = { path = "../vec_transaction", version = "0.1.0"}

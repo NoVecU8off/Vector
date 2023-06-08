@@ -13,7 +13,7 @@ use tonic::{
 };
 use vec_block::block::{hash_block, mine};
 use vec_chain::chain::Chain;
-use vec_cryptography::cryptography::Wallet;
+use vec_crypto::cryptography::Wallet;
 use vec_errors::errors::*;
 use vec_mempool::mempool::*;
 use vec_merkle::merkle::MerkleTree;

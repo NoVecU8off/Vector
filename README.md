@@ -18,7 +18,7 @@ Among its core privacy features, Vector adopts the bLSAG signature scheme and ut
 1. **vec_block**: There are hashing and mining functions for Block (protobuf message declared in .proto).
 2. **vec_chain**: There are validation and processing functions for the Blocks and Transactions (in other words, these are operations that locally display global changes in the state of the network).
 3. **vec_cli**: Сommand-line interface for interaction.
-4. **vec_cryptography**: Here the most important cryptographic operations take place (mathematical operations on the Edwards elliptic curve, calculation of user keys, creation of signatures and proofs).
+4. **vec_crypto**: Here the most important cryptographic operations take place (mathematical operations on the Edwards elliptic curve, calculation of user keys, creation of signatures and proofs).
 5. **vec_errors**: Just custom errors.
 6. **vec_mempool**: Mempool ops, nothing special.
 7. **vec_merkle**: My Merkle Tree implementation, simplistic and works fine.

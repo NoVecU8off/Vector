@@ -1,7 +1,7 @@
 [workspace]
 
 members = [
-    "vec_cryptography",
+    "vec_crypto",
     "vec_node",
     "vec_chain",
     "vec_storage",

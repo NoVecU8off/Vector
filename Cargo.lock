@@ -2504,7 +2504,7 @@ dependencies = [
  "sha3 0.10.8",
  "thiserror",
  "tokio",
- "vec_cryptography",
+ "vec_crypto",
  "vec_errors",
  "vec_merkle",
  "vec_proto",
@@ -2529,7 +2529,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "vec_block",
- "vec_cryptography",
+ "vec_crypto",
  "vec_errors",
  "vec_merkle",
  "vec_proto",
@@ -2546,7 +2546,7 @@ dependencies = [
  "tokio",
  "vec_block",
  "vec_chain",
- "vec_cryptography",
+ "vec_crypto",
  "vec_errors",
  "vec_mempool",
  "vec_merkle",
@@ -2557,7 +2557,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "vec_cryptography"
+name = "vec_crypto"
 version = "0.1.0"
 dependencies = [
  "bs58",
@@ -2599,7 +2599,7 @@ dependencies = [
  "slog-async",
  "slog-term",
  "tokio",
- "vec_cryptography",
+ "vec_crypto",
  "vec_proto",
  "vec_transaction",
 ]
@@ -2655,7 +2655,7 @@ dependencies = [
  "url",
  "vec_block",
  "vec_chain",
- "vec_cryptography",
+ "vec_crypto",
  "vec_errors",
  "vec_mempool",
  "vec_merkle",
@@ -2710,7 +2710,7 @@ dependencies = [
  "rand 0.8.5",
  "sha3 0.10.8",
  "tokio",
- "vec_cryptography",
+ "vec_crypto",
  "vec_proto",
 ]
 
