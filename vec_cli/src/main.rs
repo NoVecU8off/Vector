@@ -59,10 +59,10 @@ async fn main() {
         }
     };
 
-    let secret_key: String;
+    let secret_spend_key: String;
     if has_secret_key {
         let readline = rl.readline("Please enter your secret key: ");
-        secret_key = match readline {
+        secret_spend_key = match readline {
             Ok(line) => line.trim().to_string(),
             Err(_) => {
                 eprintln!("Failed to read secret key");
@@ -71,12 +71,12 @@ async fn main() {
         };
     } else {
         let wallet = Wallet::generate();
-        secret_key = bs58::encode(wallet.secret_spend_key_to_vec()).into_string();
+        secret_spend_key = bs58::encode(wallet.secret_spend_key_to_vec()).into_string();
         println!("Your new wallet has been generated.");
-        println!("Please, save your secret key: {}", secret_key);
+        println!("Please, save your secret key: {}", secret_spend_key);
     }
 
-    let nsv = match NodeService::new(secret_key, address).await {
+    let nsv = match NodeService::new(secret_spend_key, address).await {
         Ok(nsv) => nsv,
         Err(e) => {
             eprintln!("Failed to create NodeService: {}", e);

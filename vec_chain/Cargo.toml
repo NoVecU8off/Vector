@@ -6,11 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-vec_block = { path = "../vec_block", version = "0.1.0"}
+vec_utils = { path = "../vec_utils", version = "0.1.0"}
 vec_crypto = { path = "../vec_crypto", version = "0.1.0"}
 vec_proto = { path = "../vec_proto", version = "0.1.0"}
 vec_storage = { path = "../vec_storage", version = "0.1.0"}
-vec_transaction = { path = "../vec_transaction", version = "0.1.0"}
 vec_merkle = { path = "../vec_merkle", version = "0.1.0"}
 vec_errors = { path = "../vec_errors", version = "0.1.0"}
 

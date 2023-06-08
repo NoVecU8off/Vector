@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use slog::{info, o, Drain, Logger};
 use vec_proto::messages::Transaction;
-use vec_transaction::transaction::hash_transaction;
+use vec_utils::utils::hash_transaction;
 
 #[derive(Debug)]
 pub struct Mempool {
@@ -35,7 +35,7 @@ impl Mempool {
     // Clears the mempool
     pub fn clear(&self) {
         self.transactions.clear();
-        info!(self.logger, "Mempool cleared");
+        info!(self.logger, "\nMempool cleared");
     }
 
     pub fn len(&self) -> usize {
@@ -47,28 +47,28 @@ impl Mempool {
     }
 
     // Checks if transaction is stored in mempool
-    pub async fn has(&self, tx: &Transaction) -> bool {
-        let hex_hash = hex::encode(hash_transaction(tx).await);
+    pub fn has(&self, tx: &Transaction) -> bool {
+        let hex_hash = hex::encode(hash_transaction(tx));
         self.transactions.contains_key(&hex_hash)
     }
 
     // Adds transaction to the mempool
-    pub async fn add(&self, tx: Transaction) -> bool {
-        if self.has(&tx).await {
+    pub fn add(&self, tx: Transaction) -> bool {
+        if self.has(&tx) {
             return false;
         }
-        let hash = hex::encode(hash_transaction(&tx).await);
+        let hash = hex::encode(hash_transaction(&tx));
         self.transactions.insert(hash.clone(), tx);
-        info!(self.logger, "Transaction added to mempool: {}", hash);
+        info!(self.logger, "\nTransaction added to mempool: {}", hash);
         true
     }
 
     // Removes the specific transaction
-    pub async fn remove(&self, tx: &Transaction) -> bool {
-        let hash = hex::encode(hash_transaction(tx).await);
+    pub fn remove(&self, tx: &Transaction) -> bool {
+        let hash = hex::encode(hash_transaction(tx));
         if self.transactions.contains_key(&hash) {
             self.transactions.remove(&hash);
-            info!(self.logger, "Transaction removed from mempool: {}", hash);
+            info!(self.logger, "\nTransaction removed from mempool: {}", hash);
             true
         } else {
             false
@@ -81,12 +81,12 @@ impl Mempool {
     }
 
     // Adds a transaction to the mempool via it
-    pub async fn add_with_hash(&self, hash: String, tx: Transaction) -> bool {
+    pub fn add_with_hash(&self, hash: String, tx: Transaction) -> bool {
         if self.has_hash(&hash) {
             return false;
         }
         self.transactions.insert(hash.clone(), tx);
-        info!(self.logger, "Transaction added to mempool: {}", hash);
+        info!(self.logger, "\nTransaction added to mempool: {}", hash);
         true
     }
 
@@ -94,7 +94,7 @@ impl Mempool {
     pub fn remove_with_hash(&self, hash: &str) -> bool {
         if self.transactions.contains_key(hash) {
             self.transactions.remove(hash);
-            info!(self.logger, "Transaction removed from mempool: {}", hash);
+            info!(self.logger, "\nTransaction removed from mempool: {}", hash);
             true
         } else {
             false
@@ -118,7 +118,6 @@ impl Default for Mempool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::executor::block_on;
     use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
 
     #[test]
@@ -131,20 +130,20 @@ mod tests {
     fn test_mempool_add() {
         let mempool = Mempool::new();
         let transaction = create_test_transaction();
-        let result = block_on(mempool.add(transaction.clone()));
+        let result = mempool.add(transaction.clone());
         assert_eq!(result, true);
-        assert_eq!(block_on(mempool.has(&transaction)), true);
+        assert_eq!(mempool.has(&transaction), true);
     }
 
     #[test]
     fn test_mempool_remove() {
         let mempool = Mempool::new();
         let transaction = create_test_transaction();
-        let _ = block_on(mempool.add(transaction.clone()));
-        assert_eq!(block_on(mempool.has(&transaction)), true);
-        let result = block_on(mempool.remove(&transaction));
+        let _ = mempool.add(transaction.clone());
+        assert_eq!(mempool.has(&transaction), true);
+        let result = mempool.remove(&transaction);
         assert_eq!(result, true);
-        assert_eq!(block_on(mempool.has(&transaction)), false);
+        assert_eq!(mempool.has(&transaction), false);
     }
 
     fn create_test_transaction() -> Transaction {

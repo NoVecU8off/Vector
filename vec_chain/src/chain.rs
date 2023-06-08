@@ -5,12 +5,14 @@ use curve25519_dalek_ng::{
 };
 use hex::encode;
 use merlin::Transcript;
+use prost::Message;
 use sha3::{Digest, Keccak256};
-use vec_block::block::*;
 use vec_crypto::cryptography::{hash_to_point, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
+use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::{Block, Transaction};
 use vec_storage::{block_db::*, image_db::*, output_db::*};
+use vec_utils::utils::*;
 
 pub struct Chain {
     pub blocks: Box<dyn BlockStorer>,
@@ -51,7 +53,7 @@ impl Chain {
         for transaction in block.msg_transactions.iter() {
             self.process_transaction(wallet, transaction).await?;
         }
-        let hash = hash_block(&block).await?;
+        let hash = hash_block(&block)?;
         let index = header.msg_index;
         self.blocks.put_block(index, hash, &block).await?;
         Ok(())
@@ -77,7 +79,7 @@ impl Chain {
         for transaction in block.msg_transactions.iter() {
             self.process_transaction(wallet, transaction).await?;
         }
-        let hash = hash_block(&block).await?.to_vec();
+        let hash = hash_block(&block)?.to_vec();
         let index = header.msg_index;
         self.blocks.put_block(index, hash, &block).await?;
         Ok(())
@@ -252,6 +254,25 @@ impl Chain {
             }
         }
         Ok(())
+    }
+}
+
+pub fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
+    let transaction_data: Vec<Vec<u8>> = block
+        .msg_transactions
+        .iter()
+        .map(|transaction| {
+            let mut bytes = Vec::new();
+            transaction.encode(&mut bytes).unwrap();
+            bytes
+        })
+        .collect();
+    let merkle_tree = MerkleTree::from_list(&transaction_data);
+    if let Some(header) = block.msg_header.as_ref() {
+        let merkle_root = merkle_tree.get_hash();
+        Ok(header.msg_root_hash == merkle_root)
+    } else {
+        Err(BlockOpsError::MissingHeader)
     }
 }
 
