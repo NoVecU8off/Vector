@@ -43,18 +43,21 @@ impl Node for NodeService {
         let version_clone = version.clone();
         let addr: String = version.msg_address.clone();
         let ip: String = version.msg_ip;
-        info!(self.logger, "Recieved version, address: {}", addr);
+        info!(self.logger, "Received version, address: {}", addr);
         let connected_addrs = self.get_addr_list();
-        if !self.contains(&addr, &connected_addrs).await {
-            match make_node_client(&ip).await {
-                Ok(c) => {
-                    info!(self.logger, "Created node client successfully");
-                    self.add_peer(c, version_clone.clone()).await;
+        if !self.contains(&addr, &connected_addrs).await && self.peers.len() < 20 {
+            let clone = self.clone();
+            tokio::spawn(async move {
+                match make_node_client(&ip).await {
+                    Ok(c) => {
+                        info!(clone.logger, "Created node client successfully");
+                        clone.add_peer(c, version_clone.clone()).await;
+                    }
+                    Err(e) => {
+                        error!(clone.logger, "Failed to create node client: {:?}", e);
+                    }
                 }
-                Err(e) => {
-                    error!(self.logger, "Failed to create node client: {:?}", e);
-                }
-            }
+            });
         } else {
             info!(self.logger, "Address already connected: {}", addr);
         }
@@ -113,22 +116,28 @@ impl Node for NodeService {
         request: Request<PushTxRequest>,
     ) -> Result<Response<Confirmed>, Status> {
         let push_request = request.into_inner();
-        let sender_ip = push_request.msg_ip;
-        let transaction_hash = push_request.msg_transaction_hash;
+        let sender_ip = push_request.msg_ip.clone();
+        let transaction_hash = push_request.msg_transaction_hash.clone();
         let hex_hash = hex::encode(&transaction_hash);
-        if !self.mempool.has_hash(&hex_hash) {
-            match self
-                .pull_transaction_from(&sender_ip, transaction_hash)
-                .await
-            {
-                Ok(_) => Ok(Response::new(Confirmed {})),
-                Err(e) => {
-                    error!(self.logger, "Failed to make transaction pull: {:?}", e);
-                    Err(Status::internal("Failed to make transaction pull"))
-                }
-            }
-        } else {
+
+        if self.mempool.has_hash(&hex_hash) {
             Ok(Response::new(Confirmed {}))
+        } else {
+            let clone = self.clone();
+            tokio::spawn(async move {
+                match clone
+                    .pull_transaction_from(&sender_ip, transaction_hash)
+                    .await
+                {
+                    Ok(_) => Ok(Response::new(Confirmed {})),
+                    Err(e) => {
+                        error!(clone.logger, "Failed to make transaction pull: {:?}", e);
+                        Err(Status::internal("Failed to make transaction pull"))
+                    }
+                }
+            })
+            .await
+            .unwrap()
         }
     }
 
@@ -154,25 +163,33 @@ impl Node for NodeService {
         &self,
         request: Request<PushBlockRequest>,
     ) -> Result<Response<Confirmed>, Status> {
-        info!(self.logger, "Recieved push block request");
+        info!(self.logger, "Received push block request");
         let push_request = request.into_inner();
         let sender_ip = push_request.msg_ip;
         let block_hash = push_request.msg_block_hash;
         let read_lock = self.blockchain.read().await;
         match read_lock.blocks.get(block_hash.clone()).await {
             Ok(Some(_)) => {
-                info!(self.logger, "Offered block allready exists");
+                info!(self.logger, "Offered block already exists");
                 Ok(Response::new(Confirmed {}))
             }
             Ok(None) => {
-                info!(self.logger, "Offered block allready exists");
-                match self.pull_block_from(&sender_ip, block_hash).await {
-                    Ok(_) => Ok(Response::new(Confirmed {})),
-                    Err(e) => {
-                        error!(self.logger, "Failed to make block pull: {:?}", e);
-                        Err(Status::internal("Failed to make block pull"))
+                info!(self.logger, "Offered block doesn't exist, starting pull");
+                let self_clone = self.clone();
+                let sender_ip_clone = sender_ip.clone();
+                let block_hash_clone = block_hash.clone();
+                tokio::spawn(async move {
+                    match self_clone
+                        .pull_block_from(&sender_ip_clone, block_hash_clone)
+                        .await
+                    {
+                        Ok(_) => info!(self_clone.logger, "Block pull successful"),
+                        Err(e) => {
+                            error!(self_clone.logger, "Failed to make block pull: {:?}", e);
+                        }
                     }
-                }
+                });
+                Ok(Response::new(Confirmed {}))
             }
             Err(e) => {
                 error!(self.logger, "Failed to check if block exists: {:?}", e);
@@ -570,8 +587,17 @@ impl NodeService {
                 "Recieved transaction was successfully validated"
             );
             self.mempool.add(transaction.clone()).await;
+            let clone = self.clone();
             if self.mempool.len() == 6 {
-                self.make_block().await?;
+                tokio::spawn(async move {
+                    match clone.make_block().await {
+                        Ok(_) => info!(
+                            clone.logger,
+                            "New block was mined and added to the chain successfully"
+                        ),
+                        Err(e) => error!(clone.logger, "Faled to mine block {:?}", e),
+                    }
+                });
             }
             self.broadcast_tx_hash(&transaction).await?;
         }

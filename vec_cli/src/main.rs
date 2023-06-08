@@ -1,8 +1,8 @@
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_crypto::cryptography::Wallet;
-use vec_node::node::*;
 use vec_errors::errors::*;
+use vec_node::node::*;
 
 enum Command {
     SendTransaction { address: String, amount: u64 },
