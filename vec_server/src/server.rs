@@ -6,6 +6,8 @@ use vec_errors::errors::*;
 // use tokio::io::{AsyncWriteExt, AsyncReadExt};
 // use std::path::PathBuf;
 
+// TODO: Need to do something with Wallet representation
+
 #[derive(Clone)]
 pub struct ServerConfig {
     pub cfg_version: String,
@@ -14,14 +16,14 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
-    pub async fn new(port: String) -> Self {
+    pub async fn local(port: String) -> Self {
         ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: format!("192.168.0.120:{}", port),
             cfg_wallet: Wallet::generate(),
         }
     }
-    pub async fn default_v() -> Self {
+    pub async fn global() -> Self {
         ServerConfig {
             cfg_version: "1".to_string(),
             cfg_ip: get_ip().await.expect("Failed to get IP"),

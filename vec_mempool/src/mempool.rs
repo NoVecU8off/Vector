@@ -10,6 +10,7 @@ pub struct Mempool {
 }
 
 impl Mempool {
+    // Initialisation
     pub fn new() -> Self {
         let logger = {
             let decorator = slog_term::TermDecorator::new().build();
@@ -24,6 +25,7 @@ impl Mempool {
         }
     }
 
+    // Returns transactions stored in mempool
     pub fn get_transactions(&self) -> Vec<Transaction> {
         self.transactions
             .iter()
@@ -31,6 +33,7 @@ impl Mempool {
             .collect::<Vec<_>>()
     }
 
+    // Clears the mempool
     pub fn clear(&self) {
         self.transactions.clear();
         info!(self.logger, "Mempool cleared");
@@ -40,11 +43,13 @@ impl Mempool {
         self.transactions.len()
     }
 
+    // Checks if transaction is stored in mempool
     pub async fn has(&self, tx: &Transaction) -> bool {
         let hex_hash = hex::encode(hash_transaction(tx).await);
         self.transactions.contains_key(&hex_hash)
     }
 
+    // Adds transaction to the mempool
     pub async fn add(&self, tx: Transaction) -> bool {
         if self.has(&tx).await {
             return false;
@@ -55,6 +60,7 @@ impl Mempool {
         true
     }
 
+    // Removes the specific transaction
     pub async fn remove(&self, tx: &Transaction) -> bool {
         let hash = hex::encode(hash_transaction(tx).await);
         if self.transactions.contains_key(&hash) {
@@ -66,14 +72,12 @@ impl Mempool {
         }
     }
 
-    pub async fn contains_transaction(&self, transaction: &Transaction) -> bool {
-        self.has(transaction).await
-    }
-
+    // Chaecks if the transaction is stored in the mempool by its hash
     pub fn has_hash(&self, hash: &str) -> bool {
         self.transactions.contains_key(hash)
     }
 
+    // Adds a transaction to the mempool via it
     pub async fn add_with_hash(&self, hash: String, tx: Transaction) -> bool {
         if self.has_hash(&hash) {
             return false;
@@ -83,6 +87,7 @@ impl Mempool {
         true
     }
 
+    // Removes transaction by its hash (key)
     pub fn remove_with_hash(&self, hash: &str) -> bool {
         if self.transactions.contains_key(hash) {
             self.transactions.remove(hash);
@@ -93,10 +98,7 @@ impl Mempool {
         }
     }
 
-    pub fn contains_hash(&self, hash: &str) -> bool {
-        self.has_hash(hash)
-    }
-
+    // Return the transaction by its hash
     pub fn get_by_hash(&self, hash: &str) -> Option<Transaction> {
         self.transactions
             .get(hash)

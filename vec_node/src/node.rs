@@ -59,6 +59,7 @@ impl Node for NodeService {
             info!(self.logger, "Address already connected: {}", addr);
         }
         let reply = self.get_version().await;
+
         Ok(Response::new(reply))
     }
 
@@ -85,6 +86,7 @@ impl Node for NodeService {
             }
         }
         let block_batch = BlockBatch { msg_blocks: blocks };
+
         Ok(Response::new(block_batch))
     }
 
@@ -228,6 +230,7 @@ impl NodeService {
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let config = Arc::new(RwLock::new(server_cfg.clone()));
         info!(logger, "NodeService {} created", server_cfg.cfg_ip);
+
         Ok(NodeService {
             config,
             peers,
@@ -247,6 +250,7 @@ impl NodeService {
         .map_err(NodeServiceError::AddrParseError)?;
         info!(self.logger, "NodeServer starting listening on {}", cfg_ip);
         self.setup_server(node_service, cfg_ip).await?;
+
         Ok(())
     }
 
@@ -290,6 +294,7 @@ impl NodeService {
         try_join_all(tasks)
             .await
             .map_err(|err| NodeServiceError::BootstrapNetworkError(format!("{:?}", err)))?;
+
         Ok(())
     }
 
@@ -366,6 +371,7 @@ impl NodeService {
         let local_index = chain_rlock.max_index().await.unwrap();
         drop(chain_rlock);
         let msg_address = cfg_wallet.address;
+
         Version {
             msg_version: cfg_version,
             msg_address,
@@ -420,6 +426,7 @@ impl NodeService {
             self.logger,
             "Genesis block {:?} with tx successfully created", hash
         );
+
         Ok(())
     }
 
@@ -462,6 +469,7 @@ impl NodeService {
         try_join_all(tasks)
             .await
             .map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
+
         Ok(())
     }
 
@@ -505,6 +513,7 @@ impl NodeService {
                 ),
             }
         });
+
         Ok(())
     }
 
@@ -551,6 +560,7 @@ impl NodeService {
         try_join_all(tasks)
             .await
             .map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
+
         Ok(())
     }
 
@@ -592,6 +602,7 @@ impl NodeService {
             );
             self.broadcast_tx_hash(&transaction).await?;
         }
+
         Ok(())
     }
 
@@ -620,6 +631,7 @@ impl NodeService {
             self.process_block(&wallet, block, sender_ip).await?;
             self.broadcast_block_hash(block_hash).await?;
         }
+
         Ok(())
     }
 
@@ -631,6 +643,7 @@ impl NodeService {
         for block in block_batch.msg_blocks {
             self.process_incoming_block(wallet, block).await?;
         }
+
         Ok(())
     }
 
@@ -653,6 +666,7 @@ impl NodeService {
             .add_block(wallet, block)
             .await?;
         info!(self.logger, "New block added");
+
         Ok(())
     }
 
@@ -734,6 +748,7 @@ impl NodeService {
                 .await?;
             drop(client_lock);
         }
+
         Ok(())
     }
 
@@ -756,6 +771,7 @@ impl NodeService {
         let block_batch = response.into_inner();
         self.process_synchronisation(wallet, block_batch).await?;
         info!(self.logger, "Pulled and processed blocks from client");
+
         Ok(())
     }
 
@@ -801,6 +817,7 @@ impl NodeService {
             .await
             .map_err(|_| ValidatorServiceError::PeerBroadcastFailed)?;
         info!(self.logger, "Successfully broadcasted peer list");
+
         Ok(())
     }
 
@@ -853,6 +870,7 @@ impl NodeService {
             self.logger,
             "Genesis block {:?} with tx successfully created", hash
         );
+
         Ok(())
     }
 
@@ -892,6 +910,7 @@ impl NodeService {
             msg_inputs: vec![],
             msg_outputs: vec![output],
         };
+
         Ok(transaction)
     }
 
@@ -919,6 +938,7 @@ impl NodeService {
                 );
             }
         }
+
         Ok(())
     }
 
@@ -928,12 +948,14 @@ impl NodeService {
             server_config.cfg_wallet.clone()
         };
         let address = wallet.address;
+
         Ok(address)
     }
 
     pub async fn get_last_index(&self) -> Result<u64, NodeServiceError> {
         let chain_lock = self.blockchain.read().await;
         let height = chain_lock.max_index().await.unwrap();
+
         Ok(height)
     }
 }
@@ -947,6 +969,7 @@ pub async fn make_node_client(ip: &str) -> Result<NodeClient<Channel>, NodeServi
         .await
         .map_err(NodeServiceError::TonicTransportError)?;
     let node_client = NodeClient::new(channel);
+    
     Ok(node_client)
 }
 

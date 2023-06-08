@@ -1,4 +1,4 @@
-use sha3::{Digest, Sha3_256};
+use sha3::{Digest, Keccak256};
 
 #[derive(Clone, Debug)]
 pub enum MerkleTree {
@@ -15,6 +15,7 @@ pub enum MerkleTree {
 }
 
 impl MerkleTree {
+    // Builds thr Merkle Tree with given transactions
     pub fn from_list(data_list: &[Vec<u8>]) -> MerkleTree {
         match data_list.len() {
             0 => MerkleTree::Empty,
@@ -37,6 +38,7 @@ impl MerkleTree {
         }
     }
 
+    // Returns the root hash of the tree
     pub fn get_hash(&self) -> Vec<u8> {
         match self {
             MerkleTree::Empty => compute_hash(&[]),
@@ -45,6 +47,7 @@ impl MerkleTree {
         }
     }
 
+    // Returns the proof
     pub fn get_proof(&self, data: &[u8]) -> Option<Vec<(Vec<u8>, bool)>> {
         match self {
             MerkleTree::Empty => None,
@@ -71,6 +74,7 @@ impl MerkleTree {
         }
     }
 
+    // Verify persistance via given proof
     pub fn verify(&self, data: &[u8], proof: &[(Vec<u8>, bool)]) -> bool {
         let mut current_hash = compute_hash(data);
         for (proof_hash, is_right_sibling) in proof {
@@ -85,7 +89,7 @@ impl MerkleTree {
 }
 
 pub fn compute_hash(data: &[u8]) -> Vec<u8> {
-    let mut hasher = Sha3_256::new();
+    let mut hasher = Keccak256::new();
     hasher.update(data);
     hasher.finalize().to_vec()
 }

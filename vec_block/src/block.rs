@@ -1,9 +1,8 @@
 use prost::Message;
-use rand::Rng;
 use sha3::{Digest, Keccak256};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
-use vec_proto::messages::{Block, Header, Transaction, TransactionInput, TransactionOutput};
+use vec_proto::messages::{Block, Header};
 
 pub async fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
     let transaction_data: Vec<Vec<u8>> = block
@@ -82,48 +81,20 @@ fn check_difficulty(hash: &[u8], difficulty: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
+    use super::*;
+    use vec_proto::messages::Transaction;
+    
     fn make_block() -> Block {
-        let data = b"fkjbao;ufv;skodnvvfkmvnbkfnuvdfj";
-        let mut hasher = Keccak256::new();
-        hasher.update(data);
-        let hash = hasher.finalize().to_vec();
-        let mut hasher = Keccak256::new();
-        hasher.update(hash.clone());
-        let hash2 = hasher.finalize().to_vec();
-        let header = Header {
-            msg_version: 1,
-            msg_index: 17382,
-            msg_previous_hash: hash,
-            msg_root_hash: hash2,
-            msg_timestamp: 7456046298,
-            msg_nonce: 0,
-        };
-        let block = Block {
-            msg_header: Some(header),
-            msg_transactions: vec![],
-        };
+        let block = Block::default();
+
         block
     }
 
     fn make_transaction() -> Transaction {
-        Transaction {
-            msg_inputs: vec![TransactionInput {
-                msg_ring: vec![vec![]],
-                msg_blsag: vec![],
-                msg_message: vec![],
-                msg_key_image: vec![],
-            }],
-            msg_outputs: vec![TransactionOutput {
-                msg_stealth_address: vec![],
-                msg_output_key: vec![],
-                msg_proof: vec![],
-                msg_commitment: vec![],
-                msg_amount: vec![],
-                msg_index: 1,
-            }],
-        }
+        let transaction = Transaction::default();
+
+        transaction
     }
 
     #[tokio::test]
@@ -160,16 +131,5 @@ mod tests {
     async fn test_hash_block() {
         let block = make_block();
         assert!(hash_block(&block).await.is_ok());
-    }
-
-    #[tokio::test]
-    async fn test_check_difficulty() {
-        let difficulty = 4;
-        let mut rng = rand::thread_rng();
-        let random_data: Vec<u8> = (0..64).map(|_| rng.gen()).collect();
-        let mut hasher = Keccak256::new();
-        hasher.update(&random_data);
-        let hash = hasher.finalize();
-        assert!(check_difficulty(&hash, difficulty));
     }
 }

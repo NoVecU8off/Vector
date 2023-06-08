@@ -32,6 +32,7 @@ impl Chain {
         Ok(chain)
     }
 
+    // Return the "highest" block index in the local chain instance
     pub async fn max_index(&self) -> Result<u64, BlockStorageError> {
         match self.blocks.get_highest_index().await {
             Ok(Some(index)) => Ok(index),
@@ -40,6 +41,7 @@ impl Chain {
         }
     }
 
+    // Add the block to the chain
     pub async fn add_block(&mut self, wallet: &Wallet, block: Block) -> Result<(), ChainOpsError> {
         let header = block
             .msg_header
@@ -55,12 +57,14 @@ impl Chain {
         Ok(())
     }
 
+    // Validate the candidate block
     pub async fn validate_block(&self, incoming_block: &Block) -> Result<(), ChainOpsError> {
         self.check_previous_block_hash(incoming_block).await?;
         self.check_transactions_in_block(incoming_block).await?;
         Ok(())
     }
 
+    // Function used during the genesis to add the block without actual verifying the transactions
     pub async fn add_genesis_block(
         &mut self,
         wallet: &Wallet,
@@ -79,6 +83,7 @@ impl Chain {
         Ok(())
     }
 
+    // Returns the block from the BlockDB by its hash
     pub async fn get_block_by_hash(&self, hash: Vec<u8>) -> Result<Block, ChainOpsError> {
         match self.blocks.get(hash.clone()).await {
             Ok(Some(block)) => Ok(block),
@@ -87,16 +92,12 @@ impl Chain {
         }
     }
 
+    // Check if the hash of the previous block in DB maches the msg_previous_hash of the candidate block
     pub async fn check_previous_block_hash(
         &self,
         incoming_block: &Block,
     ) -> Result<bool, ChainOpsError> {
-        let previous_index = self.max_index().await?;
-        if previous_index > 0 {
-            let previous_hash = match self.blocks.get_hash_by_index(previous_index).await? {
-                Some(hash) => hash,
-                None => return Err(ChainOpsError::MissingBlockHash),
-            };
+        let previous_hash = self.get_previous_hash_in_chain().await?;
             if let Some(header) = incoming_block.msg_header.as_ref() {
                 if previous_hash != header.msg_previous_hash {
                     return Err(ChainOpsError::InvalidPreviousBlockHash {
@@ -107,9 +108,8 @@ impl Chain {
             } else {
                 return Err(ChainOpsError::MissingBlockHeader);
             }
+            Ok(true)
         }
-        Ok(true)
-    }
 
     pub async fn get_previous_hash_in_chain(&self) -> Result<Vec<u8>, ChainOpsError> {
         let previous_index = self.max_index().await?;
@@ -140,6 +140,7 @@ impl Chain {
         Ok(inputs_valid && outputs_valid)
     }
 
+    // Returns the sum of decrypted outputs stored in the OutputDB
     pub async fn get_balance(&self) -> u64 {
         let output_set = self.outputs.get().await.unwrap();
         let mut total_balance = 0;
@@ -150,15 +151,16 @@ impl Chain {
         total_balance
     }
 
+    // Deserialize the input and validate bLSAG and image
     pub async fn validate_inputs(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
         for input in transaction.msg_inputs.iter() {
             let signature = BLSAGSignature::from_vec(&input.msg_blsag).unwrap();
-            let vec_of_u8: &Vec<Vec<u8>> = &input.msg_ring;
-            let vec_of_compressed: Vec<CompressedRistretto> = vec_of_u8
+            let vec_ring: &Vec<Vec<u8>> = &input.msg_ring;
+            let compressed_ring: Vec<CompressedRistretto> = vec_ring
                 .iter()
                 .map(|inner_vec| CompressedRistretto::from_slice(inner_vec))
                 .collect::<Vec<_>>();
-            let ring: &[CompressedRistretto] = &vec_of_compressed;
+            let ring: &[CompressedRistretto] = &compressed_ring;
             let message = &input.msg_message;
             let image = input.msg_key_image.clone();
 
@@ -169,6 +171,7 @@ impl Chain {
         Ok(true)
     }
 
+    // Verify Pedersen commitment and range proof
     pub fn validate_outputs(&self, transaction: &Transaction) -> Result<bool, ChainOpsError> {
         for output in transaction.msg_outputs.iter() {
             let pc_gens = PedersenGens::default();
@@ -222,6 +225,7 @@ impl Chain {
         false
     }
 
+    // Check if the output belongs to us, if so - store it in OutputDB
     pub async fn process_transaction(
         &self,
         wallet: &Wallet,

@@ -27,6 +27,7 @@ pub struct BLSAGSignature {
 }
 
 impl Wallet {
+    // Constructs new Wallet
     pub fn generate() -> Wallet {
         let mut rng = rand::thread_rng();
         let secret_spend_key: Scalar = Scalar::random(&mut rng);
@@ -42,6 +43,7 @@ impl Wallet {
         ]
         .concat();
         let address = bs58::encode(&data).into_string();
+
         Wallet {
             secret_spend_key,
             secret_view_key,
@@ -51,6 +53,7 @@ impl Wallet {
         }
     }
 
+    // Recover the keys using secret spend key
     pub fn reconstruct(secret_spend_key: Scalar) -> Wallet {
         let mut hasher = Keccak256::new();
         hasher.update(secret_spend_key.as_bytes());
@@ -64,6 +67,7 @@ impl Wallet {
         ]
         .concat();
         let address = bs58::encode(&data).into_string();
+
         Wallet {
             secret_spend_key,
             secret_view_key,
@@ -73,6 +77,7 @@ impl Wallet {
         }
     }
 
+    // Ordinary ECSDA signing function
     pub fn sign(&self, message: &[u8]) -> Signature {
         let mut rng = rand::thread_rng();
         let nonce = Scalar::random(&mut rng);
@@ -85,9 +90,11 @@ impl Wallet {
         let h = hasher.finalize();
         let h_scalar = Scalar::from_bits(h.into());
         let s = nonce - h_scalar * self.secret_spend_key;
+
         Signature { r, s }
     }
 
+    // Collects outputs from OutputDB and constructs Inputs for transaction
     pub async fn prepare_inputs(&self) -> (Vec<TransactionInput>, u64) {
         let owned_db = sled::open("C:/Vector/outputs").expect("failed to open database");
         let output_db = output_db::OutputDB::new(owned_db);
@@ -117,9 +124,11 @@ impl Wallet {
             };
             inputs.push(input);
         }
+
         (inputs, total_input_amount)
     }
 
+    // Constructs Outputs for the transaction by given Recipient address, output index and amount
     pub fn prepare_output(
         &self,
         recipient_address: &str,
@@ -157,6 +166,7 @@ impl Wallet {
             32,
         )
         .unwrap();
+
         TransactionOutput {
             msg_stealth_address: stealth.to_bytes().to_vec(),
             msg_output_key: output_key.to_bytes().to_vec(),
@@ -167,6 +177,7 @@ impl Wallet {
         }
     }
 
+    // Constructs change output in case the sum of inputs exceeds the amount we want to spend
     pub fn prepare_change_output(&self, change: u64, output_index: u64) -> TransactionOutput {
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
@@ -208,6 +219,7 @@ impl Wallet {
         }
     }
 
+    // Used to scan the output to check if the output belongs to the user
     pub fn check_property(
         &self,
         output_key: CompressedRistretto,
@@ -223,9 +235,11 @@ impl Wallet {
         let hash_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_scalar;
         let result = stealth.decompress().unwrap() - hs_g;
+
         result.compress() == self.public_spend_key
     }
 
+    // Standard transaction amount encryption using Shamir's Secret Sharing
     pub fn encrypt_amount(&self, q_bytes: &[u8], output_index: u64, amount: u64) -> [u8; 8] {
         let mut hasher = Keccak256::new();
         hasher.update(q_bytes);
@@ -239,6 +253,7 @@ impl Wallet {
         let amount_in_scalars = Scalar::from(amount).to_bytes();
         let amount_in_scalars_8 = amount_in_scalars[0..8].try_into().unwrap();
         let encrypted_amount = xor8(amount_in_scalars_8, hash_8);
+
         encrypted_amount
     }
 
@@ -265,6 +280,7 @@ impl Wallet {
         value
     }
 
+    // Complete Back’s Linkable Spontaneous Anonymous Group signature
     pub fn gen_blsag(
         &self,
         p: &[CompressedRistretto],
@@ -518,6 +534,7 @@ pub fn hash_to_point(point: &CompressedRistretto) -> RistrettoPoint {
     hasher.update(point.to_bytes());
     let hash = hasher.finalize();
     let scalar = Scalar::from_bytes_mod_order(hash.into());
+
     &constants::RISTRETTO_BASEPOINT_TABLE * &scalar
 }
 
@@ -528,6 +545,14 @@ pub fn xor8(a: [u8; 8], b: [u8; 8]) -> [u8; 8] {
     }
 
     c
+}
+
+pub fn vec_to_string(v: &Vec<u8>) -> String {
+    bs58::encode(&v).into_string()
+}
+
+pub fn string_to_vec(string: &str) -> Vec<u8> {
+    bs58::decode(string).into_vec().unwrap()
 }
 
 #[cfg(test)]

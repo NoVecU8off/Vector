@@ -4,6 +4,11 @@ use sled::{Db, IVec};
 use vec_errors::errors::*;
 use vec_proto::messages::Block;
 
+pub struct BlockDB {
+    blocks_db: Db,
+    index_db: Db,
+}
+
 #[async_trait]
 pub trait BlockStorer: Send + Sync {
     async fn put_block(
@@ -17,11 +22,6 @@ pub trait BlockStorer: Send + Sync {
     async fn get_hash_by_index(&self, index: u64) -> Result<Option<Vec<u8>>, BlockStorageError>;
     async fn get_highest_index(&self) -> Result<Option<u64>, BlockStorageError>;
     async fn is_empty(&self) -> Result<bool, BlockStorageError>;
-}
-
-pub struct BlockDB {
-    blocks_db: Db,
-    index_db: Db,
 }
 
 impl BlockDB {

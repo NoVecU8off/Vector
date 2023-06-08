@@ -24,7 +24,7 @@ async fn main() {
             return;
         }
     };
-    let scv = ServerConfig::new(port).await;
+    let scv = ServerConfig::local(port).await;
     // let scv = ServerConfig::default_v().await;
     let nsv = NodeService::new(scv).await.unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
