@@ -2542,6 +2542,7 @@ name = "vec_cli"
 version = "0.1.0"
 dependencies = [
  "bs58",
+ "reqwest",
  "rustyline",
  "tokio",
  "vec_block",
@@ -2638,7 +2639,6 @@ dependencies = [
  "prost",
  "rand 0.8.5",
  "rcgen",
- "reqwest",
  "rustls",
  "serde",
  "sha3 0.10.8",

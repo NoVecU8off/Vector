@@ -2,6 +2,7 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_crypto::cryptography::Wallet;
 use vec_node::node::*;
+use vec_errors::errors::*;
 
 enum Command {
     SendTransaction { address: String, amount: u64 },
@@ -198,4 +199,11 @@ async fn main() {
             eprintln!("Server future error: {}", e);
         }
     }
+}
+
+pub async fn get_ip() -> Result<String, ServerConfigError> {
+    let response = reqwest::get("https://api.ipify.org").await?;
+    let ip = response.text().await?;
+    let ip_port = format!("{}:8080", ip);
+    Ok(ip_port)
 }

@@ -30,7 +30,7 @@ pub struct NodeService {
     pub wallet: Arc<Wallet>,
     pub ip: String,
     pub version: u32,
-    pub peers: Arc<DashMap<String, Arc<Mutex<NodeClient<Channel>>>>>,
+    pub peers: Arc<DashMap<String, Arc<RwLock<NodeClient<Channel>>>>>,
     pub mempool: Arc<Mempool>,
     pub blockchain: Arc<RwLock<Chain>>,
     pub logger: Logger,
@@ -440,7 +440,7 @@ impl NodeService {
             let self_clone = self.clone();
             let ip = self_clone.ip;
             let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
+                let mut peer_client_lock = peer_client.write().await;
                 let message = PushBlockRequest {
                     msg_block_hash: hash_clone,
                     msg_ip: ip.clone(),
@@ -524,7 +524,7 @@ impl NodeService {
             let self_clone = self.clone();
             let ip = self_clone.ip;
             let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
+                let mut peer_client_lock = peer_client.write().await;
                 let message = PushTxRequest {
                     msg_transaction_hash: hash_clone,
                     msg_ip: ip.clone(),
@@ -552,7 +552,7 @@ impl NodeService {
         if let Some(client_arc_mutex) = self.peers.get(sender_ip) {
             info!(self.logger, "Pulling new transaction from {:?}", sender_ip);
             let client_arc = client_arc_mutex.clone();
-            let mut client = client_arc.lock().await;
+            let mut client = client_arc.write().await;
             let ip = &self.ip;
             let message = PullTxRequest {
                 msg_transaction_hash: transaction_hash,
@@ -588,7 +588,7 @@ impl NodeService {
             info!(self.logger, "Pulling new block from {:?}", sender_ip);
             let ip = &self.ip;
             let client_arc = client_arc_mutex.clone();
-            let mut client = client_arc.lock().await;
+            let mut client = client_arc.write().await;
             let message = PullBlockRequest {
                 msg_block_hash: block_hash.clone(),
                 msg_ip: ip.to_string(),
@@ -709,7 +709,7 @@ impl NodeService {
                 .get(&ip)
                 .ok_or(NodeServiceError::PeerNotFound)?
                 .clone();
-            let mut client_lock = client.lock().await;
+            let mut client_lock = client.write().await;
             self.synchronize_with_client(wallet, &mut client_lock)
                 .await?;
             drop(client_lock);
@@ -760,7 +760,7 @@ impl NodeService {
             let self_clone = self.clone();
             let my_addr_clone = my_addr.clone();
             let task = tokio::spawn(async move {
-                let mut peer_client_lock = peer_client.lock().await;
+                let mut peer_client_lock = peer_client.write().await;
                 let req = Request::new(msg_clone);
                 if addr != my_addr_clone {
                     if let Err(err) = peer_client_lock.handle_peer_list(req).await {
@@ -933,11 +933,4 @@ pub async fn shutdown(
     shutdown_tx
         .send(())
         .map_err(|_| NodeServiceError::ShutdownError)
-}
-
-pub async fn get_ip() -> Result<String, ServerConfigError> {
-    let response = reqwest::get("https://api.ipify.org").await?;
-    let ip = response.text().await?;
-    let ip_port = format!("{}:8080", ip);
-    Ok(ip_port)
 }
