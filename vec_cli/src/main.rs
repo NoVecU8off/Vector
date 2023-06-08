@@ -70,7 +70,7 @@ async fn main() {
             }
         };
     } else {
-        let wallet = Wallet::generate();
+        let wallet = Wallet::generate().unwrap();
         secret_spend_key = bs58::encode(wallet.secret_spend_key_to_vec()).into_string();
         println!("Your new wallet has been generated.");
         println!("Please, save your secret key: {}", secret_spend_key);

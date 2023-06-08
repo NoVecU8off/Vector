@@ -2537,6 +2537,7 @@ dependencies = [
  "rand 0.8.5",
  "sha3 0.10.8",
  "sled",
+ "vec_errors",
  "vec_proto",
  "vec_storage",
 ]

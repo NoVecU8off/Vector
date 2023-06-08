@@ -6,11 +6,12 @@ use curve25519_dalek_ng::{
 use hex::encode;
 use merlin::Transcript;
 use prost::Message;
+use rand::seq::SliceRandom;
 use sha3::{Digest, Keccak256};
-use vec_crypto::cryptography::{hash_to_point, BLSAGSignature, Wallet};
+use vec_crypto::cryptography::{derive_keys_from_address, hash_to_point, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
-use vec_proto::messages::{Block, Transaction};
+use vec_proto::messages::{Block, Transaction, TransactionInput, TransactionOutput};
 use vec_storage::{block_db::*, image_db::*, output_db::*};
 use vec_utils::utils::*;
 
@@ -238,8 +239,8 @@ impl Chain {
             let key = CompressedRistretto::from_slice(&output.msg_output_key);
             let stealth = CompressedRistretto::from_slice(&output.msg_stealth_address);
 
-            if wallet.check_property(key, index, stealth) {
-                let decrypted_amount = wallet.decrypt_amount(key, index, &output.msg_amount);
+            if wallet.check_property(key, index, stealth)? {
+                let decrypted_amount = wallet.decrypt_amount(key, index, &output.msg_amount)?;
                 let owned_output = OwnedOutput {
                     output: Output {
                         stealth: output.msg_stealth_address.clone(),
@@ -254,6 +255,139 @@ impl Chain {
             }
         }
         Ok(())
+    }
+
+    // Collects outputs from OutputDB and constructs Inputs for transaction
+    pub async fn prepare_inputs(
+        &self,
+        wallet: &Wallet,
+    ) -> Result<(Vec<TransactionInput>, u64), ChainOpsError> {
+        let output_set = self.outputs.get().await.unwrap();
+        let mut total_input_amount = 0;
+        let mut inputs = Vec::new();
+        for owned_output in &output_set {
+            let decrypted_amount = owned_output.decrypted_amount;
+            total_input_amount += decrypted_amount;
+            let owned_stealth_addr = &owned_output.output.stealth;
+            let ristretto_stealth = Wallet::public_spend_key_from_vec(owned_stealth_addr).unwrap();
+            let wallets_res: Result<Vec<Wallet>, _> = (0..9).map(|_| Wallet::generate()).collect();
+            let wallets = wallets_res?;
+            let mut s_addrs: Vec<CompressedRistretto> =
+                wallets.iter().map(|w| w.public_spend_key).collect();
+            s_addrs.push(ristretto_stealth);
+            s_addrs.shuffle(&mut rand::thread_rng());
+            let s_addrs_vec: Vec<Vec<u8>> =
+                s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect();
+            let m = b"Message example";
+            let blsag = wallet.gen_blsag(&s_addrs, m, &ristretto_stealth)?;
+            let image = blsag.i;
+            let input = TransactionInput {
+                msg_ring: s_addrs_vec,
+                msg_blsag: blsag.to_vec(),
+                msg_message: m.to_vec(),
+                msg_key_image: image.to_bytes().to_vec(),
+            };
+            inputs.push(input);
+        }
+
+        Ok((inputs, total_input_amount))
+    }
+
+    // Constructs Outputs for the transaction by given Recipient address, output index and amount
+    pub fn prepare_output(
+        &self,
+        wallet: &Wallet,
+        recipient_address: &str,
+        output_index: u64,
+        amount: u64,
+    ) -> Result<TransactionOutput, ChainOpsError> {
+        let (recipient_spend_key, recipient_view_key) =
+            derive_keys_from_address(recipient_address).unwrap();
+        let mut rng = rand::thread_rng();
+        let r = Scalar::random(&mut rng);
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
+        let recipient_view_key_point = recipient_view_key.decompress().unwrap();
+        let q = r * recipient_view_key_point;
+        let q_bytes = q.compress().to_bytes();
+        let mut hasher = Keccak256::new();
+        hasher.update(q_bytes);
+        hasher.update(output_index.to_le_bytes());
+        let hash = hasher.finalize();
+        let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
+        let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
+        let recipient_spend_key_point = recipient_spend_key.decompress().unwrap();
+        let stealth = (hs_times_g + recipient_spend_key_point).compress();
+        let encrypted_amount = wallet.encrypt_amount(&q_bytes, output_index, amount)?;
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+        let blinding = Scalar::random(&mut rand::thread_rng());
+        let mut prover_transcript = Transcript::new(b"Transaction");
+        let secret = amount;
+        let (proof, commitment) = RangeProof::prove_single(
+            &bp_gens,
+            &pc_gens,
+            &mut prover_transcript,
+            secret,
+            &blinding,
+            32,
+        )
+        .unwrap();
+
+        Ok(TransactionOutput {
+            msg_stealth_address: stealth.to_bytes().to_vec(),
+            msg_output_key: output_key.to_bytes().to_vec(),
+            msg_proof: proof.to_bytes().to_vec(),
+            msg_commitment: commitment.to_bytes().to_vec(),
+            msg_amount: encrypted_amount.to_vec(),
+            msg_index: output_index,
+        })
+    }
+
+    // Constructs change output in case the sum of inputs exceeds the amount we want to spend
+    pub fn prepare_change_output(
+        &self,
+        wallet: &Wallet,
+        change: u64,
+        output_index: u64,
+    ) -> Result<TransactionOutput, ChainOpsError> {
+        let mut rng = rand::thread_rng();
+        let r = Scalar::random(&mut rng);
+        let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
+        let view_key_point = &wallet.public_view_key.decompress().unwrap();
+        let q = r * view_key_point;
+        let q_bytes = q.compress().to_bytes();
+        let mut hasher = Keccak256::new();
+        hasher.update(q_bytes);
+        hasher.update(output_index.to_le_bytes());
+        let hash = hasher.finalize();
+        let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
+        let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
+        let spend_key_point = &wallet.public_spend_key.decompress().unwrap();
+        let stealth = (hs_times_g + spend_key_point).compress();
+        let encrypted_amount = wallet.encrypt_amount(&q_bytes, output_index, change)?;
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(64, 1);
+        let blinding = Scalar::random(&mut rand::thread_rng());
+        let mut prover_transcript = Transcript::new(b"Transaction");
+        let secret = change;
+        let (proof, commitment) = RangeProof::prove_single(
+            &bp_gens,
+            &pc_gens,
+            &mut prover_transcript,
+            secret,
+            &blinding,
+            32,
+        )
+        .unwrap();
+
+        Ok(TransactionOutput {
+            msg_stealth_address: stealth.to_bytes().to_vec(),
+            msg_output_key: output_key.to_bytes().to_vec(),
+            msg_proof: proof.to_bytes().to_vec(),
+            msg_commitment: commitment.to_bytes().to_vec(),
+            msg_amount: encrypted_amount.to_vec(),
+            msg_index: output_index,
+        })
     }
 }
 
@@ -297,7 +431,7 @@ mod tests {
     }
 
     async fn create_test_wallet() -> Wallet {
-        Wallet::generate()
+        Wallet::generate().unwrap()
     }
 
     #[tokio::test]

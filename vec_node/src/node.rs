@@ -230,13 +230,8 @@ impl NodeService {
         };
 
         let vec_secret = string_to_vec(&secret_key);
-        let secret_spend_key = Wallet::secret_spend_key_from_vec(&vec_secret);
-        let w = if let Some(secret_spend_key) = secret_spend_key {
-            Wallet::reconstruct(secret_spend_key)
-        } else {
-            return Err(NodeServiceError::InvalidSecretSpendKey);
-        };
-        let wallet = Arc::new(w);
+        let secret_spend_key = Wallet::secret_spend_key_from_vec(&vec_secret)?;
+        let wallet = Arc::new(Wallet::reconstruct(secret_spend_key)?);
 
         let version: u32 = 1;
 
@@ -432,8 +427,7 @@ impl NodeService {
         let hash = hex::encode(hash_block(&block)?);
         info!(
             self.logger,
-            "\nGenesis block {:?} with tx successfully created",
-            hash
+            "\nGenesis block {:?} with tx successfully created", hash
         );
 
         Ok(())
@@ -484,17 +478,30 @@ impl NodeService {
         recipient_address: &str,
         a: u64,
     ) -> Result<(), NodeServiceError> {
-        let (inputs, total_input_amount) = self.wallet.prepare_inputs().await;
+        let (inputs, total_input_amount) = self
+            .blockchain
+            .write()
+            .await
+            .prepare_inputs(&self.wallet)
+            .await?;
         if total_input_amount < a {
             return Err(NodeServiceError::InsufficientBalance);
         }
         let mut outputs = Vec::new();
         if total_input_amount > a {
             let change = total_input_amount - a;
-            let change = self.wallet.prepare_change_output(change, 2);
+            let change =
+                self.blockchain
+                    .write()
+                    .await
+                    .prepare_change_output(&self.wallet, change, 2)?;
             outputs.push(change);
         }
-        let output = self.wallet.prepare_output(recipient_address, 1, a);
+        let output =
+            self.blockchain
+                .write()
+                .await
+                .prepare_output(&self.wallet, recipient_address, 1, a)?;
         outputs.push(output);
         let transaction = Transaction {
             msg_inputs: inputs,
@@ -882,7 +889,7 @@ impl NodeService {
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let spend_key_point = &self.wallet.public_spend_key.decompress().unwrap();
         let stealth = (hs_times_g + spend_key_point).compress();
-        let encrypted_amount = self.wallet.encrypt_amount(&q_bytes, output_index, amount);
+        let encrypted_amount = self.wallet.encrypt_amount(&q_bytes, output_index, amount)?;
         let output = TransactionOutput {
             msg_stealth_address: stealth.to_bytes().to_vec(),
             msg_output_key: output_key.to_bytes().to_vec(),

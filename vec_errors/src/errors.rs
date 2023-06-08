@@ -112,6 +112,20 @@ pub enum BlockOpsError {
 }
 
 #[derive(Debug, Error)]
+pub enum CryptoOpsError {
+    #[error("Failed to decompress Ristretto")]
+    DecompressionFailed,
+    #[error("Failed to get 8 bytes [0..8])")]
+    TryIntoError,
+    #[error("Invalid length of the BLSAG vec length")]
+    InvalidBLSAGLength,
+    #[error("Trying to vec address from invalid string")]
+    InvalidAddressString,
+    #[error("Trying to recover Wallet from vec with invalid length")]
+    InvalidVecLength,
+}
+
+#[derive(Debug, Error)]
 pub enum MerkleTreeError {
     #[error("Failed to compute hashes")]
     HashingError,
@@ -180,9 +194,11 @@ pub enum ChainOpsError {
     #[error(transparent)]
     TaskPanic(tokio::task::JoinError),
     #[error(transparent)]
-    UTXOStorageError(#[from] UTXOStorageError),
-    #[error(transparent)]
     OutputStorageError(#[from] OutputStorageError),
+    #[error(transparent)]
+    CryptoOpsError(#[from] CryptoOpsError),
+    #[error(transparent)]
+    UTXOStorageError(#[from] UTXOStorageError),
 }
 
 #[derive(Debug, Error)]
@@ -253,6 +269,8 @@ pub enum NodeServiceError {
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]
     TaskPanic(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    CryptoOpsError(#[from] CryptoOpsError),
     #[error("Unable to open Sled DB")]
     SledOpenError,
 }
