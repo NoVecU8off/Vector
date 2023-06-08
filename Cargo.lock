@@ -2592,6 +2592,7 @@ dependencies = [
 name = "vec_cli"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "rustyline",
  "tokio",
  "vec_block",

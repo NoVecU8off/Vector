@@ -98,18 +98,18 @@ impl Chain {
         incoming_block: &Block,
     ) -> Result<bool, ChainOpsError> {
         let previous_hash = self.get_previous_hash_in_chain().await?;
-            if let Some(header) = incoming_block.msg_header.as_ref() {
-                if previous_hash != header.msg_previous_hash {
-                    return Err(ChainOpsError::InvalidPreviousBlockHash {
-                        expected: encode(previous_hash),
-                        got: encode(header.msg_previous_hash.clone()),
-                    });
-                }
-            } else {
-                return Err(ChainOpsError::MissingBlockHeader);
+        if let Some(header) = incoming_block.msg_header.as_ref() {
+            if previous_hash != header.msg_previous_hash {
+                return Err(ChainOpsError::InvalidPreviousBlockHash {
+                    expected: encode(previous_hash),
+                    got: encode(header.msg_previous_hash.clone()),
+                });
             }
-            Ok(true)
+        } else {
+            return Err(ChainOpsError::MissingBlockHeader);
         }
+        Ok(true)
+    }
 
     pub async fn get_previous_hash_in_chain(&self) -> Result<Vec<u8>, ChainOpsError> {
         let previous_index = self.max_index().await?;

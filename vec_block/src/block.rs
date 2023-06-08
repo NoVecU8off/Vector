@@ -84,7 +84,7 @@ mod tests {
 
     use super::*;
     use vec_proto::messages::Transaction;
-    
+
     fn make_block() -> Block {
         let block = Block::default();
 

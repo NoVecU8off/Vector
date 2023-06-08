@@ -189,6 +189,8 @@ pub enum ChainOpsError {
 pub enum NodeServiceError {
     #[error("Failed to create chain: {0}")]
     ChainCreationError(String),
+    #[error("Failed to reconstuct wallet due to invalid secret key format")]
+    InvalidSecretSpendKey,
     #[error("Failed to setup server: {0}")]
     TonicTransportError(#[from] tonic::transport::Error),
     #[error("Failed to bootstrap node: {0}")]

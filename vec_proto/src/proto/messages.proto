@@ -43,7 +43,7 @@ message LocalState {
 }
 
 message Version {
-    string msg_version = 1;
+    uint32 msg_version = 1;
     string msg_address = 2;
     string msg_ip = 4;
     uint64 msg_max_local_index = 5;

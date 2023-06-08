@@ -1,5 +1,6 @@
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use vec_cryptography::cryptography::Wallet;
 use vec_node::node::*;
 use vec_server::server::*;
 
@@ -16,16 +17,43 @@ enum Command {
 #[tokio::main]
 async fn main() {
     let mut rl = DefaultEditor::new().unwrap();
-    let readline = rl.readline("Please enter prort <xxxx>: ");
+
+    let readline = rl.readline("Please enter port <xxxx>: ");
     let port = match readline {
         Ok(line) => line.trim().to_string(),
         Err(_) => {
-            eprintln!("Failed to read IP");
+            eprintln!("Failed to read port");
             return;
         }
     };
-    let scv = ServerConfig::local(port).await;
-    // let scv = ServerConfig::default_v().await;
+
+    let readline = rl.readline("Do you have a secret key? (yes/no): ");
+    let has_secret_key = match readline {
+        Ok(line) => line.trim().eq_ignore_ascii_case("yes"),
+        Err(_) => {
+            eprintln!("Failed to read response");
+            return;
+        }
+    };
+
+    let secret_key: String;
+    if has_secret_key {
+        let readline = rl.readline("Please enter your secret key: ");
+        secret_key = match readline {
+            Ok(line) => line.trim().to_string(),
+            Err(_) => {
+                eprintln!("Failed to read secret key");
+                return;
+            }
+        };
+    } else {
+        let wallet = Wallet::generate();
+        secret_key = bs58::encode(wallet.secret_spend_key_to_vec()).into_string();
+        println!("Your new wallet has been generated.");
+        println!("Please, save your secret key: {}", secret_key);
+    }
+
+    let scv = ServerConfig::local(secret_key, port).await;
     let nsv = NodeService::new(scv).await.unwrap();
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let mut nsv_clone = nsv.clone();
@@ -46,11 +74,11 @@ async fn main() {
                 },
                 Some(Command::GetBalance) => {
                     let balance = nsv.get_balance().await;
-                    println!("Balance: {}", balance);
+                    println!("Your balance: {}", balance);
                 }
                 Some(Command::GetIndex) => {
                     let height = nsv.get_last_index().await.unwrap();
-                    println!("Height: {}", height);
+                    println!("Current Block's index: {}", height);
                 }
                 Some(Command::Genesis) => match nsv.make_genesis_block().await {
                     Ok(_) => println!("Genesis block created successfully"),
