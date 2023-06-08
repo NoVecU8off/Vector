@@ -1,6 +1,6 @@
-use vec_proto::messages::{Transaction};
-use sha3::{Digest, Sha3_256};
 use prost::Message;
+use sha3::{Digest, Sha3_256};
+use vec_proto::messages::Transaction;
 
 pub async fn hash_transaction(transaction: &Transaction) -> Vec<u8> {
     let mut transaction_bytes = Vec::new();
@@ -21,8 +21,8 @@ pub fn hash_transaction_sync(transaction: &Transaction) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
     use futures::executor::block_on;
+    use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
 
     #[test]
     fn test_hash_transaction() {

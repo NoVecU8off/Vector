@@ -33,7 +33,6 @@ pub enum UTXOStorageError {
     WriteError,
     #[error("Unable to read from DB")]
     ReadError,
-
 }
 
 #[derive(Debug, Error)]
@@ -159,19 +158,13 @@ pub enum ChainOpsError {
     #[error("Chain is empty")]
     ChainIsEmpty,
     #[error("Given height {height} is out of bounds, max height is: {max_height}")]
-    HeightTooHigh {
-        height: usize,
-        max_height: usize
-    },
+    HeightTooHigh { height: usize, max_height: usize },
     #[error(transparent)]
     BlockOpsError(#[from] BlockOpsError),
     #[error("Invalid pk key in the block")]
     InvalidPublicKey,
     #[error("Invalid previous block's hash, expected: {expected}, got: {got}")]
-    InvalidPreviousBlockHash {
-        expected: String,
-        got: String
-    },
+    InvalidPreviousBlockHash { expected: String, got: String },
     #[error("Invalid pk key in the transaction's input")]
     InvalidPublicKeyInTransactionInput,
     #[error("Invalid transaction's signature")]
@@ -257,7 +250,7 @@ pub enum NodeServiceError {
     #[error(transparent)]
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]
-    TaskPanic(#[from] tokio::task::JoinError), 
+    TaskPanic(#[from] tokio::task::JoinError),
     #[error("Unable to open Sled DB")]
     SledOpenError,
 }

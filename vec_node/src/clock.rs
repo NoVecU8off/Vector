@@ -1,6 +1,6 @@
-use tonic::codegen::Arc;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
+use tonic::codegen::Arc;
 
 #[derive(Clone)]
 pub struct Clock {
@@ -29,7 +29,8 @@ impl Clock {
                 if prev_millis + 1 >= 1000 {
                     millis.store(0, Ordering::SeqCst);
                     let prev_sec = sec.fetch_add(1, Ordering::SeqCst);
-                    if prev_sec + 1 >= 86400 * 2 { // seconds in two days
+                    if prev_sec + 1 >= 86400 * 2 {
+                        // seconds in two days
                         sec.store(0, Ordering::SeqCst);
                         epoch.fetch_add(1, Ordering::SeqCst);
                     }

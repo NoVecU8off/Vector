@@ -1,7 +1,7 @@
-use vec_errors::errors::*;
-use sled::Db;
-use serde::{Serialize, Deserialize};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+use sled::Db;
+use vec_errors::errors::*;
 
 #[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Output {
@@ -31,22 +31,25 @@ pub struct OutputDB {
 
 impl OutputDB {
     pub fn new(owned_db: Db) -> Self {
-        OutputDB {
-            owned_db,
-        }
+        OutputDB { owned_db }
     }
 }
 
 #[async_trait]
 impl OutputStorer for OutputDB {
     async fn put(&self, owned_output: &OwnedOutput) -> Result<(), OutputStorageError> {
-        let owned_bin = bincode::serialize(owned_output).map_err(|_| OutputStorageError::SerializationError)?;
-        self.owned_db.insert(&owned_output.output.stealth, owned_bin).map_err(|_| OutputStorageError::WriteError)?;
+        let owned_bin =
+            bincode::serialize(owned_output).map_err(|_| OutputStorageError::SerializationError)?;
+        self.owned_db
+            .insert(&owned_output.output.stealth, owned_bin)
+            .map_err(|_| OutputStorageError::WriteError)?;
         Ok(())
     }
 
     async fn remove(&self, key: &Vec<u8>) -> Result<(), OutputStorageError> {
-        self.owned_db.remove(key).map_err(|_| OutputStorageError::WriteError)?;
+        self.owned_db
+            .remove(key)
+            .map_err(|_| OutputStorageError::WriteError)?;
         Ok(())
     }
 
@@ -54,7 +57,8 @@ impl OutputStorer for OutputDB {
         let mut outputs = vec![];
         for result in self.owned_db.iter() {
             let (_key, value) = result.map_err(|_| OutputStorageError::ReadError)?;
-            let owned_output: OwnedOutput = bincode::deserialize(&value).map_err(|_| OutputStorageError::DeserializationError)?;
+            let owned_output: OwnedOutput = bincode::deserialize(&value)
+                .map_err(|_| OutputStorageError::DeserializationError)?;
             outputs.push(owned_output);
         }
         Ok(outputs)

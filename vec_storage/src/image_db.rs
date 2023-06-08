@@ -1,6 +1,6 @@
-use sled::Db;
-use curve25519_dalek_ng::ristretto::CompressedRistretto;
 use async_trait::async_trait;
+use curve25519_dalek_ng::ristretto::CompressedRistretto;
+use sled::Db;
 use vec_errors::errors::*;
 
 pub struct ImageDB {
@@ -15,9 +15,7 @@ pub trait ImageStorer: Send + Sync {
 
 impl ImageDB {
     pub fn new(db: Db) -> Self {
-        ImageDB {
-            db,
-        }
+        ImageDB { db }
     }
 }
 
@@ -27,7 +25,8 @@ impl ImageStorer for ImageDB {
         let db = self.db.clone();
         let key_image = CompressedRistretto::from_slice(&key_image);
         let key_image_bytes = key_image.as_bytes();
-        db.insert(key_image_bytes, &[]).map_err(|_| UTXOStorageError::WriteError)?;
+        db.insert(key_image_bytes, &[])
+            .map_err(|_| UTXOStorageError::WriteError)?;
         Ok(())
     }
 
@@ -35,7 +34,10 @@ impl ImageStorer for ImageDB {
         let db = self.db.clone();
         let key_image = CompressedRistretto::from_slice(&key_image);
         let key_image_bytes = key_image.as_bytes();
-        match db.get(key_image_bytes).map_err(|_| UTXOStorageError::ReadError)? {
+        match db
+            .get(key_image_bytes)
+            .map_err(|_| UTXOStorageError::ReadError)?
+        {
             Some(_) => Ok(true),
             None => Ok(false),
         }

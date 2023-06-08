@@ -1,12 +1,13 @@
-use vec_proto::messages::{Block, Header, Transaction, TransactionInput, TransactionOutput};
-use vec_merkle::merkle::{MerkleTree};
-use sha3::{Keccak256, Digest};
-use vec_errors::errors::*;
 use prost::Message;
 use rand::Rng;
+use sha3::{Digest, Keccak256};
+use vec_errors::errors::*;
+use vec_merkle::merkle::MerkleTree;
+use vec_proto::messages::{Block, Header, Transaction, TransactionInput, TransactionOutput};
 
 pub async fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
-    let transaction_data: Vec<Vec<u8>> = block.msg_transactions
+    let transaction_data: Vec<Vec<u8>> = block
+        .msg_transactions
         .iter()
         .map(|transaction| {
             let mut bytes = Vec::new();
@@ -54,7 +55,7 @@ pub async fn hash_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
     let mut bytes = Vec::new();
     block.encode(&mut bytes).unwrap();
     let mut hasher = Keccak256::new();
-        hasher.update(&bytes);
+    hasher.update(&bytes);
     let hash = hasher.finalize().to_vec();
     Ok(hash)
 }
@@ -82,14 +83,14 @@ fn check_difficulty(hash: &[u8], difficulty: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     fn make_block() -> Block {
         let data = b"fkjbao;ufv;skodnvvfkmvnbkfnuvdfj";
         let mut hasher = Keccak256::new();
-            hasher.update(data);
+        hasher.update(data);
         let hash = hasher.finalize().to_vec();
         let mut hasher = Keccak256::new();
-            hasher.update(hash.clone());
+        hasher.update(hash.clone());
         let hash2 = hasher.finalize().to_vec();
         let header = Header {
             msg_version: 1,
@@ -101,7 +102,7 @@ mod tests {
         };
         let block = Block {
             msg_header: Some(header),
-            msg_transactions: vec![]
+            msg_transactions: vec![],
         };
         block
     }
@@ -171,5 +172,4 @@ mod tests {
         let hash = hasher.finalize();
         assert!(check_difficulty(&hash, difficulty));
     }
-
 }

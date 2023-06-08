@@ -1,10 +1,17 @@
-use sha3::{Sha3_256, Digest};
+use sha3::{Digest, Sha3_256};
 
 #[derive(Clone, Debug)]
 pub enum MerkleTree {
     Empty,
-    Leaf { hash: Vec<u8>, data: Vec<u8> },
-    Node { hash: Vec<u8>, left: Box<MerkleTree>, right: Box<MerkleTree> },
+    Leaf {
+        hash: Vec<u8>,
+        data: Vec<u8>,
+    },
+    Node {
+        hash: Vec<u8>,
+        left: Box<MerkleTree>,
+        right: Box<MerkleTree>,
+    },
 }
 
 impl MerkleTree {
@@ -20,14 +27,11 @@ impl MerkleTree {
                 let middle = data_list.len() / 2;
                 let left_tree = MerkleTree::from_list(&data_list[..middle]);
                 let right_tree = MerkleTree::from_list(&data_list[middle..]);
-                let combined_hash = combine_hash(
-                    &left_tree.get_hash(),
-                    &right_tree.get_hash()
-                );
-                MerkleTree::Node { 
+                let combined_hash = combine_hash(&left_tree.get_hash(), &right_tree.get_hash());
+                MerkleTree::Node {
                     hash: combined_hash,
                     left: Box::new(left_tree),
-                    right: Box::new(right_tree)
+                    right: Box::new(right_tree),
                 }
             }
         }
@@ -44,13 +48,15 @@ impl MerkleTree {
     pub fn get_proof(&self, data: &[u8]) -> Option<Vec<(Vec<u8>, bool)>> {
         match self {
             MerkleTree::Empty => None,
-            MerkleTree::Leaf { data: leaf_data, .. } => {
+            MerkleTree::Leaf {
+                data: leaf_data, ..
+            } => {
                 if data == leaf_data {
                     Some(vec![])
                 } else {
                     None
                 }
-            },
+            }
             MerkleTree::Node { left, right, .. } => {
                 if let Some(mut proof) = left.get_proof(data) {
                     proof.push((right.get_hash(), true));
@@ -90,7 +96,7 @@ pub fn combine_hash(hash1: &[u8], hash2: &[u8]) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    
+
     use super::*;
 
     #[test]

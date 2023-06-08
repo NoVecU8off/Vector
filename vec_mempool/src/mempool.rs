@@ -1,8 +1,7 @@
-use slog::{o, Logger, info, Drain};
-use vec_proto::messages::{Transaction};
-use vec_transaction::transaction::hash_transaction;
 use dashmap::DashMap;
-
+use slog::{info, o, Drain, Logger};
+use vec_proto::messages::Transaction;
+use vec_transaction::transaction::hash_transaction;
 
 #[derive(Debug)]
 pub struct Mempool {
@@ -26,7 +25,10 @@ impl Mempool {
     }
 
     pub fn get_transactions(&self) -> Vec<Transaction> {
-        self.transactions.iter().map(|entry| entry.value().clone()).collect::<Vec<_>>()
+        self.transactions
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect::<Vec<_>>()
     }
 
     pub fn clear(&self) {
@@ -96,7 +98,9 @@ impl Mempool {
     }
 
     pub fn get_by_hash(&self, hash: &str) -> Option<Transaction> {
-        self.transactions.get(hash).map(|entry| entry.value().clone())
+        self.transactions
+            .get(hash)
+            .map(|entry| entry.value().clone())
     }
 }
 
@@ -109,8 +113,8 @@ impl Default for Mempool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
     use futures::executor::block_on;
+    use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
 
     #[test]
     fn test_mempool_new() {
