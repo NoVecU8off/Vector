@@ -31,7 +31,7 @@ Among its core privacy features, Vector adopts the bLSAG signature scheme and ut
 ## Current tasks and problems
 
 1. **Bottlenecks**: At present, asynchronous methods are not fully parallelised, there are potential threats in the process of "avalanche" gRPC communications (e.g. situation with simultaneous incoming transactions from N-th number of participants, where N >> 10). More in-depth investigation into the processes is required.
-2. **Contracts**: At the moment, the contract code can be absolutely anything (within the WebAssembly code). A general contract schema designation is required, which will further avoid increasing the weight of the blockchain by adding incompetent (knowingly unenforceable) contracts.
+2. **Contracts**: At the moment, the contract code can be absolutely anything (within the WebAssembly code). A general contract schema designation is required, which will further avoid increasing the weight of the blockchain by adding invalid (unexecutable) contracts.
 3. **Consensus**: Curretly, the consensus (Proof of Work) can be considered unrealised. There are no methods for dealing with fork situations in the protocol. Block complexity is constant (plan to make this parameter dynamic).
 
 ## License
