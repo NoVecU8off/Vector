@@ -251,6 +251,8 @@ pub enum NodeServiceError {
     InsufficientBalance,
     #[error("Pull from the leader failed")]
     PullStateError,
+    #[error("Failed to read Contract code from the declared path")]
+    ReadContractError,
     #[error(transparent)]
     UTXOStorageError(#[from] UTXOStorageError),
     #[error("Failed to read certificates")]
@@ -337,4 +339,18 @@ impl From<reqwest::Error> for ServerConfigError {
     fn from(err: reqwest::Error) -> ServerConfigError {
         ServerConfigError::HttpRequestFailed(err)
     }
+}
+
+#[derive(Debug, Error)]
+pub enum VMError {
+    #[error("Failed to init module")]
+    ModuleInitFailed,
+    #[error("Failed to get metadata")]
+    CouldntGetMetadata,
+    #[error("Exists but no directory")]
+    ExistsButNoDirectory,
+    #[error("The path is read-only")]
+    ReadonlyPath,
+    #[error("Couldn't create path")]
+    CouldntCreatePath,
 }

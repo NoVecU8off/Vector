@@ -67,9 +67,14 @@ message Header {
     uint64 msg_nonce = 6;
 }
 
+message Contract {
+    bytes msg_code = 1;
+}
+
 message Transaction {
-    repeated TransactionInput msg_inputs = 2;
-    repeated TransactionOutput msg_outputs = 3;
+    repeated TransactionInput msg_inputs = 1;
+    repeated TransactionOutput msg_outputs = 2;
+    Contract msg_contract = 3;
 }
 
 message TransactionInput {

@@ -11,4 +11,5 @@ members = [
     "vec_cli",
     "vec_mempool",
     "vec_errors",
+    "vec_vm",
 ]

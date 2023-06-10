@@ -91,6 +91,7 @@ mod tests {
     }
 
     fn create_test_transaction(msg_index: u64) -> Transaction {
+        let contract = Contract::default();
         Transaction {
             msg_inputs: vec![TransactionInput {
                 msg_ring: vec![vec![]],
@@ -106,6 +107,7 @@ mod tests {
                 msg_amount: vec![],
                 msg_index,
             }],
+            msg_contract: Some(contract),
         }
     }
 

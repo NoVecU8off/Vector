@@ -4,6 +4,7 @@ use futures::future::try_join_all;
 use prost::Message;
 use sha3::{Digest, Keccak256};
 use slog::{error, info, o, Drain, Logger};
+use std::fs;
 use std::time::SystemTime;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::sync::{Mutex, RwLock};
@@ -476,7 +477,8 @@ impl NodeService {
     pub async fn make_transaction(
         &self,
         recipient_address: &str,
-        a: u64,
+        amount: u64,
+        contract_path: Option<&str>,
     ) -> Result<(), NodeServiceError> {
         let (inputs, total_input_amount) = self
             .blockchain
@@ -484,12 +486,12 @@ impl NodeService {
             .await
             .prepare_inputs(&self.wallet)
             .await?;
-        if total_input_amount < a {
+        if total_input_amount < amount {
             return Err(NodeServiceError::InsufficientBalance);
         }
         let mut outputs = Vec::new();
-        if total_input_amount > a {
-            let change = total_input_amount - a;
+        if total_input_amount > amount {
+            let change = total_input_amount - amount;
             let change =
                 self.blockchain
                     .write()
@@ -497,16 +499,28 @@ impl NodeService {
                     .prepare_change_output(&self.wallet, change, 2)?;
             outputs.push(change);
         }
-        let output =
-            self.blockchain
-                .write()
-                .await
-                .prepare_output(&self.wallet, recipient_address, 1, a)?;
+        let output = self.blockchain.write().await.prepare_output(
+            &self.wallet,
+            recipient_address,
+            1,
+            amount,
+        )?;
         outputs.push(output);
+
+        let contract_code = match contract_path {
+            Some(path) => {
+                let code = fs::read(path).map_err(|_| NodeServiceError::ReadContractError)?;
+                Some(Contract { msg_code: code })
+            }
+            None => None,
+        };
+
         let transaction = Transaction {
             msg_inputs: inputs,
             msg_outputs: outputs,
+            msg_contract: contract_code,
         };
+
         self.mempool.add(transaction.clone());
         info!(self.logger, "\nCreated transaction, trying to broadcast");
         let self_clone = self.clone();
@@ -599,18 +613,6 @@ impl NodeService {
                 "\nRecieved transaction was successfully validated"
             );
             self.mempool.add(transaction.clone());
-            let clone = self.clone();
-            if self.mempool.len() == 6 {
-                tokio::spawn(async move {
-                    match clone.make_block().await {
-                        Ok(_) => info!(
-                            clone.logger,
-                            "\nNew block was mined and added to the chain successfully"
-                        ),
-                        Err(e) => error!(clone.logger, "\nFaled to mine block {:?}", e),
-                    }
-                });
-            }
             self.broadcast_tx_hash(&transaction).await?;
         }
 
@@ -898,9 +900,11 @@ impl NodeService {
             msg_amount: encrypted_amount.to_vec(),
             msg_index: output_index,
         };
+        let contract = Contract::default();
         let transaction = Transaction {
             msg_inputs: vec![],
             msg_outputs: vec![output],
+            msg_contract: Some(contract),
         };
 
         Ok(transaction)

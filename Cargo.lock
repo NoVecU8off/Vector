@@ -2681,6 +2681,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "vec_vm"
+version = "0.1.0"
+
+[[package]]
 name = "version_check"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -5,10 +5,16 @@ use vec_errors::errors::*;
 use vec_node::node::*;
 
 enum Command {
-    SendTransaction { address: String, amount: u64 },
+    SendTransaction {
+        address: String,
+        amount: u64,
+        contract_path: Option<String>,
+    },
     GetBalance,
     Genesis,
-    ConnectTo { ip: String },
+    ConnectTo {
+        ip: String,
+    },
     GetAddress,
     GetIndex,
     MakeBlock,
@@ -90,8 +96,15 @@ async fn main() {
     let server_future = tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Some(Command::SendTransaction { address, amount }) => {
-                    match nsv.make_transaction(&address, amount).await {
+                Some(Command::SendTransaction {
+                    address,
+                    amount,
+                    contract_path,
+                }) => {
+                    match nsv
+                        .make_transaction(&address, amount, contract_path.as_deref())
+                        .await
+                    {
                         Ok(_) => println!("Transaction broadcasted successfully"),
                         Err(e) => eprintln!("Failed to broadcast transaction: {}", e),
                     }
@@ -139,20 +152,31 @@ async fn main() {
             Ok(line) => {
                 let command = line.trim();
                 match command {
-                    cmd if cmd.starts_with("send") => {
+                    cmd if cmd.starts_with("tx") => {
                         let parts: Vec<&str> = cmd.split_whitespace().collect();
-                        if parts.len() == 4 {
+                        if parts.len() == 3 || parts.len() == 4 {
                             let address = parts[1].to_string();
-                            let amount = match parts[3].parse::<u64>() {
+                            let amount = match parts[2].parse::<u64>() {
                                 Ok(amount) => amount,
                                 Err(_) => {
-                                    println!("Invalid amount: {}", parts[3]);
+                                    println!("Invalid amount: {}", parts[2]);
                                     continue;
                                 }
                             };
-                            let _ = tx.send(Command::SendTransaction { address, amount }).await;
+                            let contract_path = if parts.len() == 4 {
+                                Some(parts[3].to_string())
+                            } else {
+                                None
+                            };
+                            let _ = tx
+                                .send(Command::SendTransaction {
+                                    address,
+                                    amount,
+                                    contract_path,
+                                })
+                                .await;
                         } else {
-                            println!("Invalid 'send' command format. It should be 'send <address> amount <amount>'");
+                            println!("Invalid 'tx' command format. It should be 'tx <address> <amount>' or 'tx <address> <amount> <contract_path>'");
                         }
                     }
                     cmd if cmd.starts_with("connect to") => {

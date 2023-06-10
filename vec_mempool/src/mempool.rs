@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use slog::{info, o, Drain, Logger};
-use vec_proto::messages::Transaction;
+use vec_proto::messages::{Contract, Transaction};
 use vec_utils::utils::hash_transaction;
 
 #[derive(Debug)]
@@ -147,6 +147,7 @@ mod tests {
     }
 
     fn create_test_transaction() -> Transaction {
+        let contract = Contract::default();
         Transaction {
             msg_inputs: vec![TransactionInput {
                 msg_ring: vec![vec![]],
@@ -162,6 +163,7 @@ mod tests {
                 msg_amount: vec![],
                 msg_index: 1,
             }],
+            msg_contract: Some(contract),
         }
     }
 }
