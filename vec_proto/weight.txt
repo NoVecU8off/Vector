@@ -1,3 +1,5 @@
+!!!Deprecated due to the updates, but still usefull!!!
+
 TransactionInput (for each):
 
 msg_previous_tx_hash: 1 byte (field key) + 2 bytes (length-prefix for bytes) + 32 bytes (value) = 35 bytes

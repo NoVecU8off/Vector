@@ -257,9 +257,9 @@ pub enum NodeServiceError {
     BlockIndexTooLow,
     #[error("Peer not found")]
     PeerNotFound,
-    #[error("You are trying to connect to the lagging behind node")]
+    #[error("Trying to connect to the lagging behind node")]
     LaggingNode,
-    #[error("You are trying to connect to make genesis block but local chain is not empty")]
+    #[error("Trying to make genesis block but local chain is not empty")]
     ChainIsNotEmpty,
     #[error("Peer list is empty, no one to broadcast to")]
     NoRecipient,
@@ -277,6 +277,8 @@ pub enum NodeServiceError {
     PullStateError,
     #[error("Failed to read Contract code from the declared path")]
     ReadContractError,
+    #[error("Failed to get local block's index")]
+    FailedToGetIndex,
     #[error(transparent)]
     UTXOStorageError(#[from] UTXOStorageError),
     #[error("Failed to read certificates")]

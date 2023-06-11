@@ -1,0 +1,12 @@
+Parse the Rust code of the smart contract: I would use a Rust parsing library to turn
+the source code into an Abstract Syntax Tree (AST). The AST represents the structure of 
+the program in a way that's easy for my tool to analyze.
+
+Analyze the AST: I would traverse the AST, looking for particular structures that 
+correspond to the rules I'm interested in. For example, look for function 
+definitions with particular names, unsafe blocks, certain kinds of loops, or other code 
+structures.
+
+Validate the smart contract: Based on analysis, I would determine whether the smart 
+contract is valid according to protocol rules. If it's not, it would return a list of errors 
+or warnings indicating what's wrong with the contract.

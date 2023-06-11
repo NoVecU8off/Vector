@@ -112,7 +112,12 @@ impl Node for NodeService {
         let requester_index = state.msg_max_local_index;
         let mut blocks = Vec::new();
         let chain_rlock = self.blockchain.read().await;
-        for index in (requester_index + 1)..=chain_rlock.max_index().await.unwrap() {
+        
+        let max_index = chain_rlock.max_index().await.map_err(|e| {
+            Status::internal(format!("Failed to get max index: {:?}", e))
+        })?;
+        
+        for index in (requester_index + 1)..=max_index {
             match chain_rlock.blocks.get_by_index(index).await {
                 Ok(Some(block)) => blocks.push(block),
                 Ok(None) => {
@@ -127,9 +132,10 @@ impl Node for NodeService {
             }
         }
         let block_batch = BlockBatch { msg_blocks: blocks };
-
+    
         Ok(Response::new(block_batch))
     }
+    
 
     async fn handle_peer_list(
         &self,
@@ -157,7 +163,7 @@ impl Node for NodeService {
         let sender_ip = push_request.msg_ip.clone();
         let transaction_hash = push_request.msg_transaction_hash.clone();
         let bs58_hash = bs58::encode(&transaction_hash).into_string();
-
+    
         if self.mempool.has_hash(&bs58_hash) {
             Ok(Response::new(Confirmed {}))
         } else {
@@ -167,21 +173,20 @@ impl Node for NodeService {
                     .pull_transaction_from(&sender_ip, transaction_hash)
                     .await
                 {
-                    Ok(_) => Ok(Response::new(Confirmed {})),
+                    Ok(_) => (),
                     Err(e) => {
                         error!(
                             self_clone.logger,
                             "Failed to make transaction pull: {:?}", e
                         );
-                        Err(Status::internal("Failed to make transaction pull"))
                     }
                 }
-            })
-            .await
-            .unwrap()
+            });
+    
+            Ok(Response::new(Confirmed {}))
         }
     }
-
+    
     async fn handle_tx_pull(
         &self,
         request: Request<PullTxRequest>,
@@ -293,13 +298,15 @@ impl NodeService {
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db, index_db));
         let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
         let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
-        let _ip_store: Box<dyn IPStorer> = Box::new(IPDB::new(ip_db));
-        let ip_store = Arc::new(_ip_store);
-        let mempool = Arc::new(Mempool::new());
         let _blockchain = Chain::new(blocks, images, outputs)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
         let blockchain = Arc::new(RwLock::new(_blockchain));
+
+        let _ip_store: Box<dyn IPStorer> = Box::new(IPDB::new(ip_db));
+        let ip_store = Arc::new(_ip_store);
+
+        let mempool = Arc::new(Mempool::new());
 
         info!(logger, "\nNodeService created");
 
@@ -330,6 +337,7 @@ impl NodeService {
         cfg_ip: SocketAddr,
     ) -> Result<(), NodeServiceError> {
         Server::builder()
+            .accept_http1(true)
             .add_service(NodeServer::new(node_service))
             .serve(cfg_ip)
             .await
@@ -388,7 +396,10 @@ impl NodeService {
         ip: &str,
     ) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
         let chain_rlock = self.blockchain.read().await;
-        let local_index = chain_rlock.max_index().await.unwrap();
+        let local_index = match chain_rlock.max_index().await {
+            Ok(index) => index,
+            Err(_) => return Err(NodeServiceError::FailedToGetIndex),
+        };
         drop(chain_rlock);
         let mut c = make_node_client(ip).await?;
         info!(
@@ -402,12 +413,15 @@ impl NodeService {
             .into_inner();
         if v.msg_max_local_index > local_index {
             self.synchronize_with_client(&self.wallet, &mut c).await?;
+            Ok((c, v))
+        } else if v.msg_max_local_index < local_index {
+            Err(NodeServiceError::LaggingNode)
+        } else {
             info!(self.logger, "\nDialed remote node: {}", ip);
             Ok((c, v))
-        } else {
-            Err(NodeServiceError::LaggingNode)
         }
     }
+    
 
     pub async fn add_peer(
         &self,
@@ -465,7 +479,11 @@ impl NodeService {
     pub async fn make_block(&self) -> Result<(), NodeServiceError> {
         let chain_rlock = self.blockchain.read().await;
         let msg_previous_hash = chain_rlock.get_previous_hash_in_chain().await?;
-        let msg_index = chain_rlock.max_index().await.unwrap() + 1;
+        let local_index = match chain_rlock.max_index().await {
+            Ok(index) => index,
+            Err(_) => return Err(NodeServiceError::FailedToGetIndex),
+        };
+        let msg_index = local_index + 1;
         let transactions = self.mempool.get_transactions();
         let transaction_data: Vec<Vec<u8>> = transactions
             .iter()
@@ -961,9 +979,9 @@ impl NodeService {
     }
 
     pub async fn connect_to(&self, ip: String) -> Result<(), NodeServiceError> {
-        info!(self.logger, "\nTrying to bootstrap with {:?}", ip);
-        let ip_clone = ip.clone();
-        match self.dial_remote_node(&ip_clone).await {
+        info!(self.logger, "\nTrying to connect with {:?}", ip);
+
+        match self.dial_remote_node(&ip).await {
             Ok((c, v)) => {
                 match self.add_peer(c, v).await {
                     Ok(_) => {
@@ -976,7 +994,7 @@ impl NodeService {
                 info!(self.logger, "\nSuccessfully bootstraped with {:?}", ip);
             }
             Err(e) => {
-                error!(self.logger, "\nFailed bootstrap and dial: {:?}", e);
+                error!(self.logger, "\nFailed to bootstrap and dial: {:?}", e);
             }
         }
 
