@@ -53,8 +53,8 @@ pub fn mine(mut block: Block) -> Result<u64, NodeServiceError> {
 }
 
 fn check_difficulty(hash: &[u8], difficulty: usize) -> bool {
-    let hex_representation = hex::encode(hash);
-    let leading_zeros = hex_representation.chars().take_while(|c| *c == '0').count();
+    let hex_hash = hex::encode(hash);
+    let leading_zeros = hex_hash.chars().take_while(|c| *c == 'd').count();
 
     leading_zeros >= difficulty
 }

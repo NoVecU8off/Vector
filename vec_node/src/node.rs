@@ -1,3 +1,4 @@
+use bs58;
 use curve25519_dalek_ng::{constants, scalar::Scalar};
 use dashmap::DashMap;
 use futures::future::try_join_all;
@@ -22,45 +23,81 @@ use vec_proto::messages::{
     node_client::NodeClient,
     node_server::{Node, NodeServer},
 };
-use vec_storage::{block_db::*, image_db::*, output_db::*};
+use vec_storage::{block_db::*, image_db::*, ip_db::*, output_db::*};
 use vec_utils::utils::hash_transaction;
 use vec_utils::utils::{hash_block, mine};
 
 #[derive(Clone)]
 pub struct NodeService {
     pub wallet: Arc<Wallet>,
-    pub ip: String,
+    pub ip: Arc<String>,
+    pub ip_store: Arc<Box<dyn IPStorer>>,
     pub version: u32,
     pub peers: Arc<DashMap<String, Arc<RwLock<NodeClient<Channel>>>>>,
     pub mempool: Arc<Mempool>,
     pub blockchain: Arc<RwLock<Chain>>,
-    pub logger: Logger,
+    pub logger: Arc<Logger>,
 }
 
 #[tonic::async_trait]
 impl Node for NodeService {
     async fn handshake(&self, request: Request<Version>) -> Result<Response<Version>, Status> {
         let version = request.into_inner();
-        let version_clone = version.clone();
-        let addr: String = version.msg_address.clone();
-        let ip: String = version.msg_ip;
-        info!(self.logger, "\nReceived version, address: {}", addr);
+        let vec_address = version.msg_address.clone();
+        let bs58_address = bs58::encode(vec_address.clone()).into_string();
+        let remote_ip = version.msg_ip.clone();
+        info!(self.logger, "\nReceived version, address: {}", bs58_address);
         let connected_addrs = self.get_addr_list();
-        if !self.contains(&addr, &connected_addrs).await && self.peers.len() < 20 {
-            let clone = self.clone();
+        if !self.contains(&bs58_address, &connected_addrs).await && self.peers.len() < 20 {
+            let self_clone = self.clone();
             tokio::spawn(async move {
-                match make_node_client(&ip).await {
+                match make_node_client(&remote_ip).await {
                     Ok(c) => {
-                        info!(clone.logger, "\nCreated node client successfully");
-                        clone.add_peer(c, version_clone.clone()).await;
+                        info!(self_clone.logger, "\nCreated node client successfully");
+                        match self_clone.add_peer(c, version.clone()).await {
+                            Ok(_) => {
+                                info!(self_clone.logger, "\nNew peer added");
+                            }
+                            Err(e) => {
+                                error!(self_clone.logger, "Failed to add peer: {:?}", e);
+                            }
+                        }
                     }
                     Err(e) => {
-                        error!(clone.logger, "\nFailed to create node client: {:?}", e);
+                        error!(self_clone.logger, "\nFailed to create node client: {:?}", e);
                     }
                 }
             });
         } else {
-            info!(self.logger, "\nAddress already connected: {}", addr);
+            match self.ip_store.get_by_address(&vec_address).await {
+                Ok(Some(stored_ip)) => {
+                    if stored_ip != remote_ip {
+                        match self.ip_store.update(&vec_address, &remote_ip).await {
+                            Ok(_) => {
+                                info!(
+                                    self.logger,
+                                    "\nIP for peer {} updated to: {}", bs58_address, remote_ip
+                                );
+                            }
+                            Err(e) => {
+                                let status = Status::internal(format!("IPStorageError: {:?}", e));
+                                return Err(status);
+                            }
+                        }
+                    }
+                }
+                Ok(None) => match self.ip_store.put(vec_address, remote_ip).await {
+                    Ok(_) => {
+                        info!(self.logger, "\nIP was inserted for: {}", bs58_address);
+                    }
+                    Err(e) => {
+                        let status = Status::internal(format!("IPStorageError: {:?}", e));
+                        return Err(status);
+                    }
+                },
+                Err(_) => return Err(Status::internal("Failed to update peer_list")),
+            }
+            info!(self.logger, "\nAddress already connected: {}", bs58_address);
         }
         let reply = self.get_version().await;
 
@@ -99,7 +136,7 @@ impl Node for NodeService {
         request: Request<PeerList>,
     ) -> Result<Response<Confirmed>, Status> {
         let peer_list = request.into_inner();
-        let peer_addresses = peer_list.msg_peers_addresses;
+        let peer_addresses = peer_list.msg_peers_ips;
         match self.bootstrap_network(peer_addresses).await {
             Ok(_) => {
                 info!(self.logger, "\nPeer list updated successfully");
@@ -119,20 +156,23 @@ impl Node for NodeService {
         let push_request = request.into_inner();
         let sender_ip = push_request.msg_ip.clone();
         let transaction_hash = push_request.msg_transaction_hash.clone();
-        let hex_hash = hex::encode(&transaction_hash);
+        let bs58_hash = bs58::encode(&transaction_hash).into_string();
 
-        if self.mempool.has_hash(&hex_hash) {
+        if self.mempool.has_hash(&bs58_hash) {
             Ok(Response::new(Confirmed {}))
         } else {
-            let clone = self.clone();
+            let self_clone = self.clone();
             tokio::spawn(async move {
-                match clone
+                match self_clone
                     .pull_transaction_from(&sender_ip, transaction_hash)
                     .await
                 {
                     Ok(_) => Ok(Response::new(Confirmed {})),
                     Err(e) => {
-                        error!(clone.logger, "Failed to make transaction pull: {:?}", e);
+                        error!(
+                            self_clone.logger,
+                            "Failed to make transaction pull: {:?}", e
+                        );
                         Err(Status::internal("Failed to make transaction pull"))
                     }
                 }
@@ -148,9 +188,9 @@ impl Node for NodeService {
     ) -> Result<Response<Transaction>, Status> {
         let pull_request = request.into_inner();
         let transaction_hash = pull_request.msg_transaction_hash;
-        let hex_hash = hex::encode(transaction_hash);
-        if !self.mempool.has_hash(&hex_hash) {
-            if let Some(transaction) = self.mempool.get_by_hash(&hex_hash) {
+        let bs58_hash = bs58::encode(transaction_hash).into_string();
+        if !self.mempool.has_hash(&bs58_hash) {
+            if let Some(transaction) = self.mempool.get_by_hash(&bs58_hash) {
                 Ok(Response::new(transaction))
             } else {
                 Err(Status::internal("Requested transaction not found"))
@@ -222,13 +262,15 @@ impl Node for NodeService {
 }
 
 impl NodeService {
-    pub async fn new(secret_key: String, ip: String) -> Result<Self, NodeServiceError> {
-        let logger = {
+    pub async fn new(secret_key: String, _ip: String) -> Result<Self, NodeServiceError> {
+        let _logger = {
             let decorator = slog_term::TermDecorator::new().build();
             let drain = slog_term::FullFormat::new(decorator).build().fuse();
             let drain = slog_async::Async::new(drain).build().fuse();
             Logger::root(drain, o!())
         };
+        let logger = Arc::new(_logger);
+        let ip = Arc::new(_ip);
 
         let vec_secret = string_to_vec(&secret_key);
         let secret_spend_key = Wallet::secret_spend_key_from_vec(&vec_secret)?;
@@ -246,25 +288,30 @@ impl NodeService {
             sled::open("C:/Vector/outputs").map_err(|_| NodeServiceError::SledOpenError)?;
         let image_db =
             sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
+        let ip_db = sled::open("C:/Vector/ips").map_err(|_| NodeServiceError::SledOpenError)?;
 
         let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db, index_db));
         let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
         let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
+        let _ip_store: Box<dyn IPStorer> = Box::new(IPDB::new(ip_db));
+        let ip_store = Arc::new(_ip_store);
         let mempool = Arc::new(Mempool::new());
-        let blockchain = Chain::new(blocks, images, outputs)
+        let _blockchain = Chain::new(blocks, images, outputs)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
+        let blockchain = Arc::new(RwLock::new(_blockchain));
 
         info!(logger, "\nNodeService created");
 
         Ok(NodeService {
             wallet,
             ip,
+            ip_store,
             version,
             peers,
             logger,
             mempool,
-            blockchain: Arc::new(RwLock::new(blockchain)),
+            blockchain,
         })
     }
 
@@ -292,22 +339,25 @@ impl NodeService {
     pub async fn bootstrap_network(&self, ips: Vec<String>) -> Result<(), NodeServiceError> {
         let mut tasks = Vec::new();
         for ip in ips {
-            let node_service_clone = self.clone();
-            let ip_clone = ip.clone();
+            let self_clone = self.clone();
             let task = tokio::spawn(async move {
-                match node_service_clone.dial_remote_node(&ip_clone).await {
+                match self_clone.dial_remote_node(&ip).await {
                     Ok((c, v)) => {
-                        node_service_clone.add_peer(c, v).await;
+                        match self_clone.add_peer(c, v).await {
+                            Ok(_) => {
+                                info!(self_clone.logger, "\nNew peer added");
+                            }
+                            Err(e) => {
+                                error!(self_clone.logger, "Failed to add peer: {:?}", e);
+                            }
+                        }
                         info!(
-                            node_service_clone.logger,
+                            self_clone.logger,
                             "\nSuccessfully bootstraped with {:?}", ip
                         );
                     }
                     Err(e) => {
-                        error!(
-                            node_service_clone.logger,
-                            "\nFailed bootstrap and dial: {:?}", e
-                        );
+                        error!(self_clone.logger, "\nFailed bootstrap and dial: {:?}", e);
                     }
                 }
             });
@@ -321,7 +371,7 @@ impl NodeService {
     }
 
     pub async fn contains(&self, addr: &str, connected_addrs: &[String]) -> bool {
-        if self.wallet.address == addr {
+        if bs58::encode(&self.wallet.address).into_string() == addr {
             return false;
         }
         connected_addrs
@@ -359,18 +409,41 @@ impl NodeService {
         }
     }
 
-    pub async fn add_peer(&self, c: NodeClient<Channel>, v: Version) {
-        let remote_address = v.msg_address;
-        if !self.peers.contains_key(&remote_address) {
-            self.peers
-                .insert(remote_address.clone(), Arc::new(c.into()));
-            info!(
-                self.logger,
-                "\nNew validator peer added: {}", remote_address
-            );
+    pub async fn add_peer(
+        &self,
+        c: NodeClient<Channel>,
+        v: Version,
+    ) -> Result<(), NodeServiceError> {
+        let vec_address = v.msg_address.clone();
+        let bs58_address = bs58::encode(vec_address.clone()).into_string();
+        let remote_ip = v.msg_ip.clone();
+
+        if !self.peers.contains_key(&bs58_address) {
+            self.ip_store
+                .put(vec_address.clone(), remote_ip.clone())
+                .await?;
+            self.peers.insert(bs58_address.clone(), Arc::new(c.into()));
+            info!(self.logger, "\nNew peer added: {}", bs58_address);
         } else {
-            info!(self.logger, "\nPeer already exists: {}", remote_address);
+            // Check if the IP is the same as the stored one
+            match self.ip_store.get_by_address(&vec_address).await {
+                Ok(Some(stored_ip)) => {
+                    if stored_ip != remote_ip {
+                        self.ip_store.update(&vec_address, &remote_ip).await?;
+                        info!(
+                            self.logger,
+                            "\nIP for peer {} updated to: {}", bs58_address, remote_ip
+                        );
+                    }
+                }
+                Ok(None) => {
+                    self.ip_store.put(vec_address, remote_ip).await?;
+                }
+                Err(_) => return Err(IPStorageError::ReadError)?,
+            }
+            info!(self.logger, "\nPeer already exists: {}", bs58_address);
         }
+        Ok(())
     }
 
     pub async fn get_version(&self) -> Version {
@@ -383,7 +456,7 @@ impl NodeService {
 
         Version {
             msg_version,
-            msg_address: address.to_string(),
+            msg_address: address.clone(),
             msg_ip: ip.to_string(),
             msg_max_local_index: local_index,
         }
@@ -425,10 +498,10 @@ impl NodeService {
         let mut chain_wlock = self.blockchain.write().await;
         chain_wlock.add_block(&self.wallet, block.clone()).await?;
         drop(chain_wlock);
-        let hash = hex::encode(hash_block(&block)?);
+        let bs58_hash = bs58::encode(hash_block(&block)?).into_string();
         info!(
             self.logger,
-            "\nGenesis block {:?} with tx successfully created", hash
+            "\nGenesis block {:?} with tx successfully created", bs58_hash
         );
 
         Ok(())
@@ -441,35 +514,31 @@ impl NodeService {
         info!(
             self.logger,
             "\nBroadcasting block hash {:?}",
-            hex::encode(&hash)
+            bs58::encode(&hash).into_string()
         );
         let peers_data = self
             .peers
             .iter()
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect::<Vec<_>>();
-        let mut tasks = Vec::new();
+
         for (addr, peer_client) in peers_data {
             let hash_clone = hash.clone();
-            let self_clone = self.clone();
-            let ip = self_clone.ip;
-            let task = tokio::spawn(async move {
+            let ip = Arc::clone(&self.ip);
+            let logger = Arc::clone(&self.logger);
+            tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.write().await;
                 let message = PushBlockRequest {
                     msg_block_hash: hash_clone,
-                    msg_ip: ip.clone(),
+                    msg_ip: ip.to_string(),
                 };
                 if let Err(e) = peer_client_lock.handle_block_push(message).await {
-                    error!(self_clone.logger, "\nBroadcast error: {:?}", e);
+                    error!(logger.as_ref(), "\nBroadcast error: {:?}", e);
                 } else {
-                    info!(self_clone.logger, "\nBroadcasted hash to: {:?}", addr);
+                    info!(logger.as_ref(), "\nBroadcasted hash to: {:?}", addr);
                 }
             });
-            tasks.push(task);
         }
-        try_join_all(tasks)
-            .await
-            .map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
 
         Ok(())
     }
@@ -523,19 +592,8 @@ impl NodeService {
 
         self.mempool.add(transaction.clone());
         info!(self.logger, "\nCreated transaction, trying to broadcast");
-        let self_clone = self.clone();
-        tokio::spawn(async move {
-            match self_clone.broadcast_tx_hash(&transaction).await {
-                Ok(_) => info!(
-                    self_clone.logger,
-                    "\nTransaction hash broadcasted successfully!"
-                ),
-                Err(e) => error!(
-                    self_clone.logger,
-                    "\nFailed to broadcast transaction hash: {:?}", e
-                ),
-            }
-        });
+
+        self.broadcast_tx_hash(&transaction).await?;
 
         Ok(())
     }
@@ -548,7 +606,7 @@ impl NodeService {
         info!(
             self.logger,
             "\nBroadcasting transaction hash {:?}",
-            hex::encode(&hash)
+            bs58::encode(&hash).into_string()
         );
         let peers_data = self
             .peers
@@ -558,28 +616,24 @@ impl NodeService {
         if peers_data.is_empty() {
             return Err(NodeServiceError::NoRecipient);
         }
-        let mut tasks = Vec::new();
+
         for (addr, peer_client) in peers_data {
             let hash_clone = hash.clone();
-            let self_clone = self.clone();
-            let ip = self_clone.ip;
-            let task = tokio::spawn(async move {
+            let ip = Arc::clone(&self.ip);
+            let logger = Arc::clone(&self.logger);
+            tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.write().await;
                 let message = PushTxRequest {
                     msg_transaction_hash: hash_clone,
-                    msg_ip: ip.clone(),
+                    msg_ip: ip.to_string(),
                 };
                 if let Err(e) = peer_client_lock.handle_tx_push(message).await {
-                    error!(self_clone.logger, "\nBroadcast error: {:?}", e);
+                    error!(logger, "\nBroadcast error: {:?}", e);
                 } else {
-                    info!(self_clone.logger, "\nBroadcasted hash to: {:?}", addr);
+                    info!(logger, "\nBroadcasted hash to: {:?}", addr);
                 }
             });
-            tasks.push(task);
         }
-        try_join_all(tasks)
-            .await
-            .map_err(|err| NodeServiceError::BroadcastTransactionError(format!("{:?}", err)))?;
 
         Ok(())
     }
@@ -648,30 +702,20 @@ impl NodeService {
         block_batch: BlockBatch,
     ) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
-            self.process_incoming_block(wallet, block).await?;
-        }
-
-        Ok(())
-    }
-
-    pub async fn process_incoming_block(
-        &self,
-        wallet: &Wallet,
-        block: Block,
-    ) -> Result<(), NodeServiceError> {
-        for transaction in &block.msg_transactions {
+            for transaction in &block.msg_transactions {
+                self.blockchain
+                    .write()
+                    .await
+                    .process_transaction(wallet, transaction)
+                    .await?;
+            }
             self.blockchain
                 .write()
                 .await
-                .process_transaction(wallet, transaction)
+                .add_block(wallet, block)
                 .await?;
+            info!(self.logger, "\nNew block added");
         }
-        self.blockchain
-            .write()
-            .await
-            .add_block(wallet, block)
-            .await?;
-        info!(self.logger, "\nNew block added");
 
         Ok(())
     }
@@ -686,7 +730,7 @@ impl NodeService {
         let local_index = chain_rlock.max_index().await.unwrap();
         drop(chain_rlock);
         info!(self.logger, "\nProcessing block");
-        if let Some(header) = block.msg_header.clone() {
+        if let Some(header) = &block.msg_header {
             if header.msg_index < local_index {
                 Err(NodeServiceError::BlockIndexTooLow)
             } else if header.msg_index == local_index + 1 {
@@ -731,7 +775,14 @@ impl NodeService {
             );
             match self.dial_remote_node(&ip).await {
                 Ok((client, version)) => {
-                    self.add_peer(client.clone(), version).await;
+                    match self.add_peer(client.clone(), version).await {
+                        Ok(_) => {
+                            info!(self.logger, "\nNew peer added");
+                        }
+                        Err(e) => {
+                            error!(self.logger, "Failed to add peer: {:?}", e);
+                        }
+                    }
                     info!(self.logger, "\nDial success, new peer added: {}", ip);
                     let client_arc = Arc::new(Mutex::new(client));
                     let mut client_lock = client_arc.lock().await;
@@ -783,42 +834,36 @@ impl NodeService {
 
     pub async fn broadcast_peer_list(&self) -> Result<(), ValidatorServiceError> {
         info!(self.logger, "\nBroadcasting peer list");
-        let my_addr = &self.wallet.address;
+        let my_addr = bs58::encode(&self.wallet.address).into_string();
         let mut peers_addrs: Vec<String> = self.get_addr_list();
         peers_addrs.push(my_addr.clone());
         let msg = PeerList {
-            msg_peers_addresses: peers_addrs,
+            msg_peers_ips: peers_addrs,
         };
         let peers_data: Vec<_> = self
             .peers
             .iter()
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
-        let mut tasks = Vec::new();
         for (addr, peer_client) in peers_data {
             let msg_clone = msg.clone();
-            let self_clone = self.clone();
+            let logger = Arc::clone(&self.logger);
             let my_addr_clone = my_addr.clone();
-            let task = tokio::spawn(async move {
+            tokio::spawn(async move {
                 let mut peer_client_lock = peer_client.write().await;
                 let req = Request::new(msg_clone);
                 if addr != my_addr_clone {
-                    if let Err(err) = peer_client_lock.handle_peer_list(req).await {
+                    if let Err(e) = peer_client_lock.handle_peer_list(req).await {
                         error!(
-                            self_clone.logger,
-                            "\nFailed to broadcast peer list to {}: {:?}", addr, err
+                            logger,
+                            "\nFailed to broadcast peer list to {}: {:?}", addr, e
                         );
                     } else {
-                        info!(self_clone.logger, "\nBroadcasted peer list to {}", addr);
+                        info!(logger, "\nBroadcasted peer list to {}", addr);
                     }
                 }
             });
-            tasks.push(task);
         }
-        try_join_all(tasks)
-            .await
-            .map_err(|_| ValidatorServiceError::PeerBroadcastFailed)?;
-        info!(self.logger, "\nSuccessfully broadcasted peer list");
 
         Ok(())
     }
@@ -863,10 +908,10 @@ impl NodeService {
             .add_genesis_block(&self.wallet, block.clone())
             .await?;
         drop(chain_wlock);
-        let hash = hex::encode(hash_block(&block)?);
+        let bs58_hash = bs58::encode(hash_block(&block)?).into_string();
         info!(
             self.logger,
-            "\nGenesis block {:?} with tx successfully created", hash
+            "\nGenesis block {:?} with tx successfully created", bs58_hash
         );
 
         Ok(())
@@ -917,21 +962,21 @@ impl NodeService {
 
     pub async fn connect_to(&self, ip: String) -> Result<(), NodeServiceError> {
         info!(self.logger, "\nTrying to bootstrap with {:?}", ip);
-        let node_service_clone = self.clone();
         let ip_clone = ip.clone();
-        match node_service_clone.dial_remote_node(&ip_clone).await {
+        match self.dial_remote_node(&ip_clone).await {
             Ok((c, v)) => {
-                node_service_clone.add_peer(c, v).await;
-                info!(
-                    node_service_clone.logger,
-                    "\nSuccessfully bootstraped with {:?}", ip
-                );
+                match self.add_peer(c, v).await {
+                    Ok(_) => {
+                        info!(self.logger, "\nNew peer added");
+                    }
+                    Err(e) => {
+                        error!(self.logger, "Failed to add peer: {:?}", e);
+                    }
+                }
+                info!(self.logger, "\nSuccessfully bootstraped with {:?}", ip);
             }
             Err(e) => {
-                error!(
-                    node_service_clone.logger,
-                    "\nFailed bootstrap and dial: {:?}", e
-                );
+                error!(self.logger, "\nFailed bootstrap and dial: {:?}", e);
             }
         }
 
@@ -939,7 +984,7 @@ impl NodeService {
     }
 
     pub async fn get_address(&self) -> Result<String, NodeServiceError> {
-        let address = (self.wallet.address).to_string();
+        let address = bs58::encode(&self.wallet.address).into_string();
 
         Ok(address)
     }

@@ -2484,11 +2484,11 @@ name = "vec_chain"
 version = "0.1.0"
 dependencies = [
  "async-std",
+ "bs58",
  "bulletproofs",
  "curve25519-dalek-ng",
  "ed25519-dalek",
  "futures",
- "hex",
  "merlin",
  "prost",
  "protobuf",
@@ -2560,9 +2560,9 @@ dependencies = [
 name = "vec_mempool"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "dashmap",
  "futures",
- "hex",
  "log",
  "slog",
  "slog-async",
@@ -2599,7 +2599,6 @@ dependencies = [
  "dashmap",
  "ed25519-dalek",
  "futures",
- "hex",
  "merlin",
  "native-tls",
  "openssl",
@@ -2654,7 +2653,6 @@ dependencies = [
  "curve25519-dalek-ng",
  "dashmap",
  "ed25519-dalek",
- "hex",
  "prost",
  "rand 0.8.5",
  "serde",
@@ -2669,6 +2667,7 @@ dependencies = [
 name = "vec_utils"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "futures",
  "hex",
  "prost",

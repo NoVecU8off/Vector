@@ -12,7 +12,7 @@ pub struct Wallet {
     pub secret_view_key: Scalar,
     pub public_spend_key: CompressedRistretto,
     pub public_view_key: CompressedRistretto,
-    pub address: String,
+    pub address: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -38,7 +38,7 @@ impl Wallet {
             public_view_key.compress().to_bytes().as_slice(),
         ]
         .concat();
-        let address = bs58::encode(&data).into_string();
+        let address = data;
 
         Ok(Wallet {
             secret_spend_key,
@@ -62,7 +62,7 @@ impl Wallet {
             public_view_key.compress().to_bytes().as_slice(),
         ]
         .concat();
-        let address = bs58::encode(&data).into_string();
+        let address = data;
 
         Ok(Wallet {
             secret_spend_key,
@@ -243,7 +243,7 @@ impl Wallet {
         v.extend_from_slice(self.secret_view_key.as_bytes());
         v.extend_from_slice(self.public_spend_key.as_bytes());
         v.extend_from_slice(self.public_view_key.as_bytes());
-        v.extend_from_slice(self.address.as_bytes());
+        v.extend(&self.address);
 
         v
     }
@@ -252,22 +252,24 @@ impl Wallet {
         if v.len() < 160 {
             return Err(CryptoOpsError::InvalidVecLength);
         }
+
         let secret_spend_key = Scalar::from_canonical_bytes(
             v[0..32]
                 .try_into()
                 .map_err(|_| CryptoOpsError::TryIntoError)?,
         )
         .ok_or(CryptoOpsError::DecompressionFailed)?;
+
         let secret_view_key = Scalar::from_canonical_bytes(
             v[32..64]
                 .try_into()
                 .map_err(|_| CryptoOpsError::TryIntoError)?,
         )
         .ok_or(CryptoOpsError::DecompressionFailed)?;
+
         let public_spend_key = CompressedRistretto::from_slice(&v[64..96]);
         let public_view_key = CompressedRistretto::from_slice(&v[96..128]);
-        let address = String::from_utf8(v[128..].to_vec())
-            .map_err(|_| CryptoOpsError::InvalidAddressString)?;
+        let address = v[128..].to_vec();
 
         Ok(Wallet {
             secret_spend_key,
@@ -312,12 +314,8 @@ impl Wallet {
         Some(CompressedRistretto::from_slice(v))
     }
 
-    pub fn address_to_vec(&self) -> Vec<u8> {
-        self.address.as_bytes().to_vec()
-    }
-
     pub fn address_from_vec(v: &[u8]) -> Result<String, CryptoOpsError> {
-        String::from_utf8(v.to_vec()).map_err(|_| CryptoOpsError::InvalidAddressString)
+        Ok(bs58::encode(v).into_string())
     }
 }
 
@@ -336,7 +334,7 @@ impl Wallet {
             secret_view_key: self.secret_view_key.to_bytes(),
             public_spend_key: self.public_spend_key.to_bytes(),
             public_view_key: self.public_view_key.to_bytes(),
-            address: self.address.as_bytes().to_vec(),
+            address: self.address.clone(),
         }
     }
 
@@ -346,7 +344,7 @@ impl Wallet {
             secret_view_key: Scalar::from_bytes_mod_order(s.secret_view_key),
             public_spend_key: CompressedRistretto::from_slice(&s.public_spend_key),
             public_view_key: CompressedRistretto::from_slice(&s.public_view_key),
-            address: String::from_utf8(s.address.clone()).unwrap(),
+            address: s.address.clone(),
         }
     }
 }

@@ -9,7 +9,6 @@ edition = "2021"
 vec_proto = { path = "../vec_proto", version = "0.1.0"}
 vec_errors = { path = "../vec_errors", version = "0.1.0"}
 
-hex = "0.4.3"
 tokio = "1.28.0"
 async-trait = "0.1.68"
 rand = "0.8.5"

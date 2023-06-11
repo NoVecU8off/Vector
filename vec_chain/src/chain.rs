@@ -1,9 +1,9 @@
+use bs58;
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use curve25519_dalek_ng::{
     constants, ristretto::CompressedRistretto, ristretto::RistrettoPoint, scalar::Scalar,
     traits::Identity,
 };
-use hex::encode;
 use merlin::Transcript;
 use prost::Message;
 use rand::seq::SliceRandom;
@@ -90,7 +90,9 @@ impl Chain {
     pub async fn get_block_by_hash(&self, hash: Vec<u8>) -> Result<Block, ChainOpsError> {
         match self.blocks.get(hash.clone()).await {
             Ok(Some(block)) => Ok(block),
-            Ok(None) => Err(ChainOpsError::BlockNotFound(hex::encode(hash))),
+            Ok(None) => Err(ChainOpsError::BlockNotFound(
+                bs58::encode(hash).into_string(),
+            )),
             Err(err) => Err(err.into()),
         }
     }
@@ -104,8 +106,8 @@ impl Chain {
         if let Some(header) = incoming_block.msg_header.as_ref() {
             if previous_hash != header.msg_previous_hash {
                 return Err(ChainOpsError::InvalidPreviousBlockHash {
-                    expected: encode(previous_hash),
-                    got: encode(header.msg_previous_hash.clone()),
+                    expected: bs58::encode(previous_hash).into_string(),
+                    got: bs58::encode(header.msg_previous_hash.clone()).into_string(),
                 });
             }
         } else {

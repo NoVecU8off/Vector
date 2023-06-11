@@ -1,6 +1,6 @@
 use dashmap::DashMap;
 use slog::{info, o, Drain, Logger};
-use vec_proto::messages::{Contract, Transaction};
+use vec_proto::messages::Transaction;
 use vec_utils::utils::hash_transaction;
 
 #[derive(Debug)]
@@ -48,8 +48,8 @@ impl Mempool {
 
     // Checks if transaction is stored in mempool
     pub fn has(&self, tx: &Transaction) -> bool {
-        let hex_hash = hex::encode(hash_transaction(tx));
-        self.transactions.contains_key(&hex_hash)
+        let bs58_hash = bs58::encode(hash_transaction(tx)).into_string();
+        self.transactions.contains_key(&bs58_hash)
     }
 
     // Adds transaction to the mempool
@@ -57,18 +57,21 @@ impl Mempool {
         if self.has(&tx) {
             return false;
         }
-        let hash = hex::encode(hash_transaction(&tx));
-        self.transactions.insert(hash.clone(), tx);
-        info!(self.logger, "\nTransaction added to mempool: {}", hash);
+        let bs58_hash = bs58::encode(hash_transaction(&tx)).into_string();
+        self.transactions.insert(bs58_hash.clone(), tx);
+        info!(self.logger, "\nTransaction added to mempool: {}", bs58_hash);
         true
     }
 
     // Removes the specific transaction
     pub fn remove(&self, tx: &Transaction) -> bool {
-        let hash = hex::encode(hash_transaction(tx));
-        if self.transactions.contains_key(&hash) {
-            self.transactions.remove(&hash);
-            info!(self.logger, "\nTransaction removed from mempool: {}", hash);
+        let bs58_hash = bs58::encode(hash_transaction(&tx)).into_string();
+        if self.transactions.contains_key(&bs58_hash) {
+            self.transactions.remove(&bs58_hash);
+            info!(
+                self.logger,
+                "\nTransaction removed from mempool: {}", bs58_hash
+            );
             true
         } else {
             false
@@ -118,7 +121,7 @@ impl Default for Mempool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use vec_proto::messages::{Transaction, TransactionInput, TransactionOutput};
+    use vec_proto::messages::{Contract, Transaction, TransactionInput, TransactionOutput};
 
     #[test]
     fn test_mempool_new() {

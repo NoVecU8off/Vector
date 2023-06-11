@@ -102,6 +102,30 @@ pub enum BlockStorageError {
 }
 
 #[derive(Debug, Error)]
+pub enum IPStorageError {
+    #[error("Unable to acquire write lock")]
+    WriteLockError,
+    #[error("Unable to acquire read lock")]
+    ReadLockError,
+    #[error(transparent)]
+    SledError(sled::Error),
+    #[error(transparent)]
+    TaskPanic(tokio::task::JoinError),
+    #[error(transparent)]
+    BlockOpsError(#[from] BlockOpsError),
+    #[error("Unable to serialize block")]
+    SerializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to deserialize block")]
+    DeserializationError,
+    #[error("Unable to read from DB")]
+    ReadError,
+    #[error("Unable to find ip in DB")]
+    NotFound,
+}
+
+#[derive(Debug, Error)]
 pub enum BlockOpsError {
     #[error("Block header is missing")]
     MissingHeader,
@@ -267,6 +291,8 @@ pub enum NodeServiceError {
     PeerStorageError(#[from] PeerStorageError),
     #[error(transparent)]
     BlcoStorageError(#[from] BlockStorageError),
+    #[error(transparent)]
+    IPStorageError(#[from] IPStorageError),
     #[error(transparent)]
     MissingHeader(#[from] BlockOpsError),
     #[error(transparent)]

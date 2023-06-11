@@ -12,6 +12,10 @@ service Node {
     rpc HandleTxPull(PullTxRequest) returns (Transaction);
 }
 
+service Executor {
+    rpc ExecuteContract(Transaction) returns (Confirmed);
+}
+
 message Confirmed { }
 
 message PushBlockRequest {
@@ -35,7 +39,7 @@ message PullTxRequest {
 }
 
 message PeerList {
-    repeated string msg_peers_addresses = 1;
+    repeated string msg_peers_ips = 1;
 }
 
 message LocalState {
@@ -44,7 +48,7 @@ message LocalState {
 
 message Version {
     uint32 msg_version = 1;
-    string msg_address = 2;
+    bytes msg_address = 2;
     string msg_ip = 4;
     uint64 msg_max_local_index = 5;
 }
