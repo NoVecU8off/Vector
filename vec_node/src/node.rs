@@ -112,11 +112,12 @@ impl Node for NodeService {
         let requester_index = state.msg_max_local_index;
         let mut blocks = Vec::new();
         let chain_rlock = self.blockchain.read().await;
-        
-        let max_index = chain_rlock.max_index().await.map_err(|e| {
-            Status::internal(format!("Failed to get max index: {:?}", e))
-        })?;
-        
+
+        let max_index = chain_rlock
+            .max_index()
+            .await
+            .map_err(|e| Status::internal(format!("Failed to get max index: {:?}", e)))?;
+
         for index in (requester_index + 1)..=max_index {
             match chain_rlock.blocks.get_by_index(index).await {
                 Ok(Some(block)) => blocks.push(block),
@@ -132,10 +133,9 @@ impl Node for NodeService {
             }
         }
         let block_batch = BlockBatch { msg_blocks: blocks };
-    
+
         Ok(Response::new(block_batch))
     }
-    
 
     async fn handle_peer_list(
         &self,
@@ -163,7 +163,7 @@ impl Node for NodeService {
         let sender_ip = push_request.msg_ip.clone();
         let transaction_hash = push_request.msg_transaction_hash.clone();
         let bs58_hash = bs58::encode(&transaction_hash).into_string();
-    
+
         if self.mempool.has_hash(&bs58_hash) {
             Ok(Response::new(Confirmed {}))
         } else {
@@ -182,11 +182,11 @@ impl Node for NodeService {
                     }
                 }
             });
-    
+
             Ok(Response::new(Confirmed {}))
         }
     }
-    
+
     async fn handle_tx_pull(
         &self,
         request: Request<PullTxRequest>,
@@ -421,7 +421,6 @@ impl NodeService {
             Ok((c, v))
         }
     }
-    
 
     pub async fn add_peer(
         &self,
@@ -850,7 +849,7 @@ impl NodeService {
         Ok(())
     }
 
-    pub async fn broadcast_peer_list(&self) -> Result<(), ValidatorServiceError> {
+    pub async fn broadcast_peer_list(&self) -> Result<(), NodeServiceError> {
         info!(self.logger, "\nBroadcasting peer list");
         let my_addr = bs58::encode(&self.wallet.address).into_string();
         let mut peers_addrs: Vec<String> = self.get_addr_list();

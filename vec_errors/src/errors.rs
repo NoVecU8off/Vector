@@ -7,7 +7,6 @@ pub enum VectorError {
     MerkleTree(MerkleTreeError),
     Chain(ChainOpsError),
     NodeService(NodeServiceError),
-    ValidatorService(ValidatorServiceError),
     ServerConfig(ServerConfigError),
 }
 
@@ -103,6 +102,30 @@ pub enum BlockStorageError {
 
 #[derive(Debug, Error)]
 pub enum IPStorageError {
+    #[error("Unable to acquire write lock")]
+    WriteLockError,
+    #[error("Unable to acquire read lock")]
+    ReadLockError,
+    #[error(transparent)]
+    SledError(sled::Error),
+    #[error(transparent)]
+    TaskPanic(tokio::task::JoinError),
+    #[error(transparent)]
+    BlockOpsError(#[from] BlockOpsError),
+    #[error("Unable to serialize block")]
+    SerializationError,
+    #[error("Unable to write to DB")]
+    WriteError,
+    #[error("Unable to deserialize block")]
+    DeserializationError,
+    #[error("Unable to read from DB")]
+    ReadError,
+    #[error("Unable to find ip in DB")]
+    NotFound,
+}
+
+#[derive(Debug, Error)]
+pub enum ContractStorageError {
     #[error("Unable to acquire write lock")]
     WriteLockError,
     #[error("Unable to acquire read lock")]
@@ -286,8 +309,6 @@ pub enum NodeServiceError {
     #[error(transparent)]
     ServerConfigError(#[from] ServerConfigError),
     #[error(transparent)]
-    ValidatorServiceError(#[from] ValidatorServiceError),
-    #[error(transparent)]
     ChainOpsError(#[from] ChainOpsError),
     #[error(transparent)]
     PeerStorageError(#[from] PeerStorageError),
@@ -303,32 +324,6 @@ pub enum NodeServiceError {
     CryptoOpsError(#[from] CryptoOpsError),
     #[error("Unable to open Sled DB")]
     SledOpenError,
-}
-
-#[derive(Debug, Error)]
-pub enum ValidatorServiceError {
-    #[error(transparent)]
-    MerkleTreeError(#[from] MerkleTreeError),
-    #[error("Failed to join broadcast transaction")]
-    TransactionBroadcastFailed,
-    #[error("Failed to join broadcast hash")]
-    HashBroadcastFailed,
-    #[error("Failed to join peer broadcast")]
-    PeerBroadcastFailed,
-    #[error("Failed to join broadcast leader block")]
-    LeaderBlockBroadcastFailed,
-    #[error("Failed to join broadcast vote")]
-    VoteBroadcastFailed,
-    #[error("No created block found")]
-    NoCreatedBlockFound,
-    #[error(transparent)]
-    ChainOpsError(#[from] ChainOpsError),
-    #[error(transparent)]
-    BlockOpsError(#[from] BlockOpsError),
-    #[error(transparent)]
-    BlockStorageError(#[from] BlockStorageError),
-    #[error("Broadcast error: {0}")]
-    BroadcastError(#[from] tokio::sync::broadcast::error::RecvError),
 }
 
 #[derive(Debug, Error)]
@@ -381,4 +376,16 @@ pub enum VMError {
     ReadonlyPath,
     #[error("Couldn't create path")]
     CouldntCreatePath,
+    #[error("Failde to create instance of the module")]
+    InstanceCreationError,
+    #[error("Function not found")]
+    FunctionNotFound,
+    #[error("Failed to call the function")]
+    FunctionCallError,
+    #[error("Failed to initialize contracts db")]
+    DBInitializationFailed,
+    #[error("Failed to read from contracts db")]
+    DBReadError,
+    #[error("Contract not found in DB")]
+    ContractNotFound,
 }

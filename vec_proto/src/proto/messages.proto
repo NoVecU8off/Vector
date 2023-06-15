@@ -12,10 +12,6 @@ service Node {
     rpc HandleTxPull(PullTxRequest) returns (Transaction);
 }
 
-service Executor {
-    rpc ExecuteContract(Transaction) returns (Confirmed);
-}
-
 message Confirmed { }
 
 message PushBlockRequest {
