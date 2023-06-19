@@ -149,6 +149,12 @@ pub enum ContractStorageError {
 }
 
 #[derive(Debug, Error)]
+pub enum SchemeError {
+    #[error(transparent)]
+    CryptoOpsError(#[from] CryptoOpsError),
+}
+
+#[derive(Debug, Error)]
 pub enum BlockOpsError {
     #[error("Block header is missing")]
     MissingHeader,

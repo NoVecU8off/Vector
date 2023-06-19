@@ -271,17 +271,17 @@ impl Chain {
             let decrypted_amount = owned_output.decrypted_amount;
             total_input_amount += decrypted_amount;
             let owned_stealth_addr = &owned_output.output.stealth;
-            let ristretto_stealth = Wallet::public_spend_key_from_vec(owned_stealth_addr).unwrap();
+            let compressed_stealth = CompressedRistretto::from_slice(&owned_stealth_addr);
             let wallets_res: Result<Vec<Wallet>, _> = (0..9).map(|_| Wallet::generate()).collect();
             let wallets = wallets_res?;
             let mut s_addrs: Vec<CompressedRistretto> =
                 wallets.iter().map(|w| w.public_spend_key).collect();
-            s_addrs.push(ristretto_stealth);
+            s_addrs.push(compressed_stealth);
             s_addrs.shuffle(&mut rand::thread_rng());
             let s_addrs_vec: Vec<Vec<u8>> =
                 s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect();
             let m = b"Message example";
-            let blsag = wallet.gen_blsag(&s_addrs, m, &ristretto_stealth)?;
+            let blsag = wallet.gen_blsag(&s_addrs, m, &compressed_stealth)?;
             let image = blsag.i;
             let input = TransactionInput {
                 msg_ring: s_addrs_vec,
