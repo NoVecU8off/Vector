@@ -1,7 +1,28 @@
 use vec_crypto::cryptography::Address;
 use vec_errors::errors::*;
 use std::mem::size_of;
+use std::result::Result;
+
+pub type ProgramResult = Result<(), VMError>;
+const U64_BYTES: usize = 8;
+
+#[repr(C)]
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
+pub struct AccountMeta {
+    /// An account's public key.
+    pub address: Address,
+    /// True if an `Instruction` requires a `Transaction` signature matching `pubkey`.
+    pub is_signer: bool,
+    /// True if the account data or metadata may be mutated during program execution.
+    pub is_writable: bool,
+}
+
 /// Instructions supported by the token program.
+pub struct Instruction {
+    pub program_id: Address,
+    pub accounts: Vec<AccountMeta>,
+    pub data: Vec<u8>,
+}
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum TokenInstruction<'a> {
@@ -153,11 +174,11 @@ impl<'a> TokenInstruction<'a> {
         buf
     }
 
-    fn unpack_pubkey(input: &[u8]) -> Result<(Pubkey, &[u8]), VMError> {
-        if input.len() >= 32 {
-            let (key, rest) = input.split_at(32);
-            let pk = Pubkey::new(key);
-            Ok((pk, rest))
+    fn unpack_pubkey(input: &[u8]) -> Result<(Address, &[u8]), VMError> {
+        if input.len() >= 64 {
+            let (key, rest) = input.split_at(64);
+            let addr: Address = key;
+            Ok((addr, rest))
         } else {
             Err(VMError::InvalidInstruction.into())
         }
@@ -166,10 +187,10 @@ impl<'a> TokenInstruction<'a> {
     fn unpack_pubkey_option(input: &[u8]) -> Result<(Option<Address>, &[u8]), VMError> {
         match input.split_first() {
             Option::Some((&0, rest)) => Ok((Option::None, rest)),
-            Option::Some((&1, rest)) if rest.len() >= 32 => {
-                let (key, rest) = rest.split_at(32);
-                let pk = Pubkey::new(key);
-                Ok((Option::Some(pk), rest))
+            Option::Some((&1, rest)) if rest.len() >= 64 => {
+                let (key, rest) = rest.split_at(64);
+                let addr: Address = key;
+                Ok((Option::Some(addr), rest))
             }
             _ => Err(VMError::InvalidInstruction.into()),
         }
@@ -225,24 +246,24 @@ impl AuthorityType {
         }
     }
 
-    fn from(index: u8) -> Result<Self, ProgramError> {
+    fn from(index: u8) -> Result<Self, VMError> {
         match index {
             0 => Ok(AuthorityType::MintTokens),
             1 => Ok(AuthorityType::FreezeAccount),
             2 => Ok(AuthorityType::AccountOwner),
             3 => Ok(AuthorityType::CloseAccount),
-            _ => Err(TokenError::InvalidInstruction.into()),
+            _ => Err(VMError::InvalidInstruction.into()),
         }
     }
 }
 
 /// Creates a `InitializeAccount` instruction.
 pub fn initialize_account(
-    token_program_id: &Pubkey,
-    account_pubkey: &Pubkey,
-    mint_pubkey: &Pubkey,
-    owner_pubkey: &Pubkey,
-) -> Result<Instruction, ProgramError> {
+    token_program_id: &Address,
+    account_pubkey: &Address,
+    mint_pubkey: &Address,
+    owner_pubkey: &Address,
+) -> Result<Instruction, VMError> {
     check_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount.pack();
 
@@ -262,11 +283,11 @@ pub fn initialize_account(
 
 /// Creates a `InitializeAccount2` instruction.
 pub fn initialize_account2(
-    token_program_id: &Pubkey,
-    account_pubkey: &Pubkey,
-    mint_pubkey: &Pubkey,
-    owner_pubkey: &Pubkey,
-) -> Result<Instruction, ProgramError> {
+    token_program_id: &Address,
+    account_pubkey: &Address,
+    mint_pubkey: &Address,
+    owner_pubkey: &Address,
+) -> Result<Instruction, VMError> {
     check_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount2 {
         owner: *owner_pubkey,
@@ -288,13 +309,13 @@ pub fn initialize_account2(
 
 /// Creates a `Transfer` instruction.
 pub fn transfer(
-    token_program_id: &Pubkey,
-    source_pubkey: &Pubkey,
-    destination_pubkey: &Pubkey,
-    authority_pubkey: &Pubkey,
-    signer_pubkeys: &[&Pubkey],
+    token_program_id: &Address,
+    source_pubkey: &Address,
+    destination_pubkey: &Address,
+    authority_pubkey: &Address,
+    signer_pubkeys: &[&Address],
     amount: u64,
-) -> Result<Instruction, ProgramError> {
+) -> Result<Instruction, VMError> {
     check_program_account(token_program_id)?;
     let data = TokenInstruction::Transfer { amount }.pack();
 
@@ -318,12 +339,12 @@ pub fn transfer(
 
 /// Creates a `CloseAccount` instruction.
 pub fn close_account(
-    token_program_id: &Pubkey,
-    account_pubkey: &Pubkey,
-    destination_pubkey: &Pubkey,
-    owner_pubkey: &Pubkey,
-    signer_pubkeys: &[&Pubkey],
-) -> Result<Instruction, ProgramError> {
+    token_program_id: &Address,
+    account_pubkey: &Address,
+    destination_pubkey: &Address,
+    owner_pubkey: &Address,
+    signer_pubkeys: &[&Address],
+) -> Result<Instruction, VMError> {
     check_program_account(token_program_id)?;
     let data = TokenInstruction::CloseAccount.pack();
 
@@ -347,12 +368,12 @@ pub fn close_account(
 
 /// Creates a `FreezeAccount` instruction.
 pub fn freeze_account(
-    token_program_id: &Pubkey,
-    account_pubkey: &Pubkey,
-    mint_pubkey: &Pubkey,
-    owner_pubkey: &Pubkey,
-    signer_pubkeys: &[&Pubkey],
-) -> Result<Instruction, ProgramError> {
+    token_program_id: &Address,
+    account_pubkey: &Address,
+    mint_pubkey: &Address,
+    owner_pubkey: &Address,
+    signer_pubkeys: &[&Address],
+) -> Result<Instruction, VMError> {
     check_program_account(token_program_id)?;
     let data = TokenInstruction::FreezeAccount.pack();
 
@@ -374,7 +395,9 @@ pub fn freeze_account(
     })
 }
 
-/// Utility function that checks index is between MIN_SIGNERS and MAX_SIGNERS
-pub fn is_valid_signer_index(index: usize) -> bool {
-    (MIN_SIGNERS..=MAX_SIGNERS).contains(&index)
+pub fn check_program_account(spl_token_program_id: &Pubkey) -> ProgramResult {
+    if spl_token_program_id != &id() {
+        return Err(VMError::IncorrectProgramId);
+    }
+    Ok(())
 }
