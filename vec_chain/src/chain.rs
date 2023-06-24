@@ -412,6 +412,7 @@ pub fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
     }
 }
 
+
 #[cfg(test)]
 mod tests {
     use super::*;

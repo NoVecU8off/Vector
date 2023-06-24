@@ -3270,12 +3270,15 @@ dependencies = [
 name = "vec_vm"
 version = "0.1.0"
 dependencies = [
+ "bs58",
  "bulletproofs",
  "curve25519-dalek-ng",
+ "merlin",
  "rand 0.8.5",
  "sha3 0.10.8",
  "sled",
  "tfhe",
+ "vec_crypto",
  "vec_errors",
  "vec_proto",
  "wasmtime",

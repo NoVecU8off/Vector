@@ -1,10 +1,13 @@
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use curve25519_dalek_ng::{
     constants, ristretto::CompressedRistretto, ristretto::RistrettoPoint, scalar::Scalar,
     traits::Identity,
 };
-use sha3::{Keccak256, Digest};
-use vec_errors::errors::{SchemeError, CryptoOpsError};
+use merlin::Transcript;
 use rand::seq::SliceRandom;
+use sha3::{Digest, Keccak256};
+use vec_errors::errors::{CryptoOpsError, SchemeError};
+use vec_proto::messages::TransactionOutput;
 
 pub struct Output {
     pub stealth: Vec<u8>,
@@ -146,14 +149,67 @@ impl Wallet {
             s,
         })
     }
+
+    pub fn encrypt_amount(
+        &self,
+        q_bytes: &[u8],
+        output_index: u64,
+        amount: u64,
+    ) -> Result<[u8; 8], CryptoOpsError> {
+        let mut hasher = Keccak256::new();
+        hasher.update(q_bytes);
+        hasher.update(output_index.to_le_bytes());
+        let hash_qi = hasher.finalize();
+        let mut hasher = Keccak256::new();
+        hasher.update(b"amount");
+        hasher.update(hash_qi);
+        let hash = hasher.finalize();
+        let hash_8: [u8; 8] = hash[0..8]
+            .try_into()
+            .map_err(|_| CryptoOpsError::TryIntoError)?;
+        let amount_in_scalars = Scalar::from(amount).to_bytes();
+        let amount_in_scalars_8 = amount_in_scalars[0..8]
+            .try_into()
+            .map_err(|_| CryptoOpsError::TryIntoError)?;
+
+        Ok(xor8(amount_in_scalars_8, hash_8))
+    }
+
+    pub fn decrypt_amount(
+        &self,
+        output_key: CompressedRistretto,
+        output_index: u64,
+        encrypted_amount: &[u8],
+    ) -> Result<u64, CryptoOpsError> {
+        let decompressed_output = output_key
+            .decompress()
+            .ok_or(CryptoOpsError::DecompressionFailed)?;
+        let q = self.secret_view_key * decompressed_output;
+        let q_bytes = q.compress().as_bytes().to_vec();
+        let mut hasher = Keccak256::new();
+        hasher.update(q_bytes);
+        hasher.update(output_index.to_le_bytes());
+        let hash_qi = hasher.finalize();
+        let mut hasher = Keccak256::new();
+        hasher.update(b"amount");
+        hasher.update(hash_qi);
+        let hash = hasher.finalize();
+        let hash_8: [u8; 8] = hash[0..8]
+            .try_into()
+            .map_err(|_| CryptoOpsError::TryIntoError)?;
+        let encrypted_amount_8 = encrypted_amount
+            .try_into()
+            .map_err(|_| CryptoOpsError::TryIntoError)?;
+        let decrypted_amount = xor8(encrypted_amount_8, hash_8);
+
+        Ok(u64::from_le_bytes(decrypted_amount))
+    }
 }
 
 impl Storage {
     pub fn new() -> Storage {
         let outputs = Vec::new();
-        Storage {
-            outputs
-        }
+        Storage { outputs }
     }
 }
 
@@ -191,11 +247,11 @@ impl Scheme {
             let compressed = CompressedRistretto::from_slice(&stealth);
             let wallet_res: Result<Vec<Wallet>, _> = (0..9).map(|_| Wallet::new()).collect();
             let wallets = wallet_res?;
-            let mut s_addrs: Vec<CompressedRistretto> = wallets.iter().map(|w| w.public_spend_key).collect();
+            let mut s_addrs: Vec<CompressedRistretto> =
+                wallets.iter().map(|w| w.public_spend_key).collect();
             s_addrs.push(compressed);
             s_addrs.shuffle(&mut rand::thread_rng());
-            let ring: Vec<Vec<u8>> =
-            s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect();
+            let ring: Vec<Vec<u8>> = s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect();
             let m = b"Message example";
             let blsag = self.wallet.gen_blsag(&s_addrs, m, &compressed)?;
             let image = blsag.i;
@@ -215,7 +271,7 @@ impl Scheme {
         recipient_address: &str,
         output_index: u64,
         amount: u64,
-    ) -> Result<Output, SchemeError> {
+    ) -> Result<TransactionOutput, SchemeError> {
         let (recipient_spend_key, recipient_view_key) =
             derive_keys_from_address(recipient_address).unwrap();
         let mut rng = rand::thread_rng();
@@ -248,13 +304,13 @@ impl Scheme {
         )
         .unwrap();
 
-        Ok(Output {
-            stealth: stealth.to_bytes().to_vec(),
-            output_key: output_key.to_bytes().to_vec(),
-            proof: proof.to_bytes().to_vec(),
-            commitment: commitment.to_bytes().to_vec(),
-            amount: encrypted_amount.to_vec(),
-            index: output_index,
+        Ok(TransactionOutput {
+            msg_stealth_address: stealth.to_bytes().to_vec(),
+            msg_output_key: output_key.to_bytes().to_vec(),
+            msg_proof: proof.to_bytes().to_vec(),
+            msg_commitment: commitment.to_bytes().to_vec(),
+            msg_amount: encrypted_amount.to_vec(),
+            msg_index: output_index,
         })
     }
 }
@@ -277,4 +333,13 @@ pub fn derive_keys_from_address(
     let public_view_key = CompressedRistretto::from_slice(public_view_key_data);
 
     Ok((public_spend_key, public_view_key))
+}
+
+pub fn xor8(a: [u8; 8], b: [u8; 8]) -> [u8; 8] {
+    let mut c = [0u8; 8];
+    for i in 0..8 {
+        c[i] = a[i] ^ b[i];
+    }
+
+    c
 }

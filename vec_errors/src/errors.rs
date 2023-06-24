@@ -394,4 +394,6 @@ pub enum VMError {
     DBReadError,
     #[error("Contract not found in DB")]
     ContractNotFound,
+    #[error("Given instruction is invalid")]
+    InvalidInstruction,
 }

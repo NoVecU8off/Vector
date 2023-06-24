@@ -6,13 +6,19 @@ use curve25519_dalek_ng::{
 use sha3::{Digest, Keccak256};
 use vec_errors::errors::*;
 
+pub type SSK = Scalar;
+pub type SVK = Scalar;
+pub type PSK = CompressedRistretto;
+pub type PVK = CompressedRistretto;
+pub type Address = Vec<u8>;
+
 #[derive(Debug, Clone)]
 pub struct Wallet {
-    pub secret_spend_key: Scalar,
-    pub secret_view_key: Scalar,
-    pub public_spend_key: CompressedRistretto,
-    pub public_view_key: CompressedRistretto,
-    pub address: Vec<u8>,
+    pub secret_spend_key: SSK,
+    pub secret_view_key: SVK,
+    pub public_spend_key: PSK,
+    pub public_view_key: PVK,
+    pub address: Address,
 }
 
 #[derive(Clone)]

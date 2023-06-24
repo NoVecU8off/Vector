@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 vec_errors = { path = "../vec_errors", version = "0.1.0"}
 vec_proto = { path = "../vec_proto", version = "0.1.0"}
+vec_crypto = { path = "../vec_crypto", version = "0.1.0"}
 
 wasmtime = "9.0.3"
 sled = "0.34.7"
@@ -16,3 +17,5 @@ rand = "0.8.5"
 sha3 = "0.10.8"
 tfhe = { version = "*", features = ["boolean", "shortint", "integer", "x86_64"] }
 bulletproofs = "4.0.0"
+merlin = "3.0.0"
+bs58 = "0.5.0"
