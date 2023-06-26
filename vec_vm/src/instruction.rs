@@ -7,7 +7,7 @@ pub type ProgramResult = Result<(), VMError>;
 const U64_BYTES: usize = 8;
 
 #[repr(C)]
-#[derive(Debug, Default, PartialEq, Eq, Clone)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub struct AccountMeta {
     /// An account's public key.
     pub address: Address,
@@ -23,9 +23,10 @@ pub struct Instruction {
     pub accounts: Vec<AccountMeta>,
     pub data: Vec<u8>,
 }
+
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq)]
-pub enum TokenInstruction<'a> {
+pub enum TokenInstruction {
     /// Initializes a new account to hold tokens.  If this account is associated
     /// with the native mint then the token balance of the initialized account
     /// will be equal to the amount of SOL in the account. If this account is
@@ -112,31 +113,16 @@ pub enum TokenInstruction<'a> {
         /// The new account's owner/multisignature.
         owner: Address,
     },
-    /// Initialize the Immutable Owner extension for the given token account
-    ///
-    /// Fails if the account has already been initialized, so must be called before
-    /// `InitializeAccount`.
-    ///
-    /// No-ops in this version of the program, but is included for compatibility
-    /// with the Associated Token Account program.
-    ///
-    /// Accounts expected by this instruction:
-    ///
-    ///   0. `[writable]`  The account to initialize.
-    ///
-    /// Data expected by this instruction:
-    ///   None
-    InitializeImmutableOwner,
 }
-impl<'a> TokenInstruction<'a> {
+impl<'a> TokenInstruction {
     /// Unpacks a byte buffer into a [TokenInstruction](enum.TokenInstruction.html).
     pub fn unpack(input: &'a [u8]) -> Result<Self, VMError> {
         use VMError::InvalidInstruction;
 
         let (&tag, rest) = input.split_first().ok_or(InvalidInstruction)?;
         Ok(match tag {
-            1 => Self::InitializeAccount,
-            2 => {
+            0 => Self::InitializeAccount,
+            1 => {
                 let amount = rest
                     .get(..8)
                     .and_then(|slice| slice.try_into().ok())
@@ -144,10 +130,9 @@ impl<'a> TokenInstruction<'a> {
                     .ok_or(InvalidInstruction)?;
                 Self::Transfer { amount }
             }
-            3 => Self::Revoke,
-            4 => Self::CloseAccount,
-            5 => Self::FreezeAccount,
-            6 => {
+            2 => Self::CloseAccount,
+            3 => Self::FreezeAccount,
+            4 => {
                 let (owner, _rest) = Self::unpack_pubkey(rest)?;
                 Self::InitializeAccount2 { owner }
             }
@@ -159,15 +144,15 @@ impl<'a> TokenInstruction<'a> {
     pub fn pack(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(size_of::<Self>());
         match self {
-            Self::InitializeAccount => buf.push(1),
+            Self::InitializeAccount => buf.push(0),
             &Self::Transfer { amount } => {
-                buf.push(3);
+                buf.push(1);
                 buf.extend_from_slice(&amount.to_le_bytes());
             }
-            Self::CloseAccount => buf.push(9),
-            Self::FreezeAccount => buf.push(10),
+            Self::CloseAccount => buf.push(2),
+            Self::FreezeAccount => buf.push(3),
             &Self::InitializeAccount2 { owner } => {
-                buf.push(16);
+                buf.push(4);
                 buf.extend_from_slice(owner.as_ref());
             }
         };
@@ -177,7 +162,7 @@ impl<'a> TokenInstruction<'a> {
     fn unpack_pubkey(input: &[u8]) -> Result<(Address, &[u8]), VMError> {
         if input.len() >= 64 {
             let (key, rest) = input.split_at(64);
-            let addr: Address = key;
+            let addr: Address = key.try_into().unwrap();
             Ok((addr, rest))
         } else {
             Err(VMError::InvalidInstruction.into())
@@ -189,7 +174,7 @@ impl<'a> TokenInstruction<'a> {
             Option::Some((&0, rest)) => Ok((Option::None, rest)),
             Option::Some((&1, rest)) if rest.len() >= 64 => {
                 let (key, rest) = rest.split_at(64);
-                let addr: Address = key;
+                let addr: Address = key.try_into().unwrap();
                 Ok((Option::Some(addr), rest))
             }
             _ => Err(VMError::InvalidInstruction.into()),
@@ -200,7 +185,7 @@ impl<'a> TokenInstruction<'a> {
         match *value {
             Option::Some(ref key) => {
                 buf.push(1);
-                buf.extend_from_slice(&key.to_bytes());
+                buf.extend_from_slice(key);
             }
             Option::None => buf.push(0),
         }
@@ -264,14 +249,12 @@ pub fn initialize_account(
     mint_pubkey: &Address,
     owner_pubkey: &Address,
 ) -> Result<Instruction, VMError> {
-    check_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount.pack();
 
     let accounts = vec![
         AccountMeta::new(*account_pubkey, false),
         AccountMeta::new_readonly(*mint_pubkey, false),
         AccountMeta::new_readonly(*owner_pubkey, false),
-        AccountMeta::new_readonly(sysvar::rent::id(), false),
     ];
 
     Ok(Instruction {
@@ -288,7 +271,6 @@ pub fn initialize_account2(
     mint_pubkey: &Address,
     owner_pubkey: &Address,
 ) -> Result<Instruction, VMError> {
-    check_program_account(token_program_id)?;
     let data = TokenInstruction::InitializeAccount2 {
         owner: *owner_pubkey,
     }
@@ -297,7 +279,6 @@ pub fn initialize_account2(
     let accounts = vec![
         AccountMeta::new(*account_pubkey, false),
         AccountMeta::new_readonly(*mint_pubkey, false),
-        AccountMeta::new_readonly(sysvar::rent::id(), false),
     ];
 
     Ok(Instruction {
@@ -316,7 +297,6 @@ pub fn transfer(
     signer_pubkeys: &[&Address],
     amount: u64,
 ) -> Result<Instruction, VMError> {
-    check_program_account(token_program_id)?;
     let data = TokenInstruction::Transfer { amount }.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -337,6 +317,24 @@ pub fn transfer(
     })
 }
 
+impl AccountMeta {
+    pub fn new(address: Address, is_signer: bool) -> Self {
+        Self {
+            address,
+            is_signer,
+            is_writable: true,
+        }
+    }
+
+    pub fn new_readonly(address: Address, is_signer: bool) -> Self {
+        Self {
+            address,
+            is_signer,
+            is_writable: false,
+        }
+    }
+}
+
 /// Creates a `CloseAccount` instruction.
 pub fn close_account(
     token_program_id: &Address,
@@ -345,7 +343,6 @@ pub fn close_account(
     owner_pubkey: &Address,
     signer_pubkeys: &[&Address],
 ) -> Result<Instruction, VMError> {
-    check_program_account(token_program_id)?;
     let data = TokenInstruction::CloseAccount.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -374,7 +371,6 @@ pub fn freeze_account(
     owner_pubkey: &Address,
     signer_pubkeys: &[&Address],
 ) -> Result<Instruction, VMError> {
-    check_program_account(token_program_id)?;
     let data = TokenInstruction::FreezeAccount.pack();
 
     let mut accounts = Vec::with_capacity(3 + signer_pubkeys.len());
@@ -393,11 +389,4 @@ pub fn freeze_account(
         accounts,
         data,
     })
-}
-
-pub fn check_program_account(spl_token_program_id: &Pubkey) -> ProgramResult {
-    if spl_token_program_id != &id() {
-        return Err(VMError::IncorrectProgramId);
-    }
-    Ok(())
 }

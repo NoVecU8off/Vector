@@ -10,7 +10,7 @@ pub type SSK = Scalar;
 pub type SVK = Scalar;
 pub type PSK = CompressedRistretto;
 pub type PVK = CompressedRistretto;
-pub type Address = Vec<u8>;
+pub type Address = [u8; 64];
 
 #[derive(Debug, Clone)]
 pub struct Wallet {
@@ -44,7 +44,7 @@ impl Wallet {
             public_view_key.compress().to_bytes().as_slice(),
         ]
         .concat();
-        let address = data;
+        let address = data.as_slice().try_into().unwrap();
 
         Ok(Wallet {
             secret_spend_key,
@@ -68,8 +68,8 @@ impl Wallet {
             public_view_key.compress().to_bytes().as_slice(),
         ]
         .concat();
-        let address = data;
-
+        let address = data.as_slice().try_into().unwrap();
+        
         Ok(Wallet {
             secret_spend_key,
             secret_view_key,
@@ -275,7 +275,7 @@ impl Wallet {
 
         let public_spend_key = CompressedRistretto::from_slice(&v[64..96]);
         let public_view_key = CompressedRistretto::from_slice(&v[96..128]);
-        let address = v[128..].to_vec();
+        let address = v[128..].try_into().unwrap();
 
         Ok(Wallet {
             secret_spend_key,
@@ -330,7 +330,7 @@ pub struct SerializableWallet {
     secret_view_key: [u8; 32],
     public_spend_key: [u8; 32],
     public_view_key: [u8; 32],
-    address: Vec<u8>,
+    address: [u8; 64],
 }
 
 impl Wallet {

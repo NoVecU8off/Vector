@@ -469,7 +469,7 @@ impl NodeService {
 
         Version {
             msg_version,
-            msg_address: address.clone(),
+            msg_address: address.to_vec(),
             msg_ip: ip.to_string(),
             msg_max_local_index: local_index,
         }

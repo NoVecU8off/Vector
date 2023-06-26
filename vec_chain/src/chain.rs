@@ -37,6 +37,7 @@ impl Chain {
 
     // Return the "highest" block index in the local chain instance
     pub async fn max_index(&self) -> Result<u64, BlockStorageError> {
+        // let blocks: Box<dyn BlockStorer>;
         match self.blocks.get_highest_index().await {
             Ok(Some(index)) => Ok(index),
             Ok(None) => Ok(0),
