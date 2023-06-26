@@ -69,7 +69,7 @@ impl Wallet {
         ]
         .concat();
         let address = data.as_slice().try_into().unwrap();
-        
+
         Ok(Wallet {
             secret_spend_key,
             secret_view_key,

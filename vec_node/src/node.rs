@@ -31,11 +31,11 @@ use vec_utils::utils::{hash_block, mine};
 pub struct NodeService {
     pub wallet: Arc<Wallet>,
     pub ip: Arc<String>,
-    pub ip_store: Arc<Box<dyn IPStorer>>,
+    pub ip_store: Arc<dyn IPStorer>,
     pub version: u32,
-    pub peers: Arc<DashMap<String, Arc<RwLock<NodeClient<Channel>>>>>,
+    pub peers: DashMap<String, Arc<RwLock<NodeClient<Channel>>>>,
     pub mempool: Arc<Mempool>,
-    pub blockchain: Arc<RwLock<Chain>>,
+    pub chain: Arc<Chain>,
     pub logger: Arc<Logger>,
 }
 
@@ -111,15 +111,15 @@ impl Node for NodeService {
         let state = request.into_inner();
         let requester_index = state.msg_max_local_index;
         let mut blocks = Vec::new();
-        let chain_rlock = self.blockchain.read().await;
 
-        let max_index = chain_rlock
+        let max_index = self
+            .chain
             .max_index()
             .await
             .map_err(|e| Status::internal(format!("Failed to get max index: {:?}", e)))?;
 
         for index in (requester_index + 1)..=max_index {
-            match chain_rlock.blocks.get_by_index(index).await {
+            match self.chain.blocks.read().await.get_by_index(index).await {
                 Ok(Some(block)) => blocks.push(block),
                 Ok(None) => {
                     return Err(Status::internal(format!("No block at height {}", index)));
@@ -213,8 +213,7 @@ impl Node for NodeService {
         let push_request = request.into_inner();
         let sender_ip = push_request.msg_ip;
         let block_hash = push_request.msg_block_hash;
-        let read_lock = self.blockchain.read().await;
-        match read_lock.blocks.get(block_hash.clone()).await {
+        match self.chain.blocks.read().await.get(block_hash.clone()).await {
             Ok(Some(_)) => {
                 info!(self.logger, "\nOffered block already exists");
                 Ok(Response::new(Confirmed {}))
@@ -251,8 +250,7 @@ impl Node for NodeService {
         info!(self.logger, "\nRecieved pull block request");
         let pull_request = request.into_inner();
         let block_hash = pull_request.msg_block_hash;
-        let read_lock = self.blockchain.read().await;
-        match read_lock.blocks.get(block_hash).await {
+        match self.chain.blocks.read().await.get(block_hash).await {
             Ok(Some(block)) => {
                 info!(self.logger, "\nBlock was successfully sent to requester");
                 Ok(Response::new(block))
@@ -283,7 +281,7 @@ impl NodeService {
 
         let version: u32 = 1;
 
-        let peers = Arc::new(DashMap::new());
+        let peers = DashMap::new();
 
         let block_db =
             sled::open("C:/Vector/blocks_db").map_err(|_| NodeServiceError::SledOpenError)?;
@@ -295,16 +293,17 @@ impl NodeService {
             sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
         let ip_db = sled::open("C:/Vector/ips").map_err(|_| NodeServiceError::SledOpenError)?;
 
-        let blocks: Box<dyn BlockStorer> = Box::new(BlockDB::new(block_db, index_db));
-        let outputs: Box<dyn OutputStorer> = Box::new(OutputDB::new(output_db));
-        let images: Box<dyn ImageStorer> = Box::new(ImageDB::new(image_db));
-        let _blockchain = Chain::new(blocks, images, outputs)
+        let blocks: Arc<RwLock<dyn BlockStorer>> =
+            Arc::new(RwLock::new(BlockDB::new(block_db, index_db)));
+        let outputs: Arc<RwLock<dyn OutputStorer>> =
+            Arc::new(RwLock::new(OutputDB::new(output_db)));
+        let images: Arc<RwLock<dyn ImageStorer>> = Arc::new(RwLock::new(ImageDB::new(image_db)));
+        let _chain = Chain::new(blocks, images, outputs)
             .await
             .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
-        let blockchain = Arc::new(RwLock::new(_blockchain));
+        let chain = Arc::new(_chain);
 
-        let _ip_store: Box<dyn IPStorer> = Box::new(IPDB::new(ip_db));
-        let ip_store = Arc::new(_ip_store);
+        let ip_store = Arc::new(IPDB::new(ip_db));
 
         let mempool = Arc::new(Mempool::new());
 
@@ -318,7 +317,7 @@ impl NodeService {
             peers,
             logger,
             mempool,
-            blockchain,
+            chain,
         })
     }
 
@@ -395,12 +394,10 @@ impl NodeService {
         &self,
         ip: &str,
     ) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
-        let chain_rlock = self.blockchain.read().await;
-        let local_index = match chain_rlock.max_index().await {
+        let local_index = match self.chain.max_index().await {
             Ok(index) => index,
             Err(_) => return Err(NodeServiceError::FailedToGetIndex),
         };
-        drop(chain_rlock);
         let mut c = make_node_client(ip).await?;
         info!(
             self.logger,
@@ -462,9 +459,7 @@ impl NodeService {
     pub async fn get_version(&self) -> Version {
         let ip = &self.ip;
         let msg_version = self.version;
-        let chain_rlock = self.blockchain.read().await;
-        let local_index = chain_rlock.max_index().await.unwrap();
-        drop(chain_rlock);
+        let local_index = self.chain.max_index().await.unwrap();
         let address = &self.wallet.address;
 
         Version {
@@ -476,9 +471,8 @@ impl NodeService {
     }
 
     pub async fn make_block(&self) -> Result<(), NodeServiceError> {
-        let chain_rlock = self.blockchain.read().await;
-        let msg_previous_hash = chain_rlock.get_previous_hash_in_chain().await?;
-        let local_index = match chain_rlock.max_index().await {
+        let msg_previous_hash = self.chain.get_previous_hash_in_chain().await?;
+        let local_index = match self.chain.max_index().await {
             Ok(index) => index,
             Err(_) => return Err(NodeServiceError::FailedToGetIndex),
         };
@@ -509,12 +503,9 @@ impl NodeService {
             msg_header: Some(header.clone()),
             msg_transactions: transactions,
         };
-        drop(chain_rlock);
         let nonce = mine(block.clone())?;
         block.msg_header.as_mut().unwrap().msg_nonce = nonce;
-        let mut chain_wlock = self.blockchain.write().await;
-        chain_wlock.add_block(&self.wallet, block.clone()).await?;
-        drop(chain_wlock);
+        self.chain.add_block(&self.wallet, block.clone()).await?;
         let bs58_hash = bs58::encode(hash_block(&block)?).into_string();
         info!(
             self.logger,
@@ -566,31 +557,19 @@ impl NodeService {
         amount: u64,
         contract_path: Option<&str>,
     ) -> Result<(), NodeServiceError> {
-        let (inputs, total_input_amount) = self
-            .blockchain
-            .write()
-            .await
-            .prepare_inputs(&self.wallet)
-            .await?;
+        let (inputs, total_input_amount) = self.chain.prepare_inputs(&self.wallet).await?;
         if total_input_amount < amount {
             return Err(NodeServiceError::InsufficientBalance);
         }
         let mut outputs = Vec::new();
         if total_input_amount > amount {
             let change = total_input_amount - amount;
-            let change =
-                self.blockchain
-                    .write()
-                    .await
-                    .prepare_change_output(&self.wallet, change, 2)?;
+            let change = self.chain.prepare_change_output(&self.wallet, change, 2)?;
             outputs.push(change);
         }
-        let output = self.blockchain.write().await.prepare_output(
-            &self.wallet,
-            recipient_address,
-            1,
-            amount,
-        )?;
+        let output = self
+            .chain
+            .prepare_output(&self.wallet, recipient_address, 1, amount)?;
         outputs.push(output);
 
         let contract_code = match contract_path {
@@ -674,11 +653,7 @@ impl NodeService {
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
-            self.blockchain
-                .write()
-                .await
-                .validate_transaction(&transaction)
-                .await?;
+            self.chain.validate_transaction(&transaction).await?;
             info!(
                 self.logger,
                 "\nRecieved transaction was successfully validated"
@@ -720,17 +695,9 @@ impl NodeService {
     ) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
             for transaction in &block.msg_transactions {
-                self.blockchain
-                    .write()
-                    .await
-                    .process_transaction(wallet, transaction)
-                    .await?;
+                self.chain.process_transaction(wallet, transaction).await?;
             }
-            self.blockchain
-                .write()
-                .await
-                .add_block(wallet, block)
-                .await?;
+            self.chain.add_block(wallet, block).await?;
             info!(self.logger, "\nNew block added");
         }
 
@@ -743,26 +710,16 @@ impl NodeService {
         block: Block,
         sender_ip: &str,
     ) -> Result<(), NodeServiceError> {
-        let chain_rlock = self.blockchain.read().await;
-        let local_index = chain_rlock.max_index().await.unwrap();
-        drop(chain_rlock);
+        let local_index = self.chain.max_index().await.unwrap();
         info!(self.logger, "\nProcessing block");
         if let Some(header) = &block.msg_header {
             if header.msg_index < local_index {
                 Err(NodeServiceError::BlockIndexTooLow)
             } else if header.msg_index == local_index + 1 {
                 for transaction in &block.msg_transactions {
-                    self.blockchain
-                        .write()
-                        .await
-                        .process_transaction(wallet, transaction)
-                        .await?;
+                    self.chain.process_transaction(wallet, transaction).await?;
                 }
-                self.blockchain
-                    .write()
-                    .await
-                    .add_block(wallet, block)
-                    .await?;
+                self.chain.add_block(wallet, block).await?;
                 info!(self.logger, "\nNew block added");
                 Ok(())
             } else {
@@ -831,9 +788,7 @@ impl NodeService {
         wallet: &Wallet,
         client: &mut NodeClient<Channel>,
     ) -> Result<(), NodeServiceError> {
-        let chain_rlock = self.blockchain.read().await;
-        let msg_max_local_index = chain_rlock.max_index().await.unwrap();
-        drop(chain_rlock);
+        let msg_max_local_index = self.chain.max_index().await.unwrap();
         info!(
             self.logger,
             "\nSending request with current index {:?}", msg_max_local_index
@@ -887,8 +842,7 @@ impl NodeService {
 
     // CLI commands
     pub async fn make_genesis_block(&self) -> Result<(), NodeServiceError> {
-        let chain_rlock = self.blockchain.read().await;
-        if chain_rlock.max_index().await? != 0 {
+        if self.chain.max_index().await? != 0 {
             return Err(NodeServiceError::ChainIsNotEmpty);
         }
         let transactions = vec![self.make_genesis_transaction(100000).await?];
@@ -917,14 +871,11 @@ impl NodeService {
             msg_header: Some(header.clone()),
             msg_transactions: transactions,
         };
-        drop(chain_rlock);
         let nonce = mine(block.clone())?;
         block.msg_header.as_mut().unwrap().msg_nonce = nonce;
-        let mut chain_wlock = self.blockchain.write().await;
-        chain_wlock
+        self.chain
             .add_genesis_block(&self.wallet, block.clone())
             .await?;
-        drop(chain_wlock);
         let bs58_hash = bs58::encode(hash_block(&block)?).into_string();
         info!(
             self.logger,
@@ -973,8 +924,7 @@ impl NodeService {
     }
 
     pub async fn get_balance(&self) -> u64 {
-        let chain_lock = self.blockchain.read().await;
-        chain_lock.get_balance().await
+        self.chain.get_balance().await
     }
 
     pub async fn connect_to(&self, ip: String) -> Result<(), NodeServiceError> {
@@ -1007,8 +957,7 @@ impl NodeService {
     }
 
     pub async fn get_last_index(&self) -> Result<u64, NodeServiceError> {
-        let chain_lock = self.blockchain.read().await;
-        let height = chain_lock.max_index().await.unwrap();
+        let height = self.chain.max_index().await.unwrap();
 
         Ok(height)
     }

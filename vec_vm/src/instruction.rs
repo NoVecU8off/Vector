@@ -1,7 +1,7 @@
-use vec_crypto::cryptography::Address;
-use vec_errors::errors::*;
 use std::mem::size_of;
 use std::result::Result;
+use vec_crypto::cryptography::Address;
+use vec_errors::errors::*;
 
 pub type ProgramResult = Result<(), VMError>;
 const U64_BYTES: usize = 8;
