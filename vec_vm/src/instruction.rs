@@ -1,6 +1,6 @@
 use std::mem::size_of;
 use std::result::Result;
-use vec_crypto::cryptography::Address;
+use vec_crypto::crypto::Address;
 use vec_errors::errors::*;
 
 pub type ProgramResult = Result<(), VMError>;

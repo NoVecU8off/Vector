@@ -14,7 +14,7 @@ use tonic::{
     Request, Response, Status,
 };
 use vec_chain::chain::Chain;
-use vec_crypto::cryptography::Wallet;
+use vec_crypto::crypto::Wallet;
 use vec_errors::errors::*;
 use vec_mempool::mempool::*;
 use vec_merkle::merkle::MerkleTree;

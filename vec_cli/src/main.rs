@@ -1,6 +1,6 @@
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
-use vec_crypto::cryptography::Wallet;
+use vec_crypto::crypto::Wallet;
 use vec_errors::errors::*;
 use vec_node::node::*;
 

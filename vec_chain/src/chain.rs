@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 use sha3::{Digest, Keccak256};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use vec_crypto::cryptography::{derive_keys_from_address, hash_to_point, BLSAGSignature, Wallet};
+use vec_crypto::crypto::{derive_keys_from_address, hash_to_point, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::{Block, Transaction, TransactionInput, TransactionOutput};

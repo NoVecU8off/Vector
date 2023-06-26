@@ -1,1 +1,1 @@
-pub mod cryptography;
+pub mod crypto;
