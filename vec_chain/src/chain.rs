@@ -274,7 +274,7 @@ impl Chain {
             let decrypted_amount = owned_output.decrypted_amount;
             total_input_amount += decrypted_amount;
             let owned_stealth_addr = &owned_output.output.stealth;
-            let compressed_stealth = CompressedRistretto::from_slice(&owned_stealth_addr);
+            let compressed_stealth = CompressedRistretto::from_slice(owned_stealth_addr);
             let wallets_res: Result<Vec<Wallet>, _> = (0..9).map(|_| Wallet::generate()).collect();
             let wallets = wallets_res?;
             let mut s_addrs: Vec<CompressedRistretto> =

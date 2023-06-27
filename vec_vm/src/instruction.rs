@@ -136,7 +136,7 @@ impl<'a> TokenInstruction {
                 let (owner, _rest) = Self::unpack_pubkey(rest)?;
                 Self::InitializeAccount2 { owner }
             }
-            _ => return Err(VMError::InvalidInstruction.into()),
+            _ => return Err(VMError::InvalidInstruction),
         })
     }
 
@@ -165,7 +165,7 @@ impl<'a> TokenInstruction {
             let addr: Address = key.try_into().unwrap();
             Ok((addr, rest))
         } else {
-            Err(VMError::InvalidInstruction.into())
+            Err(VMError::InvalidInstruction)
         }
     }
 
@@ -177,7 +177,7 @@ impl<'a> TokenInstruction {
                 let addr: Address = key.try_into().unwrap();
                 Ok((Option::Some(addr), rest))
             }
-            _ => Err(VMError::InvalidInstruction.into()),
+            _ => Err(VMError::InvalidInstruction),
         }
     }
 
@@ -237,7 +237,7 @@ impl AuthorityType {
             1 => Ok(AuthorityType::FreezeAccount),
             2 => Ok(AuthorityType::AccountOwner),
             3 => Ok(AuthorityType::CloseAccount),
-            _ => Err(VMError::InvalidInstruction.into()),
+            _ => Err(VMError::InvalidInstruction),
         }
     }
 }

@@ -213,11 +213,23 @@ impl Storage {
     }
 }
 
+impl Default for Storage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Parties {
     pub fn new() -> Parties {
         Parties {
             addresses: Vec::new(),
         }
+    }
+}
+
+impl Default for Parties {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -244,7 +256,7 @@ impl Scheme {
         let mut inputs = Vec::new();
         for output in output_set {
             let stealth = &output.stealth;
-            let compressed = CompressedRistretto::from_slice(&stealth);
+            let compressed = CompressedRistretto::from_slice(stealth);
             let wallet_res: Result<Vec<Wallet>, _> = (0..9).map(|_| Wallet::new()).collect();
             let wallets = wallet_res?;
             let mut s_addrs: Vec<CompressedRistretto> =

@@ -340,7 +340,7 @@ impl Wallet {
             secret_view_key: self.secret_view_key.to_bytes(),
             public_spend_key: self.public_spend_key.to_bytes(),
             public_view_key: self.public_view_key.to_bytes(),
-            address: self.address.clone(),
+            address: self.address,
         }
     }
 
@@ -350,7 +350,7 @@ impl Wallet {
             secret_view_key: Scalar::from_bytes_mod_order(s.secret_view_key),
             public_spend_key: CompressedRistretto::from_slice(&s.public_spend_key),
             public_view_key: CompressedRistretto::from_slice(&s.public_view_key),
-            address: s.address.clone(),
+            address: s.address,
         }
     }
 }

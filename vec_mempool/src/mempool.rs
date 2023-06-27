@@ -65,7 +65,7 @@ impl Mempool {
 
     // Removes the specific transaction
     pub fn remove(&self, tx: &Transaction) -> bool {
-        let bs58_hash = bs58::encode(hash_transaction(&tx)).into_string();
+        let bs58_hash = bs58::encode(hash_transaction(tx)).into_string();
         if self.transactions.contains_key(&bs58_hash) {
             self.transactions.remove(&bs58_hash);
             info!(

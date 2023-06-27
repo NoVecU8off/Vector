@@ -29,7 +29,7 @@ impl ContractStorer for ContractDB {
             .map_err(|_| ContractStorageError::SerializationError)?;
 
         self.db
-            .insert(&address, buf)
+            .insert(address, buf)
             .map_err(|_| ContractStorageError::WriteError)?;
 
         Ok(())

@@ -26,6 +26,7 @@ use vec_proto::messages::{
 use vec_storage::{block_db::*, image_db::*, ip_db::*, output_db::*};
 use vec_utils::utils::hash_transaction;
 use vec_utils::utils::{hash_block, mine};
+use std::cmp::Ordering;
 
 #[derive(Clone)]
 pub struct NodeService {
@@ -166,7 +167,7 @@ impl Node for ArcNodeService {
     ) -> Result<Response<Confirmed>, Status> {
         let push_request = request.into_inner();
         let sender_ip = push_request.msg_ip.clone();
-        let transaction_hash = push_request.msg_transaction_hash.clone();
+        let transaction_hash = push_request.msg_transaction_hash;
         let bs58_hash = bs58::encode(&transaction_hash).into_string();
 
         if self.ns.mempool.has_hash(&bs58_hash) {
@@ -345,23 +346,27 @@ impl NodeService {
         let mut c = make_node_client(ip).await?;
         info!(
             self.log,
-            "\nNode client {:?} created successfully, requesting version", ip
+            "\nNode client {:?} created successfully, requesting version",
+            ip
         );
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
             .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
-        if v.msg_max_local_index > local_index {
-            self.synchronize_with_client(&self.wallet, &mut c).await?;
-            Ok((c, v))
-        } else if v.msg_max_local_index < local_index {
-            Err(NodeServiceError::LaggingNode)
-        } else {
-            info!(self.log, "\nDialed remote node: {}", ip);
-            Ok((c, v))
+    
+        match v.msg_max_local_index.cmp(&local_index) {
+            Ordering::Greater => {
+                self.synchronize_with_client(&self.wallet, &mut c).await?;
+                Ok((c, v))
+            }
+            Ordering::Less => Err(NodeServiceError::LaggingNode),
+            Ordering::Equal => {
+                info!(self.log, "\nDialed remote node: {}", ip);
+                Ok((c, v))
+            }
         }
-    }
+    }    
 
     pub async fn add_peer(
         &self,

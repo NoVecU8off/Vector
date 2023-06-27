@@ -1,4 +1,3 @@
-use sled::{Db, IVec};
 use vec_errors::errors::*;
 use wasmtime::*;
 
@@ -14,7 +13,7 @@ pub fn call(address: &[u8], function_name: &str, args: Vec<Val>) -> Result<(), V
         .ok_or(VMError::ContractNotFound)?
         .to_vec();
 
-    let module = Module::new(&engine, &module_binary).map_err(|_| VMError::ModuleInitFailed)?;
+    let module = Module::new(&engine, module_binary).map_err(|_| VMError::ModuleInitFailed)?;
     let instance =
         Instance::new(&mut store, &module, &[]).map_err(|_| VMError::InstanceCreationError)?;
 
