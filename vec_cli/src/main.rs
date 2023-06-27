@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_crypto::crypto::Wallet;
@@ -82,16 +84,16 @@ async fn main() {
         println!("Please, save your secret key: {}", secret_spend_key);
     }
 
-    let nsv = match NodeService::new(secret_spend_key, address).await {
-        Ok(nsv) => nsv,
+    let ans = match new(secret_spend_key, address).await {
+        Ok(ans) => ans,
         Err(e) => {
             eprintln!("Failed to create NodeService: {}", e);
             return;
         }
     };
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-    let mut nsv_clone = nsv.clone();
-    tokio::spawn(async move { nsv_clone.start().await });
+    let ans_c = Arc::clone(&ans.ns);
+    tokio::spawn(async move { start(&ans_c).await });
 
     let server_future = tokio::spawn(async move {
         loop {
@@ -101,7 +103,8 @@ async fn main() {
                     amount,
                     contract_path,
                 }) => {
-                    match nsv
+                    match ans
+                        .ns
                         .make_transaction(&address, amount, contract_path.as_deref())
                         .await
                     {
@@ -109,16 +112,16 @@ async fn main() {
                         Err(e) => eprintln!("Failed to broadcast transaction: {}", e),
                     }
                 }
-                Some(Command::MakeBlock) => match nsv.make_block().await {
+                Some(Command::MakeBlock) => match ans.ns.make_block().await {
                     Ok(_) => println!("Block created successfully"),
                     Err(e) => eprintln!("Failed to create block: {}", e),
                 },
                 Some(Command::GetBalance) => {
-                    let balance = nsv.get_balance().await;
+                    let balance = ans.ns.get_balance().await;
                     println!("Your balance: {}", balance);
                 }
                 Some(Command::GetIndex) => {
-                    let height = match nsv.get_last_index().await {
+                    let height = match ans.ns.get_last_index().await {
                         Ok(height) => height,
                         Err(e) => {
                             eprintln!("Failed to get last index: {}", e);
@@ -127,15 +130,15 @@ async fn main() {
                     };
                     println!("Current Block's index: {}", height);
                 }
-                Some(Command::Genesis) => match nsv.make_genesis_block().await {
+                Some(Command::Genesis) => match ans.ns.make_genesis_block().await {
                     Ok(_) => println!("Genesis block created successfully"),
                     Err(e) => eprintln!("Failed to create genesis block: {}", e),
                 },
-                Some(Command::ConnectTo { ip }) => match nsv.connect_to(ip.clone()).await {
+                Some(Command::ConnectTo { ip }) => match ans.ns.connect_to(ip.clone()).await {
                     Ok(_) => println!("Successfully connected to {}", ip),
                     Err(e) => eprintln!("Failed to connect: {}", e),
                 },
-                Some(Command::GetAddress) => match nsv.get_address().await {
+                Some(Command::GetAddress) => match ans.ns.get_address().await {
                     Ok(address) => println!("Address: {}", address),
                     Err(e) => eprintln!("Failed to get address: {}", e),
                 },

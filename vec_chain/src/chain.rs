@@ -9,7 +9,6 @@ use prost::Message;
 use rand::seq::SliceRandom;
 use sha3::{Digest, Keccak256};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use vec_crypto::crypto::{derive_keys_from_address, hash_to_point, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
@@ -18,16 +17,16 @@ use vec_storage::{block_db::*, image_db::*, output_db::*};
 use vec_utils::utils::*;
 
 pub struct Chain {
-    pub blocks: Arc<RwLock<dyn BlockStorer>>,
-    pub images: Arc<RwLock<dyn ImageStorer>>,
-    pub outputs: Arc<RwLock<dyn OutputStorer>>,
+    pub blocks: Arc<dyn BlockStorer>,
+    pub images: Arc<dyn ImageStorer>,
+    pub outputs: Arc<dyn OutputStorer>,
 }
 
 impl Chain {
     pub async fn new(
-        blocks: Arc<RwLock<dyn BlockStorer>>,
-        images: Arc<RwLock<dyn ImageStorer>>,
-        outputs: Arc<RwLock<dyn OutputStorer>>,
+        blocks: Arc<dyn BlockStorer>,
+        images: Arc<dyn ImageStorer>,
+        outputs: Arc<dyn OutputStorer>,
     ) -> Result<Chain, ChainOpsError> {
         let chain = Chain {
             blocks,
@@ -39,9 +38,7 @@ impl Chain {
 
     // Return the "highest" block index in the local chain instance
     pub async fn max_index(&self) -> Result<u64, BlockStorageError> {
-        // let blocks: Box<dyn BlockStorer>;
-        let rlock = self.blocks.read().await;
-        match rlock.get_highest_index().await {
+        match self.blocks.get_highest_index().await {
             Ok(Some(index)) => Ok(index),
             Ok(None) => Ok(0),
             Err(e) => Err(e),
@@ -60,9 +57,7 @@ impl Chain {
         }
         let hash = hash_block(&block)?;
         let index = header.msg_index;
-        let wlock = self.blocks.write().await;
-        wlock.put_block(index, hash, &block).await?;
-        drop(wlock);
+        self.blocks.put_block(index, hash, &block).await?;
         Ok(())
     }
 
@@ -88,15 +83,13 @@ impl Chain {
         }
         let hash = hash_block(&block)?.to_vec();
         let index = header.msg_index;
-        let wlock = self.blocks.write().await;
-        wlock.put_block(index, hash, &block).await?;
-        drop(wlock);
+        self.blocks.put_block(index, hash, &block).await?;
         Ok(())
     }
 
     // Returns the block from the BlockDB by its hash
     pub async fn get_block_by_hash(&self, hash: Vec<u8>) -> Result<Block, ChainOpsError> {
-        match self.blocks.read().await.get(hash.clone()).await {
+        match self.blocks.get(hash.clone()).await {
             Ok(Some(block)) => Ok(block),
             Ok(None) => Err(ChainOpsError::BlockNotFound(
                 bs58::encode(hash).into_string(),
@@ -126,13 +119,7 @@ impl Chain {
 
     pub async fn get_previous_hash_in_chain(&self) -> Result<Vec<u8>, ChainOpsError> {
         let previous_index = self.max_index().await?;
-        let previous_hash = match self
-            .blocks
-            .read()
-            .await
-            .get_hash_by_index(previous_index)
-            .await?
-        {
+        let previous_hash = match self.blocks.get_hash_by_index(previous_index).await? {
             Some(hash) => hash,
             None => return Err(ChainOpsError::MissingBlockHash),
         };
@@ -161,7 +148,7 @@ impl Chain {
 
     // Returns the sum of decrypted outputs stored in the OutputDB
     pub async fn get_balance(&self) -> u64 {
-        let output_set = self.outputs.read().await.get().await.unwrap();
+        let output_set = self.outputs.get().await.unwrap();
         let mut total_balance = 0;
         for owned_output in &output_set {
             let decrypted_amount = owned_output.decrypted_amount;
@@ -183,9 +170,7 @@ impl Chain {
             let message = &input.msg_message;
             let image = input.msg_key_image.clone();
 
-            if self.images.read().await.contains(image).await?
-                || !self.verify_blsag(&signature, ring, message)
-            {
+            if self.images.contains(image).await? || !self.verify_blsag(&signature, ring, message) {
                 return Ok(false);
             }
         }
@@ -270,7 +255,7 @@ impl Chain {
                     decrypted_amount,
                 };
                 {
-                    self.outputs.write().await.put(&owned_output).await?;
+                    self.outputs.put(&owned_output).await?;
                 }
             }
         }
@@ -282,7 +267,7 @@ impl Chain {
         &self,
         wallet: &Wallet,
     ) -> Result<(Vec<TransactionInput>, u64), ChainOpsError> {
-        let output_set = self.outputs.read().await.get().await.unwrap();
+        let output_set = self.outputs.get().await.unwrap();
         let mut total_input_amount = 0;
         let mut inputs = Vec::new();
         for owned_output in &output_set {
@@ -439,11 +424,9 @@ mod tests {
         let index_db = sled::open("C:/Vector/indexes").unwrap();
         let output_db = sled::open("C:/Vector/outputs").unwrap();
         let image_db = sled::open("C:/Vector/images").unwrap();
-        let blocks: Arc<RwLock<dyn BlockStorer>> =
-            Arc::new(RwLock::new(BlockDB::new(block_db, index_db)));
-        let outputs: Arc<RwLock<dyn OutputStorer>> =
-            Arc::new(RwLock::new(OutputDB::new(output_db)));
-        let images: Arc<RwLock<dyn ImageStorer>> = Arc::new(RwLock::new(ImageDB::new(image_db)));
+        let blocks: Arc<dyn BlockStorer> = Arc::new(BlockDB::new(block_db, index_db));
+        let outputs: Arc<dyn OutputStorer> = Arc::new(OutputDB::new(output_db));
+        let images: Arc<dyn ImageStorer> = Arc::new(ImageDB::new(image_db));
         let chain = Chain::new(blocks, images, outputs).await.unwrap();
         Ok(chain)
     }
