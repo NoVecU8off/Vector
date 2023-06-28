@@ -1,6 +1,6 @@
-use std::sync::Arc;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use std::sync::Arc;
 use vec_crypto::crypto::Wallet;
 use vec_errors::errors::*;
 use vec_node::node::*;

@@ -475,17 +475,18 @@ impl NodeService {
         amount: u64,
         contract_path: Option<&str>,
     ) -> Result<(), NodeServiceError> {
-        let (inputs, total_input_amount) = prepare_inputs(&self.wallet).await?;
+        let wallet = &self.wallet;
+        let (inputs, total_input_amount) = wallet.prepare_inputs().await?;
         if total_input_amount < amount {
             return Err(NodeServiceError::InsufficientBalance);
         }
         let mut outputs = Vec::new();
         if total_input_amount > amount {
             let change = total_input_amount - amount;
-            let change = prepare_change_output(&self.wallet, change, 2)?;
+            let change = wallet.prepare_change_output(change, 2)?;
             outputs.push(change);
         }
-        let output = prepare_output(&self.wallet, recipient_address, 1, amount)?;
+        let output = wallet.prepare_output(recipient_address, 1, amount)?;
         outputs.push(output);
 
         let contract_code = match contract_path {
@@ -608,7 +609,7 @@ impl NodeService {
     ) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
             for transaction in &block.msg_transactions {
-                process_transaction(wallet, transaction).await?;
+                wallet.process_transaction(transaction).await?;
             }
             add_block(wallet, block).await?;
             info!(self.log, "\nNew block added");
@@ -630,7 +631,7 @@ impl NodeService {
                 Err(NodeServiceError::BlockIndexTooLow)
             } else if header.msg_index == local_index + 1 {
                 for transaction in &block.msg_transactions {
-                    process_transaction(wallet, transaction).await?;
+                    wallet.process_transaction(transaction).await?;
                 }
                 add_block(wallet, block).await?;
                 info!(self.log, "\nNew block added");

@@ -1,21 +1,13 @@
 use bs58;
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
-use curve25519_dalek_ng::{
-    constants, ristretto::CompressedRistretto, ristretto::RistrettoPoint, scalar::Scalar,
-    traits::Identity,
-};
+use curve25519_dalek_ng::ristretto::CompressedRistretto;
 use merlin::Transcript;
 use prost::Message;
-use rand::seq::SliceRandom;
-use sha3::{Digest, Keccak256};
-use vec_crypto::crypto::{derive_keys_from_address, hash_to_point, BLSAGSignature, Wallet};
+use vec_crypto::crypto::{verify_blsag, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
-use vec_proto::messages::{Block, Transaction, TransactionInput, TransactionOutput};
-use vec_storage::{
-    output_db::{Output, OwnedOutput},
-    lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER},
-};
+use vec_proto::messages::{Block, Transaction};
+use vec_storage::lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER};
 use vec_utils::utils::*;
 
 // Return the "highest" block index in the local chain instance
@@ -35,7 +27,7 @@ pub async fn add_block(wallet: &Wallet, block: Block) -> Result<(), ChainOpsErro
         .ok_or(ChainOpsError::MissingBlockHeader)?;
     validate_block(&block).await?;
     for transaction in block.msg_transactions.iter() {
-        process_transaction(wallet, transaction).await?;
+        wallet.process_transaction(transaction).await?;
     }
     let hash = hash_block(&block)?;
     let index = header.msg_index;
@@ -57,7 +49,7 @@ pub async fn add_genesis_block(wallet: &Wallet, block: Block) -> Result<(), Chai
         .as_ref()
         .ok_or(ChainOpsError::MissingBlockHeader)?;
     for transaction in block.msg_transactions.iter() {
-        process_transaction(wallet, transaction).await?;
+        wallet.process_transaction(transaction).await?;
     }
     let hash = hash_block(&block)?.to_vec();
     let index = header.msg_index;
@@ -170,193 +162,6 @@ pub fn validate_outputs(transaction: &Transaction) -> Result<bool, ChainOpsError
         }
     }
     Ok(true)
-}
-
-pub fn verify_blsag(sig: &BLSAGSignature, p: &[CompressedRistretto], m: &[u8]) -> bool {
-    let n = p.len();
-    let c1 = sig.c;
-    let s = sig.s.clone();
-    let image = sig.i;
-    let mut l: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
-    let mut r: Vec<RistrettoPoint> = vec![RistrettoPoint::identity(); n];
-    let mut c: Vec<Scalar> = vec![Scalar::zero(); n];
-    c[0] = c1;
-    for j in 0..n {
-        let i = j % n;
-        let ip1 = (j + 1) % n;
-        l[i] = s[i] * constants::RISTRETTO_BASEPOINT_POINT + c[i] * p[i].decompress().unwrap();
-        r[i] = s[i] * hash_to_point(&p[i]) + c[i] * image.decompress().unwrap();
-        let mut hasher = Keccak256::new();
-        hasher.update(m);
-        hasher.update(l[i].compress().to_bytes());
-        hasher.update(r[i].compress().to_bytes());
-        let hash = hasher.finalize();
-        c[ip1] = Scalar::from_bytes_mod_order(hash.into());
-    }
-
-    if c1 == c[0] {
-        return true;
-    }
-    false
-}
-
-// Check if the output belongs to us, if so - store it in OutputDB
-pub async fn process_transaction(
-    wallet: &Wallet,
-    transaction: &Transaction,
-) -> Result<(), ChainOpsError> {
-    for output in &transaction.msg_outputs {
-        let index = output.msg_index;
-        let key = CompressedRistretto::from_slice(&output.msg_output_key);
-        let stealth = CompressedRistretto::from_slice(&output.msg_stealth_address);
-
-        if wallet.check_property(key, index, stealth)? {
-            let decrypted_amount = wallet.decrypt_amount(key, index, &output.msg_amount)?;
-            let owned_output = OwnedOutput {
-                output: Output {
-                    stealth: output.msg_stealth_address.clone(),
-                    output_key: output.msg_output_key.clone(),
-                    amount: output.msg_amount.clone(),
-                    commitment: output.msg_commitment.clone(),
-                    range_proof: output.msg_proof.clone(),
-                },
-                decrypted_amount,
-            };
-            {
-                OUTPUT_STORER.put(&owned_output).await?;
-            }
-        }
-    }
-    Ok(())
-}
-
-// Collects outputs from OutputDB and constructs Inputs for transaction
-pub async fn prepare_inputs(
-    wallet: &Wallet,
-) -> Result<(Vec<TransactionInput>, u64), ChainOpsError> {
-    let output_set = OUTPUT_STORER.get().await.unwrap();
-    let mut total_input_amount = 0;
-    let mut inputs = Vec::new();
-    for owned_output in &output_set {
-        let decrypted_amount = owned_output.decrypted_amount;
-        total_input_amount += decrypted_amount;
-        let owned_stealth_addr = &owned_output.output.stealth;
-        let compressed_stealth = CompressedRistretto::from_slice(owned_stealth_addr);
-        let wallets_res: Result<Vec<Wallet>, _> = (0..9).map(|_| Wallet::generate()).collect();
-        let wallets = wallets_res?;
-        let mut s_addrs: Vec<CompressedRistretto> =
-            wallets.iter().map(|w| w.public_spend_key).collect();
-        s_addrs.push(compressed_stealth);
-        s_addrs.shuffle(&mut rand::thread_rng());
-        let s_addrs_vec: Vec<Vec<u8>> = s_addrs.iter().map(|key| key.to_bytes().to_vec()).collect();
-        let m = b"Message example";
-        let blsag = wallet.gen_blsag(&s_addrs, m, &compressed_stealth)?;
-        let image = blsag.i;
-        let input = TransactionInput {
-            msg_ring: s_addrs_vec,
-            msg_blsag: blsag.to_vec(),
-            msg_message: m.to_vec(),
-            msg_key_image: image.to_bytes().to_vec(),
-        };
-        inputs.push(input);
-    }
-
-    Ok((inputs, total_input_amount))
-}
-
-// Constructs Outputs for the transaction by given Recipient address, output index and amount
-pub fn prepare_output(
-    wallet: &Wallet,
-    recipient_address: &str,
-    output_index: u64,
-    amount: u64,
-) -> Result<TransactionOutput, ChainOpsError> {
-    let (recipient_spend_key, recipient_view_key) =
-        derive_keys_from_address(recipient_address).unwrap();
-    let mut rng = rand::thread_rng();
-    let r = Scalar::random(&mut rng);
-    let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
-    let recipient_view_key_point = recipient_view_key.decompress().unwrap();
-    let q = r * recipient_view_key_point;
-    let q_bytes = q.compress().to_bytes();
-    let mut hasher = Keccak256::new();
-    hasher.update(q_bytes);
-    hasher.update(output_index.to_le_bytes());
-    let hash = hasher.finalize();
-    let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
-    let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
-    let recipient_spend_key_point = recipient_spend_key.decompress().unwrap();
-    let stealth = (hs_times_g + recipient_spend_key_point).compress();
-    let encrypted_amount = wallet.encrypt_amount(&q_bytes, output_index, amount)?;
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(64, 1);
-    let blinding = Scalar::random(&mut rand::thread_rng());
-    let mut prover_transcript = Transcript::new(b"Transaction");
-    let secret = amount;
-    let (proof, commitment) = RangeProof::prove_single(
-        &bp_gens,
-        &pc_gens,
-        &mut prover_transcript,
-        secret,
-        &blinding,
-        32,
-    )
-    .unwrap();
-
-    Ok(TransactionOutput {
-        msg_stealth_address: stealth.to_bytes().to_vec(),
-        msg_output_key: output_key.to_bytes().to_vec(),
-        msg_proof: proof.to_bytes().to_vec(),
-        msg_commitment: commitment.to_bytes().to_vec(),
-        msg_amount: encrypted_amount.to_vec(),
-        msg_index: output_index,
-    })
-}
-
-// Constructs change output in case the sum of inputs exceeds the amount we want to spend
-pub fn prepare_change_output(
-    wallet: &Wallet,
-    change: u64,
-    output_index: u64,
-) -> Result<TransactionOutput, ChainOpsError> {
-    let mut rng = rand::thread_rng();
-    let r = Scalar::random(&mut rng);
-    let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
-    let view_key_point = &wallet.public_view_key.decompress().unwrap();
-    let q = r * view_key_point;
-    let q_bytes = q.compress().to_bytes();
-    let mut hasher = Keccak256::new();
-    hasher.update(q_bytes);
-    hasher.update(output_index.to_le_bytes());
-    let hash = hasher.finalize();
-    let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
-    let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
-    let spend_key_point = &wallet.public_spend_key.decompress().unwrap();
-    let stealth = (hs_times_g + spend_key_point).compress();
-    let encrypted_amount = wallet.encrypt_amount(&q_bytes, output_index, change)?;
-    let pc_gens = PedersenGens::default();
-    let bp_gens = BulletproofGens::new(64, 1);
-    let blinding = Scalar::random(&mut rand::thread_rng());
-    let mut prover_transcript = Transcript::new(b"Transaction");
-    let secret = change;
-    let (proof, commitment) = RangeProof::prove_single(
-        &bp_gens,
-        &pc_gens,
-        &mut prover_transcript,
-        secret,
-        &blinding,
-        32,
-    )
-    .unwrap();
-
-    Ok(TransactionOutput {
-        msg_stealth_address: stealth.to_bytes().to_vec(),
-        msg_output_key: output_key.to_bytes().to_vec(),
-        msg_proof: proof.to_bytes().to_vec(),
-        msg_commitment: commitment.to_bytes().to_vec(),
-        msg_amount: encrypted_amount.to_vec(),
-        msg_index: output_index,
-    })
 }
 
 pub fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
