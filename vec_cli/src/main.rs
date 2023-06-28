@@ -1,5 +1,4 @@
 use std::sync::Arc;
-
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use vec_crypto::crypto::Wallet;
@@ -92,8 +91,8 @@ async fn main() {
         }
     };
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-    let ans_c = Arc::clone(&ans.ns);
-    tokio::spawn(async move { start(&ans_c).await });
+    let arc_ns = Arc::clone(&ans.ns);
+    tokio::spawn(async move { start(&arc_ns).await });
 
     let server_future = tokio::spawn(async move {
         loop {
