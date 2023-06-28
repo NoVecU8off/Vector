@@ -5,6 +5,7 @@ use futures::future::try_join_all;
 use prost::Message;
 use sha3::{Digest, Keccak256};
 use slog::{error, info, o, Drain, Logger};
+use std::cmp::Ordering;
 use std::fs;
 use std::time::SystemTime;
 use std::{net::SocketAddr, sync::Arc};
@@ -13,7 +14,7 @@ use tonic::{
     transport::{Channel, Server},
     Request, Response, Status,
 };
-use vec_chain::chain::Chain;
+use vec_chain::chain::*;
 use vec_crypto::crypto::Wallet;
 use vec_errors::errors::*;
 use vec_mempool::mempool::*;
@@ -23,20 +24,18 @@ use vec_proto::messages::{
     node_client::NodeClient,
     node_server::{Node, NodeServer},
 };
-use vec_storage::{block_db::*, image_db::*, ip_db::*, output_db::*};
+use vec_storage::lazy_traits::{BLOCK_STORER, IP_STORER};
 use vec_utils::utils::hash_transaction;
 use vec_utils::utils::{hash_block, mine};
-use std::cmp::Ordering;
+
+const VERSION: u8 = 1;
 
 #[derive(Clone)]
 pub struct NodeService {
     pub wallet: Arc<Wallet>,
     pub ip: Arc<String>,
-    pub ip_store: Arc<dyn IPStorer>,
-    pub version: u32,
     pub peers: DashMap<String, Arc<RwLock<NodeClient<Channel>>>>,
     pub mempool: Arc<Mempool>,
-    pub chain: Arc<Chain>,
     pub log: Arc<Logger>,
 }
 
@@ -74,10 +73,10 @@ impl Node for ArcNodeService {
                 }
             });
         } else {
-            match self.ns.ip_store.get_by_address(&vec_address).await {
+            match IP_STORER.get_by_address(&vec_address).await {
                 Ok(Some(stored_ip)) => {
                     if stored_ip != remote_ip {
-                        match self.ns.ip_store.update(&vec_address, &remote_ip).await {
+                        match IP_STORER.update(&vec_address, &remote_ip).await {
                             Ok(_) => {
                                 info!(
                                     self.ns.log,
@@ -91,7 +90,7 @@ impl Node for ArcNodeService {
                         }
                     }
                 }
-                Ok(None) => match self.ns.ip_store.put(vec_address, remote_ip).await {
+                Ok(None) => match IP_STORER.put(vec_address, remote_ip).await {
                     Ok(_) => {
                         info!(self.ns.log, "\nIP was inserted for: {}", bs58_address);
                     }
@@ -117,15 +116,12 @@ impl Node for ArcNodeService {
         let requester_index = state.msg_max_local_index;
         let mut blocks = Vec::new();
 
-        let max_index = self
-            .ns
-            .chain
-            .max_index()
+        let max_index = max_index()
             .await
             .map_err(|e| Status::internal(format!("Failed to get max index: {:?}", e)))?;
 
         for index in (requester_index + 1)..=max_index {
-            match self.ns.chain.blocks.get_by_index(index).await {
+            match BLOCK_STORER.get_by_index(index).await {
                 Ok(Some(block)) => blocks.push(block),
                 Ok(None) => {
                     return Err(Status::internal(format!("No block at height {}", index)));
@@ -216,7 +212,7 @@ impl Node for ArcNodeService {
         let push_request = request.into_inner();
         let sender_ip = push_request.msg_ip;
         let block_hash = push_request.msg_block_hash;
-        match self.ns.chain.blocks.get(block_hash.clone()).await {
+        match BLOCK_STORER.get(block_hash.clone()).await {
             Ok(Some(_)) => {
                 info!(self.ns.log, "\nOffered block already exists");
                 Ok(Response::new(Confirmed {}))
@@ -253,7 +249,7 @@ impl Node for ArcNodeService {
         info!(self.ns.log, "\nRecieved pull block request");
         let pull_request = request.into_inner();
         let block_hash = pull_request.msg_block_hash;
-        match self.ns.chain.blocks.get(block_hash).await {
+        match BLOCK_STORER.get(block_hash).await {
             Ok(Some(block)) => {
                 info!(self.ns.log, "\nBlock was successfully sent to requester");
                 Ok(Response::new(block))
@@ -282,29 +278,7 @@ impl NodeService {
         let secret_spend_key = Wallet::secret_spend_key_from_vec(&vec_secret)?;
         let wallet = Arc::new(Wallet::reconstruct(secret_spend_key)?);
 
-        let version: u32 = 1;
-
         let peers = DashMap::new();
-
-        let block_db =
-            sled::open("C:/Vector/blocks_db").map_err(|_| NodeServiceError::SledOpenError)?;
-        let index_db =
-            sled::open("C:/Vector/index_db").map_err(|_| NodeServiceError::SledOpenError)?;
-        let output_db =
-            sled::open("C:/Vector/outputs").map_err(|_| NodeServiceError::SledOpenError)?;
-        let image_db =
-            sled::open("C:/Vector/images").map_err(|_| NodeServiceError::SledOpenError)?;
-        let ip_db = sled::open("C:/Vector/ips").map_err(|_| NodeServiceError::SledOpenError)?;
-
-        let blocks: Arc<dyn BlockStorer> = Arc::new(BlockDB::new(block_db, index_db));
-        let outputs: Arc<dyn OutputStorer> = Arc::new(OutputDB::new(output_db));
-        let images: Arc<dyn ImageStorer> = Arc::new(ImageDB::new(image_db));
-        let _chain = Chain::new(blocks, images, outputs)
-            .await
-            .map_err(|e| NodeServiceError::ChainCreationError(format!("{:?}", e)))?;
-        let chain = Arc::new(_chain);
-
-        let ip_store = Arc::new(IPDB::new(ip_db));
 
         let mempool = Arc::new(Mempool::new());
 
@@ -313,12 +287,9 @@ impl NodeService {
         Ok(NodeService {
             wallet,
             ip,
-            ip_store,
-            version,
             peers,
             log,
             mempool,
-            chain,
         })
     }
 
@@ -339,22 +310,21 @@ impl NodeService {
         &self,
         ip: &str,
     ) -> Result<(NodeClient<Channel>, Version), NodeServiceError> {
-        let local_index = match self.chain.max_index().await {
+        let local_index = match max_index().await {
             Ok(index) => index,
             Err(_) => return Err(NodeServiceError::FailedToGetIndex),
         };
         let mut c = make_node_client(ip).await?;
         info!(
             self.log,
-            "\nNode client {:?} created successfully, requesting version",
-            ip
+            "\nNode client {:?} created successfully, requesting version", ip
         );
         let v = c
             .handshake(Request::new(self.get_version().await))
             .await
             .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
-    
+
         match v.msg_max_local_index.cmp(&local_index) {
             Ordering::Greater => {
                 self.synchronize_with_client(&self.wallet, &mut c).await?;
@@ -366,7 +336,7 @@ impl NodeService {
                 Ok((c, v))
             }
         }
-    }    
+    }
 
     pub async fn add_peer(
         &self,
@@ -378,16 +348,16 @@ impl NodeService {
         let remote_ip = v.msg_ip.clone();
 
         if !self.peers.contains_key(&bs58_address) {
-            self.ip_store
+            IP_STORER
                 .put(vec_address.clone(), remote_ip.clone())
                 .await?;
             self.peers.insert(bs58_address.clone(), Arc::new(c.into()));
             info!(self.log, "\nNew peer added: {}", bs58_address);
         } else {
-            match self.ip_store.get_by_address(&vec_address).await {
+            match IP_STORER.get_by_address(&vec_address).await {
                 Ok(Some(stored_ip)) => {
                     if stored_ip != remote_ip {
-                        self.ip_store.update(&vec_address, &remote_ip).await?;
+                        IP_STORER.update(&vec_address, &remote_ip).await?;
                         info!(
                             self.log,
                             "\nIP for peer {} updated to: {}", bs58_address, remote_ip
@@ -395,7 +365,7 @@ impl NodeService {
                     }
                 }
                 Ok(None) => {
-                    self.ip_store.put(vec_address, remote_ip).await?;
+                    IP_STORER.put(vec_address, remote_ip).await?;
                 }
                 Err(_) => return Err(IPStorageError::ReadError)?,
             }
@@ -406,8 +376,8 @@ impl NodeService {
 
     pub async fn get_version(&self) -> Version {
         let ip = &self.ip;
-        let msg_version = self.version;
-        let local_index = self.chain.max_index().await.unwrap();
+        let msg_version = VERSION as u32;
+        let local_index = max_index().await.unwrap();
         let address = &self.wallet.address;
 
         Version {
@@ -419,8 +389,8 @@ impl NodeService {
     }
 
     pub async fn make_block(&self) -> Result<(), NodeServiceError> {
-        let msg_previous_hash = self.chain.get_previous_hash_in_chain().await?;
-        let local_index = match self.chain.max_index().await {
+        let msg_previous_hash = get_previous_hash_in_chain().await?;
+        let local_index = match max_index().await {
             Ok(index) => index,
             Err(_) => return Err(NodeServiceError::FailedToGetIndex),
         };
@@ -453,7 +423,7 @@ impl NodeService {
         };
         let nonce = mine(block.clone())?;
         block.msg_header.as_mut().unwrap().msg_nonce = nonce;
-        self.chain.add_block(&self.wallet, block.clone()).await?;
+        add_block(&self.wallet, block.clone()).await?;
         let bs58_hash = bs58::encode(hash_block(&block)?).into_string();
         info!(
             self.log,
@@ -505,19 +475,17 @@ impl NodeService {
         amount: u64,
         contract_path: Option<&str>,
     ) -> Result<(), NodeServiceError> {
-        let (inputs, total_input_amount) = self.chain.prepare_inputs(&self.wallet).await?;
+        let (inputs, total_input_amount) = prepare_inputs(&self.wallet).await?;
         if total_input_amount < amount {
             return Err(NodeServiceError::InsufficientBalance);
         }
         let mut outputs = Vec::new();
         if total_input_amount > amount {
             let change = total_input_amount - amount;
-            let change = self.chain.prepare_change_output(&self.wallet, change, 2)?;
+            let change = prepare_change_output(&self.wallet, change, 2)?;
             outputs.push(change);
         }
-        let output = self
-            .chain
-            .prepare_output(&self.wallet, recipient_address, 1, amount)?;
+        let output = prepare_output(&self.wallet, recipient_address, 1, amount)?;
         outputs.push(output);
 
         let contract_code = match contract_path {
@@ -598,7 +566,7 @@ impl NodeService {
             };
             let response = client.handle_tx_pull(message).await?;
             let transaction = response.into_inner();
-            self.chain.validate_transaction(&transaction).await?;
+            validate_transaction(&transaction).await?;
             info!(
                 self.log,
                 "\nRecieved transaction was successfully validated"
@@ -640,9 +608,9 @@ impl NodeService {
     ) -> Result<(), NodeServiceError> {
         for block in block_batch.msg_blocks {
             for transaction in &block.msg_transactions {
-                self.chain.process_transaction(wallet, transaction).await?;
+                process_transaction(wallet, transaction).await?;
             }
-            self.chain.add_block(wallet, block).await?;
+            add_block(wallet, block).await?;
             info!(self.log, "\nNew block added");
         }
 
@@ -655,16 +623,16 @@ impl NodeService {
         block: Block,
         sender_ip: &str,
     ) -> Result<(), NodeServiceError> {
-        let local_index = self.chain.max_index().await.unwrap();
+        let local_index = max_index().await.unwrap();
         info!(self.log, "\nProcessing block");
         if let Some(header) = &block.msg_header {
             if header.msg_index < local_index {
                 Err(NodeServiceError::BlockIndexTooLow)
             } else if header.msg_index == local_index + 1 {
                 for transaction in &block.msg_transactions {
-                    self.chain.process_transaction(wallet, transaction).await?;
+                    process_transaction(wallet, transaction).await?;
                 }
-                self.chain.add_block(wallet, block).await?;
+                add_block(wallet, block).await?;
                 info!(self.log, "\nNew block added");
                 Ok(())
             } else {
@@ -733,7 +701,7 @@ impl NodeService {
         wallet: &Wallet,
         client: &mut NodeClient<Channel>,
     ) -> Result<(), NodeServiceError> {
-        let msg_max_local_index = self.chain.max_index().await.unwrap();
+        let msg_max_local_index = max_index().await.unwrap();
         info!(
             self.log,
             "\nSending request with current index {:?}", msg_max_local_index
@@ -784,7 +752,7 @@ impl NodeService {
 
     // CLI commands
     pub async fn make_genesis_block(&self) -> Result<(), NodeServiceError> {
-        if self.chain.max_index().await? != 0 {
+        if max_index().await? != 0 {
             return Err(NodeServiceError::ChainIsNotEmpty);
         }
         let transactions = vec![self.make_genesis_transaction(100000).await?];
@@ -815,9 +783,7 @@ impl NodeService {
         };
         let nonce = mine(block.clone())?;
         block.msg_header.as_mut().unwrap().msg_nonce = nonce;
-        self.chain
-            .add_genesis_block(&self.wallet, block.clone())
-            .await?;
+        add_genesis_block(&self.wallet, block.clone()).await?;
         let bs58_hash = bs58::encode(hash_block(&block)?).into_string();
         info!(
             self.log,
@@ -866,7 +832,7 @@ impl NodeService {
     }
 
     pub async fn get_balance(&self) -> u64 {
-        self.chain.get_balance().await
+        get_balance().await
     }
 
     pub async fn connect_to(&self, ip: String) -> Result<(), NodeServiceError> {
@@ -899,7 +865,7 @@ impl NodeService {
     }
 
     pub async fn get_last_index(&self) -> Result<u64, NodeServiceError> {
-        let height = self.chain.max_index().await.unwrap();
+        let height = max_index().await.unwrap();
 
         Ok(height)
     }

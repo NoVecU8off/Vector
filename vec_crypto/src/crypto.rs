@@ -10,7 +10,7 @@ pub type SSK = Scalar;
 pub type SVK = Scalar;
 pub type PSK = CompressedRistretto;
 pub type PVK = CompressedRistretto;
-pub type Address = [u8; 64];
+pub type ADS = [u8; 64];
 
 #[derive(Debug, Clone)]
 pub struct Wallet {
@@ -18,7 +18,7 @@ pub struct Wallet {
     pub secret_view_key: SVK,
     pub public_spend_key: PSK,
     pub public_view_key: PVK,
-    pub address: Address,
+    pub address: ADS,
 }
 
 #[derive(Clone)]
@@ -61,11 +61,12 @@ impl Wallet {
         hasher.update(secret_spend_key.as_bytes());
         let hashed_key = hasher.finalize();
         let secret_view_key = Scalar::from_bytes_mod_order(hashed_key.into());
-        let public_spend_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret_spend_key;
-        let public_view_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret_view_key;
+        let public_spend_key =
+            (&constants::RISTRETTO_BASEPOINT_TABLE * &secret_spend_key).compress();
+        let public_view_key = (&constants::RISTRETTO_BASEPOINT_TABLE * &secret_view_key).compress();
         let data = [
-            public_spend_key.compress().to_bytes().as_slice(),
-            public_view_key.compress().to_bytes().as_slice(),
+            public_spend_key.to_bytes().as_slice(),
+            public_view_key.to_bytes().as_slice(),
         ]
         .concat();
         let address = data.as_slice().try_into().unwrap();
@@ -73,8 +74,8 @@ impl Wallet {
         Ok(Wallet {
             secret_spend_key,
             secret_view_key,
-            public_spend_key: public_spend_key.compress(),
-            public_view_key: public_view_key.compress(),
+            public_spend_key: public_spend_key,
+            public_view_key: public_view_key,
             address,
         })
     }

@@ -3076,6 +3076,7 @@ dependencies = [
  "curve25519-dalek-ng",
  "ed25519-dalek",
  "futures",
+ "lazy_static",
  "merlin",
  "prost",
  "protobuf",
@@ -3117,6 +3118,7 @@ version = "0.1.0"
 dependencies = [
  "bs58",
  "bulletproofs",
+ "byteorder",
  "curve25519-dalek-ng",
  "digest 0.10.7",
  "merlin",
@@ -3240,6 +3242,7 @@ dependencies = [
  "curve25519-dalek-ng",
  "dashmap",
  "ed25519-dalek",
+ "lazy_static",
  "prost",
  "rand 0.8.5",
  "serde",
