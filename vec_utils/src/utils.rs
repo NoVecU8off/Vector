@@ -40,9 +40,9 @@ pub fn hash_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
     Ok(hash)
 }
 
-pub fn mine(mut block: Block) -> Result<u64, NodeServiceError> {
+pub fn mine(mut block: Block) -> Result<u32, NodeServiceError> {
     let difficulty = 4;
-    for nonce in 0..(u64::max_value()) {
+    for nonce in 0..(u32::max_value()) {
         block.msg_header.as_mut().unwrap().msg_nonce = nonce;
         let hash = hash_block(&block)?;
         if check_difficulty(&hash, difficulty) {
@@ -90,7 +90,7 @@ mod tests {
         assert_ne!(hash1_sync, hash2_sync);
     }
 
-    fn create_test_transaction(msg_index: u64) -> Transaction {
+    fn create_test_transaction(msg_index: u32) -> Transaction {
         let contract = Contract::default();
         Transaction {
             msg_inputs: vec![TransactionInput {

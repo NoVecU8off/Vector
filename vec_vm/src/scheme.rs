@@ -153,7 +153,7 @@ impl Wallet {
     pub fn encrypt_amount(
         &self,
         q_bytes: &[u8],
-        output_index: u64,
+        output_index: u32,
         amount: u64,
     ) -> Result<[u8; 8], CryptoOpsError> {
         let mut hasher = Keccak256::new();
@@ -281,7 +281,7 @@ impl Scheme {
     pub fn prepare_output(
         &self,
         recipient_address: &str,
-        output_index: u64,
+        output_index: u32,
         amount: u64,
     ) -> Result<TransactionOutput, SchemeError> {
         let (recipient_spend_key, recipient_view_key) =

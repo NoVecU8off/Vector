@@ -108,7 +108,7 @@ impl Wallet {
     pub fn check_property(
         &self,
         output_key: CompressedRistretto,
-        output_index: u64,
+        output_index: u32,
         stealth: CompressedRistretto,
     ) -> Result<bool, CryptoOpsError> {
         let decompressed_output = output_key
@@ -194,7 +194,7 @@ impl Wallet {
     pub fn prepare_output(
         &self,
         recipient_address: &str,
-        output_index: u64,
+        output_index: u32,
         amount: u64,
     ) -> Result<TransactionOutput, ChainOpsError> {
         let (recipient_spend_key, recipient_view_key) =
@@ -243,7 +243,7 @@ impl Wallet {
     pub fn prepare_change_output(
         &self,
         change: u64,
-        output_index: u64,
+        output_index: u32,
     ) -> Result<TransactionOutput, ChainOpsError> {
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
@@ -288,7 +288,7 @@ impl Wallet {
     pub fn encrypt_amount(
         &self,
         q_bytes: &[u8],
-        output_index: u64,
+        output_index: u32,
         amount: u64,
     ) -> Result<[u8; 8], CryptoOpsError> {
         let mut hasher = Keccak256::new();
@@ -313,7 +313,7 @@ impl Wallet {
     pub fn decrypt_amount(
         &self,
         output_key: CompressedRistretto,
-        output_index: u64,
+        output_index: u32,
         encrypted_amount: &[u8],
     ) -> Result<u64, CryptoOpsError> {
         let decompressed_output = output_key
@@ -771,7 +771,7 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_amount() {
-        let output_index: u64 = 1;
+        let output_index: u32 = 1;
         let amount: u64 = 5000;
 
         let my_wallet = Wallet::generate().unwrap();

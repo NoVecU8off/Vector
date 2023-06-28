@@ -113,7 +113,7 @@ impl Node for ArcNodeService {
         request: Request<LocalState>,
     ) -> Result<Response<BlockBatch>, Status> {
         let state = request.into_inner();
-        let requester_index = state.msg_max_local_index;
+        let requester_index = state.msg_local_index;
         let mut blocks = Vec::new();
 
         let max_index = max_index()
@@ -325,7 +325,7 @@ impl NodeService {
             .map_err(NodeServiceError::HandshakeError)?
             .into_inner();
 
-        match v.msg_max_local_index.cmp(&local_index) {
+        match v.msg_local_index.cmp(&local_index) {
             Ordering::Greater => {
                 self.synchronize_with_client(&self.wallet, &mut c).await?;
                 Ok((c, v))
@@ -384,7 +384,7 @@ impl NodeService {
             msg_version,
             msg_address: address.to_vec(),
             msg_ip: ip.to_string(),
-            msg_max_local_index: local_index,
+            msg_local_index: local_index,
         }
     }
 
@@ -702,13 +702,13 @@ impl NodeService {
         wallet: &Wallet,
         client: &mut NodeClient<Channel>,
     ) -> Result<(), NodeServiceError> {
-        let msg_max_local_index = max_index().await.unwrap();
+        let msg_local_index = max_index().await.unwrap();
         info!(
             self.log,
-            "\nSending request with current index {:?}", msg_max_local_index
+            "\nSending request with current index {:?}", msg_local_index
         );
         let request = Request::new(LocalState {
-            msg_max_local_index,
+            msg_local_index,
         });
         let response = client.push_state(request).await?;
         let block_batch = response.into_inner();
@@ -769,7 +769,7 @@ impl NodeService {
         let merkle_root = merkle_tree.get_hash();
         let header = Header {
             msg_version: 1,
-            msg_index: 1_u64,
+            msg_index: 1,
             msg_previous_hash: vec![],
             msg_root_hash: merkle_root,
             msg_timestamp: SystemTime::now()
@@ -798,7 +798,7 @@ impl NodeService {
         &self,
         amount: u64,
     ) -> Result<Transaction, NodeServiceError> {
-        let output_index: u64 = 1;
+        let output_index: u32 = 1;
         let mut rng = rand::thread_rng();
         let r = Scalar::random(&mut rng);
         let output_key = (&r * &constants::RISTRETTO_BASEPOINT_TABLE).compress();
@@ -865,7 +865,7 @@ impl NodeService {
         Ok(address)
     }
 
-    pub async fn get_last_index(&self) -> Result<u64, NodeServiceError> {
+    pub async fn get_last_index(&self) -> Result<u32, NodeServiceError> {
         let height = max_index().await.unwrap();
 
         Ok(height)

@@ -11,7 +11,7 @@ use vec_storage::lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER};
 use vec_utils::utils::*;
 
 // Return the "highest" block index in the local chain instance
-pub async fn max_index() -> Result<u64, BlockStorageError> {
+pub async fn max_index() -> Result<u32, BlockStorageError> {
     match BLOCK_STORER.get_highest_index().await {
         Ok(Some(index)) => Ok(index),
         Ok(None) => Ok(0),
