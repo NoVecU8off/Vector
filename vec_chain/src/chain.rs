@@ -1,4 +1,3 @@
-use bs58;
 use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 use curve25519_dalek_ng::ristretto::CompressedRistretto;
 use merlin::Transcript;
@@ -7,8 +6,9 @@ use vec_crypto::crypto::{verify_blsag, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::{Block, Transaction};
-use vec_storage::lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER};
+use vec_storage::{lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER}, output_db::OutputStorer, image_db::ImageStorer};
 use vec_utils::utils::*;
+use vec_storage::block_db::BlockStorer;
 
 // Return the "highest" block index in the local chain instance
 pub async fn max_index() -> Result<u32, BlockStorageError> {
@@ -61,9 +61,7 @@ pub async fn add_genesis_block(wallet: &Wallet, block: Block) -> Result<(), Chai
 pub async fn get_block_by_hash(hash: Vec<u8>) -> Result<Block, ChainOpsError> {
     match BLOCK_STORER.get(hash.clone()).await {
         Ok(Some(block)) => Ok(block),
-        Ok(None) => Err(ChainOpsError::BlockNotFound(
-            bs58::encode(hash).into_string(),
-        )),
+        Ok(None) => Err(ChainOpsError::BlockNotFound),
         Err(err) => Err(err.into()),
     }
 }
@@ -71,12 +69,9 @@ pub async fn get_block_by_hash(hash: Vec<u8>) -> Result<Block, ChainOpsError> {
 // Check if the hash of the previous block in DB maches the msg_previous_hash of the candidate block
 pub async fn check_previous_block_hash(incoming_block: &Block) -> Result<bool, ChainOpsError> {
     let previous_hash = get_previous_hash_in_chain().await?;
-    if let Some(header) = incoming_block.msg_header.as_ref() {
+    if let Some(header) = &incoming_block.msg_header {
         if previous_hash != header.msg_previous_hash {
-            return Err(ChainOpsError::InvalidPreviousBlockHash {
-                expected: bs58::encode(previous_hash).into_string(),
-                got: bs58::encode(header.msg_previous_hash.clone()).into_string(),
-            });
+            return Err(ChainOpsError::InvalidPreviousBlockHash);
         }
     } else {
         return Err(ChainOpsError::MissingBlockHeader);
@@ -175,7 +170,7 @@ pub fn verify_root_hash(block: &Block) -> Result<bool, BlockOpsError> {
         })
         .collect();
     let merkle_tree = MerkleTree::from_list(&transaction_data);
-    if let Some(header) = block.msg_header.as_ref() {
+    if let Some(header) = &block.msg_header {
         let merkle_root = merkle_tree.get_hash();
         Ok(header.msg_root_hash == merkle_root)
     } else {

@@ -106,11 +106,11 @@ impl Wallet {
             }
         }
         let image = (self.secret_spend_key * hash_to_point(&p[j])).compress();
-        for i in 0..n {
+        for (i, item) in s.iter_mut().enumerate().take(n) {
             if i == j {
                 continue;
             }
-            s[i] = Scalar::random(&mut rand::thread_rng());
+            *item = Scalar::random(&mut rand::thread_rng());
         }
         let j1 = (j + 1) % n;
         l[j] = a * constants::RISTRETTO_BASEPOINT_POINT;

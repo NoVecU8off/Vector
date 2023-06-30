@@ -216,8 +216,8 @@ pub enum ChainOpsError {
     MissingGenesisBlock,
     #[error(transparent)]
     BlockStorageError(#[from] BlockStorageError),
-    #[error("Couldn't find block with hash: {0}")]
-    BlockNotFound(String),
+    #[error("Couldn't find block by hash")]
+    BlockNotFound,
     #[error("Missing hash by requested block index")]
     MissingBlockHash,
     #[error("Block has no transactions")]
@@ -230,8 +230,8 @@ pub enum ChainOpsError {
     BlockOpsError(#[from] BlockOpsError),
     #[error("Invalid pk key in the block")]
     InvalidPublicKey,
-    #[error("Invalid previous block's hash, expected: {expected}, got: {got}")]
-    InvalidPreviousBlockHash { expected: String, got: String },
+    #[error("Invalid previous block's hash")]
+    InvalidPreviousBlockHash,
     #[error("Invalid pk key in the transaction's input")]
     InvalidPublicKeyInTransactionInput,
     #[error("Invalid transaction's signature")]

@@ -5,6 +5,7 @@ use futures::future::try_join_all;
 use prost::Message;
 use sha3::{Digest, Keccak256};
 use slog::{error, info, o, Drain, Logger};
+use vec_storage::ip_db::IPStorer;
 use std::cmp::Ordering;
 use std::fs;
 use std::time::SystemTime;
@@ -27,6 +28,7 @@ use vec_proto::messages::{
 use vec_storage::lazy_traits::{BLOCK_STORER, IP_STORER};
 use vec_utils::utils::hash_transaction;
 use vec_utils::utils::{hash_block, mine};
+use vec_storage::block_db::BlockStorer;
 
 const VERSION: u8 = 1;
 
