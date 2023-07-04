@@ -7,6 +7,7 @@ use merlin::Transcript;
 use rand::seq::SliceRandom;
 use sha3::{Digest, Keccak256};
 use vec_errors::errors::{CryptoOpsError, SchemeError};
+use vec_macros::hash;
 use vec_proto::messages::TransactionOutput;
 
 pub struct Output {
@@ -64,9 +65,7 @@ impl Wallet {
     pub fn new() -> Result<Wallet, SchemeError> {
         let mut rng = rand::thread_rng();
         let secret_spend_key: Scalar = Scalar::random(&mut rng);
-        let mut hasher = Keccak256::new();
-        hasher.update(secret_spend_key.as_bytes());
-        let hashed_key = hasher.finalize();
+        let hashed_key = hash!(secret_spend_key.as_bytes());
         let secret_view_key = Scalar::from_bytes_mod_order(hashed_key.into());
         let public_spend_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret_spend_key;
         let public_view_key = &constants::RISTRETTO_BASEPOINT_TABLE * &secret_view_key;
@@ -75,7 +74,7 @@ impl Wallet {
             public_view_key.compress().to_bytes().as_slice(),
         ]
         .concat();
-        let address = data;
+        let address = data.as_slice().try_into().unwrap();
 
         Ok(Wallet {
             secret_spend_key,
@@ -91,7 +90,7 @@ impl Wallet {
         p: &[CompressedRistretto],
         m: &[u8],
         stealth: &CompressedRistretto,
-    ) -> Result<BLSAG, SchemeError> {
+    ) -> Result<BLSAG, CryptoOpsError> {
         let a = Scalar::random(&mut rand::thread_rng());
         let n = p.len();
         let mut c: Vec<Scalar> = vec![Scalar::zero(); n];
@@ -115,11 +114,7 @@ impl Wallet {
         let j1 = (j + 1) % n;
         l[j] = a * constants::RISTRETTO_BASEPOINT_POINT;
         r[j] = a * hash_to_point(&p[j]);
-        let mut hasher = Keccak256::new();
-        hasher.update(m);
-        hasher.update(l[j].compress().to_bytes());
-        hasher.update(r[j].compress().to_bytes());
-        let hash = hasher.finalize();
+        let hash = hash!(m, l[j].compress().to_bytes(), r[j].compress().to_bytes());
         c[(j + 1) % n] = Scalar::from_bytes_mod_order(hash.into());
         for k in 0..(n - 1) {
             let i = (j1 + k) % n;
@@ -134,11 +129,7 @@ impl Wallet {
                     * image
                         .decompress()
                         .ok_or(CryptoOpsError::DecompressionFailed)?;
-            let mut hasher = Keccak256::new();
-            hasher.update(m);
-            hasher.update(l[i].compress().to_bytes());
-            hasher.update(r[i].compress().to_bytes());
-            let hash = hasher.finalize();
+            let hash = hash!(m, l[i].compress().to_bytes(), r[i].compress().to_bytes());
             c[ip1] = Scalar::from_bytes_mod_order(hash.into());
         }
         s[j] = a - c[j] * self.secret_spend_key;
@@ -156,14 +147,8 @@ impl Wallet {
         output_index: u32,
         amount: u64,
     ) -> Result<[u8; 8], CryptoOpsError> {
-        let mut hasher = Keccak256::new();
-        hasher.update(q_bytes);
-        hasher.update(output_index.to_le_bytes());
-        let hash_qi = hasher.finalize();
-        let mut hasher = Keccak256::new();
-        hasher.update(b"amount");
-        hasher.update(hash_qi);
-        let hash = hasher.finalize();
+        let hash_qi = hash!(q_bytes, output_index.to_le_bytes());
+        let hash = hash!(b"amount", hash_qi);
         let hash_8: [u8; 8] = hash[0..8]
             .try_into()
             .map_err(|_| CryptoOpsError::TryIntoError)?;
@@ -178,7 +163,7 @@ impl Wallet {
     pub fn decrypt_amount(
         &self,
         output_key: CompressedRistretto,
-        output_index: u64,
+        output_index: u32,
         encrypted_amount: &[u8],
     ) -> Result<u64, CryptoOpsError> {
         let decompressed_output = output_key
@@ -186,14 +171,8 @@ impl Wallet {
             .ok_or(CryptoOpsError::DecompressionFailed)?;
         let q = self.secret_view_key * decompressed_output;
         let q_bytes = q.compress().as_bytes().to_vec();
-        let mut hasher = Keccak256::new();
-        hasher.update(q_bytes);
-        hasher.update(output_index.to_le_bytes());
-        let hash_qi = hasher.finalize();
-        let mut hasher = Keccak256::new();
-        hasher.update(b"amount");
-        hasher.update(hash_qi);
-        let hash = hasher.finalize();
+        let hash_qi = hash!(q_bytes, output_index.to_le_bytes());
+        let hash = hash!(b"amount", hash_qi);
         let hash_8: [u8; 8] = hash[0..8]
             .try_into()
             .map_err(|_| CryptoOpsError::TryIntoError)?;
@@ -292,10 +271,7 @@ impl Scheme {
         let recipient_view_key_point = recipient_view_key.decompress().unwrap();
         let q = r * recipient_view_key_point;
         let q_bytes = q.compress().to_bytes();
-        let mut hasher = Keccak256::new();
-        hasher.update(q_bytes);
-        hasher.update(output_index.to_le_bytes());
-        let hash = hasher.finalize();
+        let hash = hash!(q_bytes, output_index.to_le_bytes());
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let recipient_spend_key_point = recipient_spend_key.decompress().unwrap();
@@ -328,9 +304,7 @@ impl Scheme {
 }
 
 pub fn hash_to_point(point: &CompressedRistretto) -> RistrettoPoint {
-    let mut hasher = Keccak256::new();
-    hasher.update(point.to_bytes());
-    let hash = hasher.finalize();
+    let hash = hash!(point.to_bytes());
     let scalar = Scalar::from_bytes_mod_order(hash.into());
 
     &constants::RISTRETTO_BASEPOINT_TABLE * &scalar

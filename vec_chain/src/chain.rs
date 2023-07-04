@@ -6,9 +6,13 @@ use vec_crypto::crypto::{verify_blsag, BLSAGSignature, Wallet};
 use vec_errors::errors::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::{Block, Transaction};
-use vec_storage::{lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER}, output_db::OutputStorer, image_db::ImageStorer};
-use vec_utils::utils::*;
 use vec_storage::block_db::BlockStorer;
+use vec_storage::{
+    image_db::ImageStorer,
+    lazy_traits::{BLOCK_STORER, IMAGE_STORER, OUTPUT_STORER},
+    output_db::OutputStorer,
+};
+use vec_utils::utils::*;
 
 // Return the "highest" block index in the local chain instance
 pub async fn max_index() -> Result<u32, BlockStorageError> {

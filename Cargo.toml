@@ -10,6 +10,7 @@ members = [
     "vec_merkle",
     "vec_cli",
     "vec_mempool",
+    "vec_macros",
     "vec_errors",
     "vec_vm",
 ]

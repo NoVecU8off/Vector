@@ -5,7 +5,6 @@ use futures::future::try_join_all;
 use prost::Message;
 use sha3::{Digest, Keccak256};
 use slog::{error, info, o, Drain, Logger};
-use vec_storage::ip_db::IPStorer;
 use std::cmp::Ordering;
 use std::fs;
 use std::time::SystemTime;
@@ -18,6 +17,7 @@ use tonic::{
 use vec_chain::chain::*;
 use vec_crypto::crypto::Wallet;
 use vec_errors::errors::*;
+use vec_macros::hash;
 use vec_mempool::mempool::*;
 use vec_merkle::merkle::MerkleTree;
 use vec_proto::messages::*;
@@ -25,10 +25,11 @@ use vec_proto::messages::{
     node_client::NodeClient,
     node_server::{Node, NodeServer},
 };
+use vec_storage::block_db::BlockStorer;
+use vec_storage::ip_db::IPStorer;
 use vec_storage::lazy_traits::{BLOCK_STORER, IP_STORER};
 use vec_utils::utils::hash_transaction;
 use vec_utils::utils::{hash_block, mine};
-use vec_storage::block_db::BlockStorer;
 
 const VERSION: u8 = 1;
 
@@ -709,9 +710,7 @@ impl NodeService {
             self.log,
             "\nSending request with current index {:?}", msg_local_index
         );
-        let request = Request::new(LocalState {
-            msg_local_index,
-        });
+        let request = Request::new(LocalState { msg_local_index });
         let response = client.push_state(request).await?;
         let block_batch = response.into_inner();
         self.process_synchronisation(wallet, block_batch).await?;
@@ -807,10 +806,7 @@ impl NodeService {
         let view_key_point = &self.wallet.public_view_key.decompress().unwrap();
         let q = r * view_key_point;
         let q_bytes = q.compress().to_bytes();
-        let mut hasher = Keccak256::new();
-        hasher.update(q_bytes);
-        hasher.update(output_index.to_le_bytes());
-        let hash = hasher.finalize();
+        let hash = hash!(q_bytes, output_index.to_le_bytes());
         let hash_in_scalar = Scalar::from_bytes_mod_order(hash.into());
         let hs_times_g = &constants::RISTRETTO_BASEPOINT_TABLE * &hash_in_scalar;
         let spend_key_point = &self.wallet.public_spend_key.decompress().unwrap();

@@ -1,42 +1,43 @@
 use prost::Message;
 use sha3::{Digest, Keccak256};
 use vec_errors::errors::*;
+use vec_macros::hash;
 use vec_proto::messages::*;
 use vec_proto::messages::{Block, Header};
 
 pub fn hash_header_by_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
-    let mut hasher = Keccak256::new();
     if let Some(header) = block.msg_header.as_ref() {
-        hasher.update(header.msg_version.to_be_bytes());
-        hasher.update(header.msg_index.to_be_bytes());
-        hasher.update(&header.msg_previous_hash);
-        hasher.update(&header.msg_root_hash);
-        hasher.update(header.msg_timestamp.to_be_bytes());
-        hasher.update(header.msg_nonce.to_be_bytes());
+        let hash = hash!(
+            header.msg_version.to_be_bytes(),
+            header.msg_index.to_be_bytes(),
+            &header.msg_previous_hash,
+            &header.msg_root_hash,
+            header.msg_timestamp.to_be_bytes(),
+            header.msg_nonce.to_be_bytes()
+        )
+        .to_vec();
+        Ok(hash)
     } else {
         return Err(BlockOpsError::MissingHeader);
     }
-    let hash = hasher.finalize().to_vec();
-    Ok(hash)
 }
 
 pub fn hash_header(header: &Header) -> Result<Vec<u8>, BlockOpsError> {
-    let mut hasher = Keccak256::new();
-    hasher.update(header.msg_version.to_be_bytes());
-    hasher.update(header.msg_index.to_be_bytes());
-    hasher.update(&header.msg_previous_hash);
-    hasher.update(&header.msg_root_hash);
-    hasher.update(header.msg_timestamp.to_be_bytes());
-    let hash = hasher.finalize().to_vec();
+    let hash = hash!(
+        header.msg_version.to_be_bytes(),
+        header.msg_index.to_be_bytes(),
+        &header.msg_previous_hash,
+        &header.msg_root_hash,
+        header.msg_timestamp.to_be_bytes()
+    )
+    .to_vec();
     Ok(hash)
 }
 
 pub fn hash_block(block: &Block) -> Result<Vec<u8>, BlockOpsError> {
     let mut bytes = Vec::new();
     block.encode(&mut bytes).unwrap();
-    let mut hasher = Keccak256::new();
-    hasher.update(&bytes);
-    let hash = hasher.finalize().to_vec();
+    let hash = hash!(&bytes).to_vec();
     Ok(hash)
 }
 
@@ -62,9 +63,7 @@ fn check_difficulty(hash: &[u8], difficulty: usize) -> bool {
 pub fn hash_transaction(transaction: &Transaction) -> Vec<u8> {
     let mut transaction_bytes = Vec::new();
     transaction.encode(&mut transaction_bytes).unwrap();
-    let mut hasher = Keccak256::new();
-    hasher.update(&transaction_bytes);
-    hasher.finalize().to_vec()
+    hash!(&transaction_bytes).to_vec()
 }
 
 #[cfg(test)]

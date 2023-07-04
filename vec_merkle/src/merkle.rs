@@ -1,4 +1,5 @@
 use sha3::{Digest, Keccak256};
+use vec_macros::hash;
 
 #[derive(Clone, Debug)]
 pub enum MerkleTree {
@@ -89,9 +90,7 @@ impl MerkleTree {
 }
 
 pub fn compute_hash(data: &[u8]) -> Vec<u8> {
-    let mut hasher = Keccak256::new();
-    hasher.update(data);
-    hasher.finalize().to_vec()
+    hash!(data).to_vec()
 }
 
 pub fn combine_hash(hash1: &[u8], hash2: &[u8]) -> Vec<u8> {
